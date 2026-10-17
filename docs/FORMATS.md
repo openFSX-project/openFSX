@@ -41,3 +41,11 @@ texture.cfg is read only for fltsim fallback entries, in numeric order. Relative
 ## Next work
 
 Tested bind-pose skinning, visibility/animation evaluation, material parity and generated registration textures. Back each interpretation with synthetic fixtures and local observations; do not silently reinterpret unknown layouts.
+
+## AIR subset
+
+Legacy AIR files are sequences of a little-endian u32 identifier and u32 payload length followed by packed bytes. Record labels such as 1101 and 404 are hexadecimal: their numeric IDs are 0x1101 and 0x0404. Bounds, duplicate IDs and record counts are checked; input is limited to 4 MiB.
+
+Curve payloads contain a u32 point count followed by pairs of f64 angle/value entries. Angles must be finite and strictly increasing. The current reader uses linear interpolation and clamps outside the endpoint domain. It loads lift versus body AoA from 0x0404 and pitch moment versus AoA from 0x0473, plus selected signed integer and double coefficients from the 250-byte 0x1101 layout. Integer aerodynamic derivatives use the documented 1/2048 scale. Modern override records are rejected until their precedence is implemented.
+
+The independent reader was checked against field definitions distributed with AirEd and the local C172 data. Reference: [aircraft dynamics resources](https://www.aero.sors.fr/fsairfile.html). Source definitions and game data are not included. The [flight guide](FLIGHT.md) documents coordinate signs, units, approximations and numerical evidence; decoding these records does not establish complete FSX flight-model behavior.

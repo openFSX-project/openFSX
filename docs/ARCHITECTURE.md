@@ -11,7 +11,7 @@ openFSX is an independent runtime for a user's installed FSX content. Original e
 | Math | Column-major transforms and orbit camera | Implemented for the viewer |
 | DDS / texture lookup | Top mip decoding and texture.cfg fallback search | Partial |
 | Native viewer | winit window and wgpu diffuse textured geometry | Experimental |
-| Flight simulation | Time step, atmosphere, aerodynamics and systems | Not implemented |
+| Flight simulation | Legacy AIR/CFG subset, 6DOF RK4 and keyboard-controlled airborne mode | Experimental; C172 consistency checks only |
 | World | Earth coordinates, terrain, BGL and streaming | Not implemented |
 | Gauges | XML expressions, simulation variables and instruments | Not implemented |
 | Add-on bridge | SimConnect and research into DLL/GAU compatibility | Not implemented |
@@ -30,7 +30,7 @@ Texture lookup starts in the selected livery folder and follows numerically orde
 
 1. **Inventory.** CFG encodings, external SimObjects roots and actionable errors. Current coverage is titles in the standard Airplanes directory.
 2. **Aircraft viewer.** Display one verified MDLX variant and its textures without FSX. A C172 livery has been rendered with available diffuse maps. Generated registration decals, animation, visibility and skinning remain incomplete; the result is a viewer baseline, not complete visual compatibility.
-3. **First flight.** One aircraft's AIR/CFG parameters, controls, an integrator and a simple ground surface. Compare speed, climb and stall in repeatable scenarios.
+3. **First flight.** An airborne C172 mode now uses AIR/CFG parameters, keyboard controls, an RK4 integrator and original flat-ground geometry. Speed/climb/post-peak-lift scenarios are repeatable; recorded FSX reference comparisons, loaded mass properties, engine tables and ground handling remain incomplete. See the flight guide for evidence and limitations.
 4. **Local scenery.** One airport, an explicit BGL subset, terrain and streaming. Record format coverage and frame-time measurements.
 5. **Cockpit and APIs.** A tested subset of XML gauges and SimConnect contracts. Native DLL/GAU add-ons need a separate decision: 32-bit code cannot simply be loaded into a 64-bit process.
 

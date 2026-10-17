@@ -1,4 +1,5 @@
-@group(0) @binding(0) var<uniform> camera: mat4x4<f32>;
+struct Scene { camera: mat4x4<f32>, model: mat4x4<f32> }
+@group(0) @binding(0) var<uniform> scene: Scene;
 @group(1) @binding(0) var diffuse_texture: texture_2d<f32>;
 @group(1) @binding(1) var diffuse_sampler: sampler;
 struct Material { diffuse: vec4<f32>, parameters: vec4<f32> }
@@ -8,10 +9,11 @@ struct VertexOut {
     @location(0) normal: vec3<f32>,
     @location(1) uv: vec2<f32>,
 }
-@vertex fn vs_main(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) uv: vec2<f32>) -> VertexOut {
+@vertex fn vs_main(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) uv: vec2<f32>, @location(3) model_space: f32) -> VertexOut {
     var output: VertexOut;
-    output.position = camera * vec4<f32>(p, 1.0);
-    output.normal = n;
+    let world = select(vec4<f32>(p, 1.0), scene.model * vec4<f32>(p, 1.0), model_space > 0.5);
+    output.position = scene.camera * world;
+    output.normal = select(n, (scene.model * vec4<f32>(n, 0.0)).xyz, model_space > 0.5);
     // Preserve Direct3D-style MDLX coordinates when uploading DDS rows unchanged.
     output.uv = uv;
     return output;

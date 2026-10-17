@@ -1,5 +1,7 @@
 //! Native MDLX viewer and reproducible offscreen rendering, independent of fsx.exe.
 use openfsx::{
+    aircraft::Aircraft,
+    desktop_flight::FlightSession,
     math::{self, Mat4},
     mdl::{Geometry, Material, Model},
     texture::{self, Image},
@@ -9,12 +11,13 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
     task::{Context, Poll, Wake, Waker},
+    time::{Duration, Instant},
 };
 use wgpu::util::DeviceExt;
 use winit::{
     application::ApplicationHandler,
-    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
-    event_loop::{ActiveEventLoop, EventLoop},
+    event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
@@ -103,6 +106,7 @@ struct Orbit {
     yaw: f32,
     pitch: f32,
     distance: f32,
+    far: f32,
 }
 impl Orbit {
     fn new(g: &Geometry) -> Self {
@@ -117,6 +121,7 @@ impl Orbit {
             yaw: 0.7,
             pitch: 0.3,
             distance: radius * 3.4,
+            far: radius * 100.,
         }
     }
     fn matrix(&self, aspect: f32) -> Mat4 {
@@ -125,7 +130,7 @@ impl Orbit {
             self.center,
             aspect,
             self.radius * 0.01,
-            self.radius * 100.,
+            self.far,
         )
     }
     fn eye(&self) -> [f32; 3] {
@@ -153,6 +158,9 @@ struct Gpu {
     depth: wgpu::TextureView,
     material_binds: Vec<wgpu::BindGroup>,
     draws: Vec<GpuDraw>,
+    model_matrix: Mat4,
+    flight: bool,
+    presented: bool,
 }
 struct GpuDraw {
     range: std::ops::Range<u32>,
@@ -165,6 +173,7 @@ impl Gpu {
         window: Option<Arc<Window>>,
         geometry: &Geometry,
         appearance: &Appearance,
+        flight: bool,
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
@@ -222,7 +231,7 @@ impl Gpu {
         }
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Camera matrix"),
-            size: 64,
+            size: 128,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -288,9 +297,9 @@ impl Gpu {
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: 32,
+                    array_stride: 36,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x2],
+                    attributes: &wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x2,3=>Float32],
                 }],
             },
             fragment: Some(wgpu::FragmentState {
@@ -376,7 +385,26 @@ impl Gpu {
             .map(|image| image.as_ref().map(upload))
             .collect::<Vec<_>>();
         let mut material_binds = Vec::new();
-        for material in &appearance.materials {
+        let mut materials = appearance.materials.clone();
+        let ground_material = materials.len();
+        if flight {
+            for diffuse in [
+                [0.12, 0.18, 0.07, 1.],
+                [0.06, 0.07, 0.08, 1.],
+                [0.85, 0.85, 0.75, 1.],
+                [0.16, 0.23, 0.10, 1.],
+            ] {
+                materials.push(Material {
+                    diffuse,
+                    diffuse_texture: None,
+                    alpha_blend: false,
+                    alpha_function: 0,
+                    alpha_threshold: 0.,
+                    clamp_texture: false,
+                });
+            }
+        }
+        for material in &materials {
             let view = material
                 .diffuse_texture
                 .and_then(|index| views[index].as_ref());
@@ -427,7 +455,7 @@ impl Gpu {
                 ],
             }));
         }
-        let draws = geometry
+        let mut draws: Vec<GpuDraw> = geometry
             .batches
             .iter()
             .map(|batch| GpuDraw {
@@ -437,9 +465,60 @@ impl Gpu {
                 blended: appearance.materials[batch.material].alpha_blend,
             })
             .collect();
+        let mut vertices = geometry
+            .vertices
+            .iter()
+            .map(|v| [v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], 1.])
+            .collect::<Vec<_>>();
+        if flight {
+            let mut quad = |x0: f32, z0: f32, x1: f32, z1: f32, y: f32| {
+                for [x, z] in [[x0, z0], [x1, z0], [x1, z1], [x0, z0], [x1, z1], [x0, z1]] {
+                    vertices.push([x, y, z, 0., 1., 0., 0., 0., 0.]);
+                }
+            };
+            let start = geometry.vertices.len() as u32;
+            quad(-8000., -8000., 8000., 8000., 0.);
+            let mut count = 6;
+            draws.push(GpuDraw {
+                range: start..start + count,
+                material: ground_material,
+                center: [0.; 3],
+                blended: false,
+            });
+            quad(-15., -500., 15., 1500., 0.02);
+            draws.push(GpuDraw {
+                range: start + count..start + count + 6,
+                material: ground_material + 1,
+                center: [0.; 3],
+                blended: false,
+            });
+            count += 6;
+            for i in 0..40 {
+                let z = -480. + i as f32 * 50.;
+                quad(-0.7, z, 0.7, z + 25., 0.04);
+            }
+            draws.push(GpuDraw {
+                range: start + count..start + count + 240,
+                material: ground_material + 2,
+                center: [0.; 3],
+                blended: false,
+            });
+            count += 240;
+            for i in -40..=40 {
+                let p = i as f32 * 200.;
+                quad(p, -8000., p + 0.8, 8000., 0.01);
+                quad(-8000., p, 8000., p + 0.8, 0.01);
+            }
+            draws.push(GpuDraw {
+                range: start + count..vertices.len() as u32,
+                material: ground_material + 3,
+                center: [0.; 3],
+                blended: false,
+            });
+        }
         let vertex = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("MDLX geometry"),
-            contents: &bytes(geometry.vertices.iter().flatten().copied()),
+            contents: &bytes(vertices.iter().flatten().copied()),
             usage: wgpu::BufferUsages::VERTEX,
         });
         let depth = Self::depth(&device, width, height);
@@ -456,6 +535,9 @@ impl Gpu {
             depth,
             material_binds,
             draws,
+            model_matrix: math::IDENTITY,
+            flight,
+            presented: false,
         })
     }
     fn depth(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
@@ -491,7 +573,12 @@ impl Gpu {
         self.queue.write_buffer(
             &self.uniform,
             0,
-            &bytes(orbit.matrix(self.config.width as f32 / self.config.height as f32)),
+            &bytes(
+                orbit
+                    .matrix(self.config.width as f32 / self.config.height as f32)
+                    .into_iter()
+                    .chain(self.model_matrix),
+            ),
         );
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
@@ -501,11 +588,20 @@ impl Gpu {
                     view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.035,
-                            g: 0.055,
-                            b: 0.085,
-                            a: 1.,
+                        load: wgpu::LoadOp::Clear(if self.flight {
+                            wgpu::Color {
+                                r: 0.33,
+                                g: 0.56,
+                                b: 0.79,
+                                a: 1.,
+                            }
+                        } else {
+                            wgpu::Color {
+                                r: 0.035,
+                                g: 0.055,
+                                b: 0.085,
+                                a: 1.,
+                            }
                         }),
                         store: wgpu::StoreOp::Store,
                     },
@@ -535,7 +631,7 @@ impl Gpu {
                 .collect::<Vec<_>>();
             let eye = orbit.eye();
             let distance = |draw: &GpuDraw| {
-                let d = math::sub(draw.center, eye);
+                let d = math::sub(math::transform(self.model_matrix, draw.center), eye);
                 math::dot(d, d)
             };
             blended.sort_by(|a, b| distance(b).total_cmp(&distance(a)));
@@ -561,6 +657,10 @@ impl Gpu {
         let view = frame.texture.create_view(&Default::default());
         self.queue.submit([self.encode(&view, orbit).finish()]);
         frame.present();
+        if !self.presented {
+            println!("First native window frame presented successfully");
+            self.presented = true;
+        }
         Ok(())
     }
     fn snapshot(&self, orbit: &Orbit, path: &Path) -> Result<(), String> {
@@ -644,8 +744,60 @@ struct App {
     dragging: bool,
     cursor: Option<(f64, f64)>,
     error: Option<String>,
+    flight: Option<FlightSession>,
+    last_frame: Instant,
+    last_title: Instant,
+    visible: bool,
+}
+fn flight_view(flight: &FlightSession, orbit: &mut Orbit) {
+    orbit.center = flight.center();
+    orbit.yaw = flight.heading() + std::f32::consts::PI + 0.35;
+    orbit.pitch = 0.25;
+    orbit.far = 20000.;
+}
+impl App {
+    fn advance_flight(&mut self) -> Result<(), String> {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_frame).as_secs_f64();
+        self.last_frame = now;
+        if let Some(flight) = &mut self.flight {
+            flight.advance(elapsed)?;
+            flight_view(flight, &mut self.orbit);
+            if let Some(gpu) = &mut self.gpu {
+                gpu.model_matrix = flight.model_matrix();
+            }
+            if now.duration_since(self.last_title) >= Duration::from_millis(250) {
+                if let Some(window) = &self.window {
+                    window.set_title(&flight.title()?);
+                }
+                self.last_title = now;
+            }
+        }
+        Ok(())
+    }
 }
 impl ApplicationHandler for App {
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
+        if matches!(cause, StartCause::ResumeTimeReached { .. }) {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+    }
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.visible
+            && self
+                .flight
+                .as_ref()
+                .is_some_and(|f| !f.paused && !f.simulation.ground_contact)
+        {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + Duration::from_millis(16),
+            ));
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }
+    }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -657,11 +809,13 @@ impl ApplicationHandler for App {
                 Some(window.clone()),
                 &self.geometry,
                 &self.appearance,
+                self.flight.is_some(),
                 size.width.max(1),
                 size.height.max(1),
             ))?);
             window.request_redraw();
             self.window = Some(window);
+            self.last_frame = Instant::now();
             Ok::<_, String>(())
         })();
         if let Err(error) = result {
@@ -675,9 +829,41 @@ impl ApplicationHandler for App {
         _id: winit::window::WindowId,
         event: WindowEvent,
     ) {
+        if let WindowEvent::KeyboardInput { event, .. } = &event {
+            if let (Some(flight), PhysicalKey::Code(key)) = (&mut self.flight, event.physical_key) {
+                let pressed = event.state == ElementState::Pressed;
+                flight.key(key, pressed);
+                if pressed && !event.repeat {
+                    match key {
+                        KeyCode::Escape => event_loop.exit(),
+                        KeyCode::KeyP => {
+                            flight.paused = !flight.paused;
+                            flight.clear_keys();
+                            self.last_frame = Instant::now();
+                        }
+                        KeyCode::KeyR => {
+                            if let Err(error) = flight.reset() {
+                                self.error = Some(error);
+                                event_loop.exit();
+                            }
+                            self.last_frame = Instant::now();
+                        }
+                        _ => {}
+                    }
+                    self.last_title = Instant::now() - Duration::from_secs(1);
+                }
+            }
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
+                self.visible = size.width > 0 && size.height > 0;
+                if !self.visible {
+                    if let Some(flight) = &mut self.flight {
+                        flight.paused = true;
+                        flight.clear_keys();
+                    }
+                }
                 if let Some(gpu) = &mut self.gpu {
                     gpu.resize(size.width, size.height);
                 }
@@ -686,10 +872,15 @@ impl ApplicationHandler for App {
                 state,
                 button: MouseButton::Left,
                 ..
-            } => self.dragging = state == ElementState::Pressed,
+            } => self.dragging = state == ElementState::Pressed && self.flight.is_none(),
             WindowEvent::Focused(false) => {
                 self.dragging = false;
                 self.cursor = None;
+                if let Some(flight) = &mut self.flight {
+                    flight.paused = true;
+                    flight.clear_keys();
+                    self.last_title = Instant::now() - Duration::from_secs(1);
+                }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some((x, y)) = self.cursor {
@@ -706,7 +897,7 @@ impl ApplicationHandler for App {
                 MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.,
             }),
             WindowEvent::KeyboardInput { ref event, .. }
-                if event.state == ElementState::Pressed =>
+                if event.state == ElementState::Pressed && self.flight.is_none() =>
             {
                 match event.physical_key {
                     PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
@@ -723,10 +914,17 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                if let Err(error) = self.advance_flight() {
+                    self.error = Some(error);
+                    event_loop.exit();
+                    return;
+                }
                 if let Some(gpu) = &mut self.gpu {
-                    if let Err(error) = gpu.draw(&self.orbit) {
-                        self.error = Some(error);
-                        event_loop.exit();
+                    if self.visible {
+                        if let Err(error) = gpu.draw(&self.orbit) {
+                            self.error = Some(error);
+                            event_loop.exit();
+                        }
                     }
                 }
             }
@@ -745,10 +943,15 @@ fn run() -> Result<(), String> {
     let mut args = std::env::args_os().skip(1);
     let path = PathBuf::from(
         args.next()
-            .ok_or("Usage: openfsx-viewer <model.mdl> [--lod N] [--texture-dir folder | --no-textures] [--snapshot output.ppm]")?,
+            .ok_or("Usage: openfsx-viewer <model.mdl> [options]\nFlight: openfsx-viewer <aircraft folder> --fly [--variant N] [--windows-1252]\nOptions: --lod N --texture-dir folder --no-textures --snapshot output.ppm --seconds N")?,
     );
+    if path == Path::new("--help") || path == Path::new("-h") {
+        println!("openfsx-viewer <model.mdl> [--lod N] [--texture-dir folder | --no-textures]\nopenfsx-viewer <aircraft folder> --fly [--variant N] [--windows-1252] [--lod N]\nOptional: --snapshot output.ppm [--seconds N, flight only, 0..300]\nFlight keys: Down/Up pull/push; Left/Right bank; Q/E rudder; PageUp/PageDown throttle; Home/End trim; P pause; R reset; Esc close.");
+        return Ok(());
+    }
     let (mut lod, mut snapshot) = (None, None);
     let (mut texture_dir, mut no_textures) = (None, false);
+    let (mut fly, mut variant, mut windows_1252, mut seconds) = (false, 0u32, false, 0f64);
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--lod") => {
@@ -765,15 +968,44 @@ fn run() -> Result<(), String> {
                 texture_dir = Some(PathBuf::from(args.next().ok_or("Expected texture folder")?))
             }
             Some("--no-textures") => no_textures = true,
+            Some("--fly") => fly = true,
+            Some("--windows-1252") => windows_1252 = true,
+            Some("--variant") => {
+                variant = args
+                    .next()
+                    .and_then(|s| s.to_str().and_then(|s| s.parse().ok()))
+                    .ok_or("Expected a numeric aircraft variant")?
+            }
+            Some("--seconds") => {
+                seconds = args
+                    .next()
+                    .and_then(|s| s.to_str().and_then(|s| s.parse().ok()))
+                    .ok_or("Expected snapshot flight duration")?
+            }
             _ => return Err("Unknown viewer argument".into()),
         }
     }
-    let model = Model::load(&path)?;
+    if !seconds.is_finite()
+        || !(0. ..=300.).contains(&seconds)
+        || (seconds > 0. && (!fly || snapshot.is_none()))
+    {
+        return Err("--seconds requires --fly and --snapshot, between 0 and 300 seconds".into());
+    }
+    let aircraft = if fly {
+        Some(Aircraft::load(&path, variant, windows_1252)?)
+    } else {
+        None
+    };
+    let model_path = aircraft
+        .as_ref()
+        .map(|a| a.model.as_path())
+        .unwrap_or(&path);
+    let model = Model::load(model_path)?;
     let geometry = model.geometry(lod)?;
     if no_textures && texture_dir.is_some() {
         return Err("Use either --texture-dir or --no-textures".into());
     }
-    let default_texture = path
+    let default_texture = model_path
         .parent()
         .and_then(Path::parent)
         .map(|path| path.join("texture"));
@@ -783,7 +1015,10 @@ fn run() -> Result<(), String> {
         if no_textures {
             None
         } else {
-            texture_dir.as_deref().or(default_texture.as_deref())
+            texture_dir
+                .as_deref()
+                .or(aircraft.as_ref().map(|a| a.texture.as_path()))
+                .or(default_texture.as_deref())
         },
     )?;
     println!(
@@ -795,9 +1030,32 @@ fn run() -> Result<(), String> {
         geometry.skipped_skinned_parts
     );
     println!("Preview limitations: diffuse DDS only; approximate alpha blending; no skinning, animation or visibility evaluation.");
-    let orbit = Orbit::new(&geometry);
+    let mut orbit = Orbit::new(&geometry);
+    let mut flight = aircraft
+        .map(|a| FlightSession::new(a.parameters))
+        .transpose()?;
+    if let Some(flight) = &mut flight {
+        println!("Initial airborne prototype: 90 kt, 300 m; no takeoff/landing or FSX flight-model parity.");
+        println!("Controls: Down/Up pull/push | Left/Right bank | Q/E rudder | PageUp/PageDown throttle | Home/End trim | P pause | R reset | Esc close");
+        for _ in 0..(seconds / openfsx::flight::STEP).round() as usize {
+            flight.advance(openfsx::flight::STEP)?;
+        }
+        println!("{}", flight.title()?);
+        flight_view(flight, &mut orbit);
+    }
     if let Some(path) = snapshot {
-        return block_on(Gpu::new(None, &geometry, &appearance, 960, 720))?.snapshot(&orbit, &path);
+        let mut gpu = block_on(Gpu::new(
+            None,
+            &geometry,
+            &appearance,
+            flight.is_some(),
+            960,
+            720,
+        ))?;
+        if let Some(flight) = &flight {
+            gpu.model_matrix = flight.model_matrix();
+        }
+        return gpu.snapshot(&orbit, &path);
     }
     let mut app = App {
         geometry,
@@ -808,6 +1066,10 @@ fn run() -> Result<(), String> {
         dragging: false,
         cursor: None,
         error: None,
+        flight,
+        last_frame: Instant::now(),
+        last_title: Instant::now() - Duration::from_secs(1),
+        visible: true,
     };
     EventLoop::new()
         .map_err(|e| e.to_string())?

@@ -37,28 +37,105 @@ fn titles(text: &str) -> Vec<String> {
     result
 }
 
-fn decode(bytes: &[u8], windows_1252: bool) -> Result<String, String> {
-    if windows_1252 {
-        // Explicit opt-in: a legacy file's code page cannot be inferred reliably.
-        const EXTENDED: [char; 32] = [
-            '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž',
-            '\u{8f}', '\u{90}', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ',
-            '\u{9d}', 'ž', 'Ÿ',
-        ];
-        return Ok(bytes
-            .iter()
-            .map(|&b| {
-                if (0x80..=0x9f).contains(&b) {
-                    EXTENDED[(b - 0x80) as usize]
-                } else {
-                    char::from(b)
-                }
-            })
-            .collect());
+use openfsx::cfg::decode;
+
+fn aircraft_report(folder: &Path, windows_1252: bool, check_flight: bool) -> Result<(), String> {
+    use openfsx::{
+        aircraft::{Aircraft, KNOT},
+        flight::{Simulation, STEP},
+    };
+    let aircraft = Aircraft::load(folder, 0, windows_1252)?;
+    let p = &aircraft.parameters;
+    println!(
+        "{}\nModel: {}\nLivery: {}\nAIR: {}",
+        aircraft.title,
+        aircraft.model.display(),
+        aircraft.texture.display(),
+        aircraft.air_path.display()
+    );
+    println!(
+        "Gross mass: {:.2} kg | Wing: {:.3} m2 | Span: {:.3} m | Power: {:.2} kW",
+        p.mass,
+        p.wing_area,
+        p.span,
+        p.power / 1000.
+    );
+    let stall = p.predicted_stall(0.)? / KNOT;
+    println!(
+        "Derived clean stall (sea level): {stall:.2} kt | CFG reference: {:.2} kt",
+        p.reference_stall / KNOT
+    );
+    println!("Subset: legacy AIR 1101/0404/0473; fixed-mass single piston; approximate propeller/drag; not FSX parity.");
+    if check_flight {
+        let mut simulation = Simulation::trimmed(p.clone(), 90. * KNOT, 300.)?;
+        let controls = simulation.controls;
+        println!(
+            "90 kt / 300 m trim: throttle {:.5}, trim {:.5}, alpha {:.3} deg",
+            controls.throttle,
+            controls.trim,
+            simulation.telemetry()?.alpha.to_degrees()
+        );
+        for _ in 0..7200 {
+            simulation.step(controls, STEP)?;
+        }
+        let t = simulation.telemetry()?;
+        println!(
+            "60 s fixed-control level check: speed {:.5} kt, altitude {:.5} m, climb {:.6} m/s",
+            t.speed / KNOT,
+            t.altitude,
+            t.climb
+        );
+        if (t.speed / KNOT - 90.).abs() > 0.1 || (t.altitude - 300.).abs() > 0.1 {
+            return Err("Level trim drift exceeds initial consistency gate".into());
+        }
+        for (name, axis) in [("pitch pull", 1), ("bank right", 0), ("rudder right", 2)] {
+            let mut s = Simulation::trimmed(p.clone(), 90. * KNOT, 300.)?;
+            let mut c = s.controls;
+            match axis {
+                0 => c.roll = 0.1,
+                1 => c.pitch = 0.1,
+                _ => c.yaw = 0.1,
+            };
+            for _ in 0..60 {
+                s.step(c, STEP)?;
+            }
+            println!(
+                "0.5 s {name}: body rate {:.4} deg/s",
+                s.state.rates[axis].to_degrees()
+            );
+            if s.state.rates[axis] <= 0. {
+                return Err(format!("Incorrect initial {name} control sign"));
+            }
+        }
+        let mut s = Simulation::trimmed(p.clone(), 90. * KNOT, 1500.)?;
+        let mut c = s.controls;
+        c.throttle = 1.;
+        for _ in 0..3600 {
+            s.step(c, STEP)?;
+        }
+        let t = s.telemetry()?;
+        println!(
+            "30 s full-power response: speed {:.2} kt, height change {:.2} m, climb {:.2} m/s",
+            t.speed / KNOT,
+            t.altitude - 1500.,
+            t.climb
+        );
+        let mut s = Simulation::trimmed(p.clone(), 65. * KNOT, 1500.)?;
+        let mut c = s.controls;
+        c.throttle = 0.;
+        c.pitch = 0.35;
+        let mut stalled = false;
+        for _ in 0..2400 {
+            s.step(c, STEP)?;
+            stalled |= s.telemetry()?.stalled;
+        }
+        println!("20 s power-off pull: post-peak lift angle observed = {stalled}");
+        if !stalled {
+            return Err("Stall scenario did not reach the post-peak lift curve".into());
+        }
+        println!("PASS: deterministic trim/control/stall consistency. No comparison against recorded FSX flight data yet.");
     }
-    std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| {
-        "Unsupported encoding. For Western European legacy files, pass --windows-1252".into()
-    })
+    Ok(())
 }
 
 fn inspect(root: &Path, windows_1252: bool) -> Result<(), String> {
@@ -106,6 +183,21 @@ fn inspect(root: &Path, windows_1252: bool) -> Result<(), String> {
 
 fn main() -> ExitCode {
     let args: Vec<_> = env::args_os().skip(1).collect();
+    if (args.len() == 2 || (args.len() == 3 && args[2] == "--windows-1252"))
+        && (args[0] == "inspect-aircraft" || args[0] == "flight-check")
+    {
+        return match aircraft_report(
+            Path::new(&args[1]),
+            args.len() == 3,
+            args[0] == "flight-check",
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("Error: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     if args.len() == 2 && args[0] == "inspect-model" {
         return match openfsx::mdl::Model::load(Path::new(&args[1])) {
             Ok(model) => {
@@ -132,7 +224,7 @@ fn main() -> ExitCode {
     if !(args.len() == 2 || (args.len() == 3 && args[2] == "--windows-1252"))
         || args[0] != "inspect"
     {
-        eprintln!("Usage:\n  openfsx inspect <FSX folder> [--windows-1252]\n  openfsx inspect-model <model.mdl>\nFor the experimental model viewer, build openfsx-viewer with --features viewer.");
+        eprintln!("Usage:\n  openfsx inspect <FSX folder> [--windows-1252]\n  openfsx inspect-model <model.mdl>\n  openfsx inspect-aircraft <aircraft folder> [--windows-1252]\n  openfsx flight-check <aircraft folder> [--windows-1252]\nFor the experimental model viewer, build openfsx-viewer with --features viewer.");
         return ExitCode::from(2);
     }
     match inspect(Path::new(&args[1]), args.len() == 3) {

@@ -3,7 +3,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 const root = new URL('../', import.meta.url);
-const sources = ['docs/VIEWER.md', 'docs/ARCHITECTURE.md', 'docs/COMPATIBILITY.md', 'docs/FORMATS.md', 'CONTRIBUTING.md'];
+const sources = ['docs/FLIGHT.md', 'docs/VIEWER.md', 'docs/ARCHITECTURE.md', 'docs/COMPATIBILITY.md', 'docs/FORMATS.md', 'CONTRIBUTING.md'];
 const escape = value => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 function inline(text) {
   const token = /(`[^`]+`|\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*)/g;

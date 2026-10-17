@@ -2,6 +2,8 @@
 
 The native viewer reads FSX MDLX geometry and diffuse DDS textures directly. It is a development tool, not a simulator or a converter.
 
+The same executable also has an experimental --fly mode with an aircraft-folder argument. Its keyboard bindings and simulation behavior differ from orbit inspection: see the [flight guide](FLIGHT.md).
+
 ## Build and run
 
 Use stable Rust, the Windows MSVC toolchain and a GPU with current Vulkan or DirectX 12 drivers. wgpu chooses an available backend:
@@ -10,7 +12,7 @@ Use stable Rust, the Windows MSVC toolchain and a GPU with current Vulkan or Dir
 cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1"
 ```
 
-Pass a model from your own installation. An explicit MDL path is required; aircraft.cfg/model.cfg variants are not yet resolved automatically.
+For orbit inspection pass an explicit MDL path from your own installation. Flight mode resolves exterior model and texture paths through the selected aircraft.cfg/model.cfg variant.
 
 ## Texture selection
 
