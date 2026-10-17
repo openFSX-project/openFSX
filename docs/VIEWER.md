@@ -55,3 +55,31 @@ The same depth-tested pipeline renders without a window and writes a binary PPM.
 Diffuse textures and flat face lighting only, with approximate ordinary alpha blending and MDLX alpha tests. Transparent parts are sorted by their centers; intersecting transparent triangles are not sorted individually. Other blend modes, accurate FSX material lighting, specular/bump/reflection maps and texture mip chains are absent. No visibility expressions, animation playback, skinning, attachments or effects. Bind pose can expose normally hidden alternatives, including multiple propeller states. Startup diagnostics report these limits.
 
 Windows x64 is the initial target. The first offscreen C172 render was verified on an NVIDIA RTX 2080 through Vulkan. Building on another platform or backend does not establish rendering support there.
+
+## FSX-style menu on Windows
+
+```powershell
+cargo run --features viewer --bin openfsx-viewer -- "./FSX" --menu
+```
+
+The menu host requires the Microsoft Edge WebView2 Runtime. It reads the local
+installation's `uires` bitmap skin and aircraft thumbnails; these assets are not
+included in openFSX. No original executable code is loaded. The independent
+HTML/CSS layout is not yet pixel-verified against FSX.
+
+**CHANGE...** under Current Aircraft opens the installation catalog, with a
+manufacturer filter and variation selection. **FLY NOW!** starts the selected
+variant on the experimental test runway. Unsupported aircraft report an error;
+being listed does not establish flight support. **Esc** closes the flight window
+and restores the menu. Native C172 launch and return were checked on Windows.
+
+Location, weather, time/season, fuel/payload editing, flight plans, saved flights,
+failures and other sidebar sections remain unimplemented. The aircraft image is
+an installed thumbnail, not a live model preview. Only windowed launch is
+supported. The menu catalog currently explicitly decodes CFG files as
+Windows-1252. Flight telemetry is hidden by default; use **--debug-hud** when
+launching flight directly to enable the independent debugging overlay.
+
+The host serves only its own HTML/catalog, an exact bitmap allowlist and indexed
+thumbnail paths canonicalized inside the installation. It does not serve the
+FSX directory as a general web root or expose filesystem paths in the catalog.

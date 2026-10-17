@@ -830,6 +830,7 @@ struct App {
     last_frame: Instant,
     last_title: Instant,
     visible: bool,
+    debug_hud: bool,
 }
 fn flight_view(flight: &FlightSession, orbit: &mut Orbit) {
     orbit.center = flight.center();
@@ -847,11 +848,15 @@ impl App {
             flight_view(flight, &mut self.orbit);
             if let Some(gpu) = &mut self.gpu {
                 gpu.model_matrix = flight.model_matrix();
-                gpu.hud = Some(openfsx::hud::Readout::new(
-                    flight.simulation.telemetry()?,
-                    flight.simulation.controls,
-                    flight.paused,
-                )?);
+                gpu.hud = if self.debug_hud {
+                    Some(openfsx::hud::Readout::new(
+                        flight.simulation.telemetry()?,
+                        flight.simulation.controls,
+                        flight.paused,
+                    )?)
+                } else {
+                    None
+                };
             }
             if now.duration_since(self.last_title) >= Duration::from_millis(250) {
                 if let Some(window) = &self.window {
@@ -1031,13 +1036,15 @@ fn run() -> Result<(), String> {
             .ok_or("Usage: openfsx-viewer <model.mdl> [options]\nFlight: openfsx-viewer <aircraft folder> --fly [--variant N] [--windows-1252]\nOptions: --lod N --texture-dir folder --no-textures --snapshot output.ppm --seconds N")?,
     );
     if path == Path::new("--help") || path == Path::new("-h") {
-        println!("openfsx-viewer <model.mdl> [--lod N] [--texture-dir folder | --no-textures]\nopenfsx-viewer <aircraft folder> --fly [--ground] [--variant N] [--windows-1252] [--lod N]\nOptional: --snapshot output.ppm [--seconds N, flight only, 0..300]\nFlight keys: Down/Up pull/push; Left/Right bank; Q/E rudder; PageUp/PageDown throttle; F1 idle; F4 full power; B parking brake; Space wheel brakes; Home/End trim; P pause; R reset; Esc close.");
+        println!("openfsx-viewer <model.mdl> [--lod N] [--texture-dir folder | --no-textures]\nopenfsx-viewer <aircraft folder> --fly [--ground] [--variant N] [--windows-1252] [--lod N]\nWindows menu: openfsx-viewer <FSX installation> --menu\nOptional: --debug-hud (experimental telemetry); --snapshot output.ppm [--seconds N, flight only, 0..300]\nFlight keys: Down/Up pull/push; Left/Right bank; Q/E rudder; PageUp/PageDown throttle; F1 idle; F4 full power; B parking brake; Space wheel brakes; Home/End trim; P pause; R reset; Esc close.");
         return Ok(());
     }
     let (mut lod, mut snapshot) = (None, None);
     let (mut texture_dir, mut no_textures) = (None, false);
     let (mut fly, mut variant, mut windows_1252, mut seconds) = (false, 0u32, false, 0f64);
     let mut ground = false;
+    let mut menu = false;
+    let mut debug_hud = false;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--lod") => {
@@ -1056,6 +1063,8 @@ fn run() -> Result<(), String> {
             Some("--no-textures") => no_textures = true,
             Some("--fly") => fly = true,
             Some("--ground") => ground = true,
+            Some("--menu") => menu = true,
+            Some("--debug-hud") => debug_hud = true,
             Some("--windows-1252") => windows_1252 = true,
             Some("--variant") => {
                 variant = args
@@ -1077,6 +1086,27 @@ fn run() -> Result<(), String> {
         || (seconds > 0. && (!fly || snapshot.is_none()))
     {
         return Err("--seconds requires --fly and --snapshot, between 0 and 300 seconds".into());
+    }
+    if menu {
+        if fly
+            || ground
+            || snapshot.is_some()
+            || debug_hud
+            || lod.is_some()
+            || variant != 0
+            || no_textures
+            || texture_dir.is_some()
+        {
+            return Err("--menu takes an FSX installation path and cannot be combined with renderer options".into());
+        }
+        #[cfg(target_os = "windows")]
+        {
+            return openfsx::shell::run(&path);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            return Err("The FSX menu host currently requires Windows".into());
+        }
     }
     let aircraft = if fly {
         Some(Aircraft::load(&path, variant, windows_1252)?)
@@ -1154,11 +1184,15 @@ fn run() -> Result<(), String> {
         ))?;
         if let Some(flight) = &flight {
             gpu.model_matrix = flight.model_matrix();
-            gpu.hud = Some(openfsx::hud::Readout::new(
-                flight.simulation.telemetry()?,
-                flight.simulation.controls,
-                flight.paused,
-            )?);
+            gpu.hud = if debug_hud {
+                Some(openfsx::hud::Readout::new(
+                    flight.simulation.telemetry()?,
+                    flight.simulation.controls,
+                    flight.paused,
+                )?)
+            } else {
+                None
+            };
         }
         return gpu.snapshot(&orbit, &path);
     }
@@ -1175,6 +1209,7 @@ fn run() -> Result<(), String> {
         last_frame: Instant::now(),
         last_title: Instant::now() - Duration::from_secs(1),
         visible: true,
+        debug_hud,
     };
     EventLoop::new()
         .map_err(|e| e.to_string())?

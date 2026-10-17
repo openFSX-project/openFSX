@@ -45,7 +45,7 @@ takeoff-trim specification. R resets to the selected ground or airborne start.
 | Space | Hold wheel brakes |
 | Home / End | Nose-up / nose-down elevator trim |
 | P | Pause / resume |
-| R | Reset the initial airborne state |
+| R | Reset the selected ground or airborne start |
 | Mouse wheel | Change chase-camera distance |
 | Esc | Close window |
 
@@ -56,7 +56,7 @@ then released. Dedicated navigation keys and NumLock-off numpad navigation
 events share the same controls. Number input with NumLock on is not treated
 as a directional command. Letter bindings use physical key positions.
 
-The window title and an original on-screen overlay report live flight state.
+The window title reports live flight state. Add **--debug-hud** for the optional original telemetry overlay; it is hidden by default.
 The camera follows the aircraft. The runway and grid are original test geometry,
 not FSX scenery. Wheel contact continues the rigid-body simulation, including
 compression, braking and liftoff. Scrape points, damage and validated landing
@@ -94,7 +94,7 @@ flight-check loads variant 0, reports converted parameters, then runs fixed-cont
 An offscreen flight frame uses the same geometry and GPU pipeline as the window:
 
 ```powershell
-cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --windows-1252 --lod 150 --seconds 10 --snapshot target/c172-flight.ppm
+cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --debug-hud --windows-1252 --lod 150 --seconds 10 --snapshot target/c172-flight.ppm
 ```
 
 The snapshot advances the trimmed state at 120 Hz before rendering. Duration is limited to 300 seconds and requires --fly and --snapshot. Keep working captures under ignored target. Selected PNG engine screenshots are published in the website gallery at the project owner's request; source game resources are never published. Convert captures losslessly with `node scripts/ppm-to-png.mjs target/c172-flight.ppm target/c172-flight.png`.
@@ -224,3 +224,4 @@ Recorded reference flights and quantitative comparison, fuel consumption and con
 AIR field research was checked against the AirEd definitions linked from [Herve Sors' aircraft dynamics resources](https://www.aero.sors.fr/fsairfile.html). The reference archive was read locally and is excluded from Git. No third-party implementation or game resource is redistributed.
 
 Legacy loading-field meanings were checked against the [Prepar3D SDK aircraft configuration reference](https://www.prepar3d.com/SDKv3/LearningCenter/simobjects/aircraft_configuration_files.html). Point-mass inertia, fixed fuel density and aerodynamic moment reference choices above are openFSX approximations, not claims about FSX's internal implementation.
+

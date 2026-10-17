@@ -10,4 +10,6 @@ pub mod hud;
 pub mod mass;
 pub mod math;
 pub mod mdl;
+#[cfg(all(feature = "viewer", target_os = "windows"))]
+pub mod shell;
 pub mod texture;

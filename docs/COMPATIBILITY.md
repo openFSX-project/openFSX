@@ -1,9 +1,12 @@
 # Compatibility
 
+The project target is FSX 1:1 across interface, behavior, content and APIs. No subsystem currently has a complete recorded parity comparison.
+
 This page records observed behavior, not a promise that existing add-ons will work in a future simulator.
 
 | Area | Current support | Limits |
 | --- | --- | --- |
+| FSX-style menu | Initial Windows host | Local UI skin, aircraft catalog, launch and return; independent layout, no pixel-parity verification; other sections unimplemented |
 | Installation | Directory structure check | fsx.exe and standard Airplanes folder |
 | aircraft.cfg | Partial | Variant references, geometry, station payload, full usable Avgas loading, loaded CG/inertia tensor and engine/control parameters; explicit encoding |
 | MDLX | Partial | Packed chunks, VERT, INDE, PART, LOD, static TRAN/AMAP/SCEN |
@@ -16,13 +19,15 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | Flight dynamics / AIR | Initial airborne subset | Legacy 1101/0404/0473; modern overrides explicitly rejected; approximate engine |
 | Keyboard flight mode | Experimental | Airborne C172 start or fixed-wheel runway start; power, brakes, steering and departure checked |
 | Wheel contact | Initial subset | Three fixed wheels, flat-plane springs/dampers and regularized friction; non-wheel contacts omitted, no landing-performance validation |
-| Flight overlay | Implemented for the prototype | Live TAS, local height/heading, vertical speed, commands, attitude and status; independent of FSX gauges |
+| Flight overlay | Optional --debug-hud | Live TAS, local height/heading, vertical speed, commands, attitude and status; independent of FSX gauges |
 | BGL / scenery | Not implemented | No airport or terrain runtime |
 | XML gauges | Not implemented | No expression engine |
 | DLL / GAU / SimConnect | Not implemented | Native ABI/API research required |
 | Audio, AI, multiplayer | Not implemented | Future subsystems |
 
 ## Local evidence
+
+The native Windows menu loaded the local C172 catalog and thumbnail. Aircraft chooser opening, FLY NOW launching the C172 runway renderer and Esc restoring the menu were checked. This establishes the launch path only; it does not establish FSX menu or simulation parity.
 
 The C172 ground path loads three wheel contacts and reports six omitted
 non-wheel contacts. Parking and braking scenarios pass, and explicit fixed
