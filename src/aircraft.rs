@@ -2,6 +2,7 @@
 use crate::{
     air::{Aerodynamics, AirFile},
     cfg::{decode, Config},
+    mass::{body_position, vector, Loading},
 };
 use std::{
     fs,
@@ -15,12 +16,11 @@ pub const SLUG_FOOT_SQUARED: f64 = 1.3558179483314;
 
 #[derive(Debug, Clone)]
 pub struct Parameters {
-    pub mass: f64,
+    pub loading: Loading,
     pub wing_area: f64,
     pub span: f64,
     pub chord: f64,
     pub efficiency: f64,
-    pub inertia: [f64; 3],
     pub power: f64,
     pub prop_area: f64,
     pub tail_incidence: f64,
@@ -37,7 +37,7 @@ pub struct Parameters {
     pub cruise_speed: f64,
     pub reference_stall: f64,
     pub ground_height: f64,
-    pub body_cg: [f64; 3],
+    pub engine_position: [f64; 3],
     pub aero: Aerodynamics,
 }
 #[derive(Debug)]
@@ -135,17 +135,7 @@ impl Parameters {
             }
             Ok(n)
         };
-        let mass = required("weight_and_balance", "max_gross_weight", POUND)?;
-        let empty = required("weight_and_balance", "empty_weight", POUND)?;
-        if mass < empty {
-            return Err("Maximum gross weight is below empty weight".into());
-        }
-        if c.optional_number("weight_and_balance", "empty_weight_coupled_moi", 0.)?
-            .abs()
-            > 1e-9
-        {
-            return Err("Cross-axis inertia is not supported yet".into());
-        }
+        let loading = Loading::from_config(c)?;
         let wing_area = required("airplane_geometry", "wing_area", FOOT * FOOT)?;
         let span = required("airplane_geometry", "wing_span", FOOT)?;
         let diameter = required("propeller", "propeller_diameter", FOOT)?;
@@ -153,46 +143,14 @@ impl Parameters {
         let radians = |key: &str| -> Result<f64, String> {
             Ok(required("airplane_geometry", key, 1.)?.to_radians())
         };
-        let vector = |key: &str| -> Result<[f64; 3], String> {
-            let text = c
-                .get("weight_and_balance", key)
-                .ok_or_else(|| format!("Missing CG vector {key}"))?;
-            let values = text
-                .split(',')
-                .map(|s| s.trim().parse::<f64>())
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(|_| format!("Invalid CG vector {key}"))?;
-            if values.len() != 3 || values.iter().any(|n| !n.is_finite()) {
-                return Err(format!("Invalid CG vector {key}"));
-            }
-            Ok([values[0], values[1], values[2]])
-        };
-        let datum = vector("reference_datum_position")?;
-        let cg = vector("empty_weight_cg_position")?;
+        let datum = vector(c, "weight_and_balance", "reference_datum_position")?;
+        let engine_position = body_position(datum, vector(c, "GeneralEngineData", "Engine.0")?);
         let p = Self {
-            mass,
+            loading,
             wing_area,
             span,
             chord: wing_area / span,
             efficiency: required("airplane_geometry", "oswald_efficiency_factor", 1.)?,
-            inertia: [
-                required(
-                    "weight_and_balance",
-                    "empty_weight_roll_moi",
-                    SLUG_FOOT_SQUARED,
-                )?,
-                required(
-                    "weight_and_balance",
-                    "empty_weight_pitch_moi",
-                    SLUG_FOOT_SQUARED,
-                )?,
-                required(
-                    "weight_and_balance",
-                    "empty_weight_yaw_moi",
-                    SLUG_FOOT_SQUARED,
-                )?,
-            ]
-            .map(|i| i * mass / empty),
             power: required("piston_engine", "max_rated_hp", HORSEPOWER)?
                 * c.optional_number("piston_engine", "power_scalar", 1.)?,
             prop_area: std::f64::consts::PI * diameter * diameter / 4.,
@@ -221,11 +179,7 @@ impl Parameters {
             cruise_speed: required("reference speeds", "cruise_speed", KNOT)?,
             reference_stall: required("reference speeds", "flaps_up_stall_speed", KNOT)?,
             ground_height: required("contact_points", "static_cg_height", FOOT)?,
-            body_cg: [
-                (datum[0] + cg[0]) * FOOT,
-                (datum[1] + cg[1]) * FOOT,
-                -(datum[2] + cg[2]) * FOOT,
-            ],
+            engine_position,
             aero,
         };
         if p.power <= 0.
@@ -244,12 +198,20 @@ impl Parameters {
 #[cfg(test)]
 pub(crate) fn own_parameters() -> Parameters {
     Parameters {
-        mass: 1000.,
+        loading: crate::mass::Loading {
+            mass: 1000.,
+            empty_mass: 1000.,
+            payload_mass: 0.,
+            fuel_mass: 0.,
+            max_mass: 1200.,
+            cg: [0.; 3],
+            empty_cg: [0.; 3],
+            inertia: crate::mass::Inertia::diagonal([1600., 2000., 3000.]).unwrap(),
+        },
         wing_area: 16.,
         span: 10.,
         chord: 1.6,
         efficiency: 0.8,
-        inertia: [1600., 2000., 3000.],
         power: 130000.,
         prop_area: 3.,
         tail_incidence: 0.,
@@ -266,7 +228,7 @@ pub(crate) fn own_parameters() -> Parameters {
         cruise_speed: 55.,
         reference_stall: 27.,
         ground_height: 1.,
-        body_cg: [0.; 3],
+        engine_position: [0.; 3],
         aero: AirFile::parse(&crate::air::own_air())
             .unwrap()
             .dynamics()

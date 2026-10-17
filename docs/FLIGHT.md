@@ -55,13 +55,34 @@ An offscreen flight frame uses the same geometry and GPU pipeline as the window:
 cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --windows-1252 --lod 150 --seconds 10 --snapshot target/c172-flight.ppm
 ```
 
-The snapshot advances the trimmed state at 120 Hz before rendering. Duration is limited to 300 seconds and requires --fly and --snapshot. Snapshots of installed content stay under ignored target and are not published with the website.
+The snapshot advances the trimmed state at 120 Hz before rendering. Duration is limited to 300 seconds and requires --fly and --snapshot. Keep working captures under ignored target. Selected PNG engine screenshots are published in the website gallery at the project owner's request; source game resources are never published. Convert captures losslessly with `node scripts/ppm-to-png.mjs target/c172-flight.ppm target/c172-flight.png`.
 
 ## Model and units
 
 State uses metres, seconds, kilograms and radians. World axes are north/east/down; body axes are forward/right/down. Orientation is a normalized quaternion. A fourth-order Runge-Kutta integrator advances at 1/120 second. Desktop scheduling accumulates frame time and caps any one frame at 0.25 seconds; long stalls do not trigger unbounded catch-up.
 
-CFG supplies maximum gross mass, wing area/span, Oswald efficiency, empty-aircraft inertias, engine power, propeller diameter, control limits, CG/datum and tuning scalars. The initial approximation holds mass at maximum gross weight, scales the empty diagonal inertias by gross/empty mass, and retains the empty-aircraft CG. It does not compute a loaded inertia tensor from fuel and payload distribution. Nonzero coupled inertia is explicitly unsupported.
+CFG supplies maximum gross mass, empty mass and inertias, loading stations,
+tank positions and capacities, wing geometry, engine position/power, control
+limits, datum and tuning scalars. Initial loading uses the configured station
+weights and full usable Avgas at an explicit fixed 6 lb/US gallon. Unusable
+fuel is assumed included in the configured empty weight and is not added twice.
+This is a deterministic loading choice, not an import of the user's saved FSX
+flight or fuel state. Overweight loading and other fuel types are rejected.
+
+The mass-weighted CG includes passengers and fuel. Empty-aircraft inertia is
+translated to the loaded CG with the parallel-axis theorem; stations and tanks
+are point masses. The full symmetric 3-by-3 tensor includes their products of
+inertia. Cholesky factorization rejects non-positive tensors and solves the
+rigid-body Euler equation, including gyroscopic coupling. A nonzero configured
+empty_weight_coupled_moi remains unsupported; loading-induced coupling is
+supported. Distributed tank shape, fuel slosh and fuel consumption are absent.
+
+As an explicit initial approximation, AIR aerodynamic moments are treated as
+referenced to the empty CG. The aerodynamic wrench is translated to the loaded
+CG; propeller thrust acts at Engine.0. Initial pitch trim uses those same moment
+equations. Laterally unbalanced loading/engine placement is rejected by the
+initial level-trim solver, which does not yet solve aileron/rudder trim.
+The nominal CFG ground-contact height remains a flat-ground approximation.
 
 AIR records 0x0404 and 0x0473 supply piecewise-linear lift and pitch-moment curves versus body angle of attack. Selected coefficients from the 250-byte 0x1101 record supply parasite/gear drag, control derivatives, damping, sideslip and cross-axis terms. Integer coefficients use their documented 1/2048 scale; double coefficients are not rescaled. Legacy pitch/yaw and control signs are converted to the right-handed body convention. Modern override records 0x1539 through 0x1547 are rejected rather than silently ignored.
 
@@ -71,25 +92,29 @@ The propeller is an explicit approximation: an ideal momentum-theory disk with a
 
 ## Observed results
 
-On 17 October 2026, with the local C172 at configured maximum gross mass of 1,156.66 kg:
+On 17 October 2026, with the local C172 at loaded mass **1,046.89 kg**:
+748.43 kg empty, 154.22 kg configured payload, and 144.24 kg full usable fuel.
+Maximum gross mass is 1,156.66 kg. Body CG is [0.145084, 0, -0.104990] metres.
+These results supersede the earlier maximum-gross/empty-CG approximation.
 
 | Check | Result |
 | --- | --- |
-| Derived clean sea-level stall | 53.57 kt; CFG reference 53.00 kt |
-| 90 kt / 300 m initial trim | Throttle 0.54328; normalized trim -0.07218; AoA 2.570 degrees |
+| Derived clean sea-level stall | 50.97 kt; CFG reference 53.00 kt, with no loading condition established for that reference |
+| 90 kt / 300 m initial trim | Throttle 0.50830; normalized trim -0.19759; AoA 1.972 degrees |
 | 60 s fixed-control level flight | 90.00000 kt; 300.00000 m; no controller corrections |
-| 0.5 s pull input 0.1 | Positive pitch rate, 5.2203 degrees/s |
-| 0.5 s right-bank input 0.1 | Positive roll rate, 3.4471 degrees/s |
-| 0.5 s right-rudder input 0.1 | Positive yaw rate, 2.0225 degrees/s |
-| 30 s full power from 90 kt / 1500 m | 91.83 kt; height gain 77.34 m; final climb 1.52 m/s |
+| 0.5 s pull input 0.1 | Positive pitch rate, 6.1515 degrees/s |
+| 0.5 s right-bank input 0.1 | Positive roll rate, 3.3736 degrees/s |
+| 0.5 s right-rudder input 0.1 | Positive yaw rate, 2.4879 degrees/s |
+| 30 s full power from 90 kt / 1500 m | 87.16 kt; height gain 111.73 m; final climb 1.66 m/s |
 | 20 s power-off pull from 65 kt / 1500 m | Reached angles beyond the lift-curve peak |
 
 The full-power values describe a transient scenario, not a steady-state climb specification. The post-peak flag establishes curve entry, not validated stall, spin or recovery behavior.
 
 The NVIDIA RTX 2080 / Vulkan path produced an offscreen flight frame and presented a frame in the native window. Automated tests exercise keyboard mapping, short taps, key release, pause/reset and frame partitioning.
 
-End-to-end window input was checked on 17 October 2026 using Windows Computer
-Use keyboard injection. A Right tap changed displayed bank from +0.0 to +0.1
+End-to-end window input was checked on 17 October 2026 at commit ca4697d,
+before the loaded-mass update, using Windows Computer Use keyboard injection.
+A Right tap changed displayed bank from +0.0 to +0.1
 degrees. A subsequent Down tap was followed by pitch +2.7 degrees and climb
 +15 ft/min, compared with the initial +2.6 degrees and zero climb. These values
 are observations after short impulses, not controlled performance benchmarks.
@@ -102,6 +127,8 @@ other aircraft, graphics backends and platforms remain unverified.
 
 ## Remaining work
 
-Recorded reference flights and quantitative comparison, loaded CG/inertia and fuel, engine/propeller tables, ground handling, control-surface animation, cockpit instruments, audio and controller hardware. MDLX skinning/visibility and generated registration decals remain viewer limitations. No BGL terrain, geographic navigation or add-on API compatibility is implied by this local flight test.
+Recorded reference flights and quantitative comparison, fuel consumption and configurable loading, engine/propeller tables, ground handling, control-surface animation, cockpit instruments, audio and controller hardware. MDLX skinning/visibility and generated registration decals remain viewer limitations. No BGL terrain, geographic navigation or add-on API compatibility is implied by this local flight test.
 
 AIR field research was checked against the AirEd definitions linked from [Herve Sors' aircraft dynamics resources](https://www.aero.sors.fr/fsairfile.html). The reference archive was read locally and is excluded from Git. No third-party implementation or game resource is redistributed.
+
+Legacy loading-field meanings were checked against the [Prepar3D SDK aircraft configuration reference](https://www.prepar3d.com/SDKv3/LearningCenter/simobjects/aircraft_configuration_files.html). Point-mass inertia, fixed fuel density and aerodynamic moment reference choices above are openFSX approximations, not claims about FSX's internal implementation.

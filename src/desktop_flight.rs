@@ -112,7 +112,7 @@ impl FlightSession {
         let right = to_world([0., 1., 0.]);
         let up = to_world([0., 0., -1.]);
         let forward = to_world([1., 0., 0.]);
-        let cg = to_world(self.simulation.parameters.body_cg);
+        let cg = to_world(self.simulation.parameters.loading.cg);
         let center = std::array::from_fn::<_, 3, _>(|i| self.center()[i] - cg[i]);
         [
             right[0], right[1], right[2], 0., up[0], up[1], up[2], 0., forward[0], forward[1],

@@ -60,6 +60,9 @@ impl Config {
             .get(&key.to_ascii_lowercase())
             .map(String::as_str)
     }
+    pub fn section(&self, section: &str) -> Option<&Section> {
+        self.sections.get(&section.to_ascii_lowercase())
+    }
     pub fn number(&self, section: &str, key: &str) -> Result<f64, String> {
         let value = self
             .get(section, key)

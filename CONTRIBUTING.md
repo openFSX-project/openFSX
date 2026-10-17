@@ -7,6 +7,7 @@ Start with architecture and compatibility. Keep claims tied to executable behavi
 - Use small original fixtures. Test truncation, invalid references and resource limits as well as successful decoding.
 - Run Rust tests, formatting and the viewer build when changing rendering interfaces.
 - Regenerate the site with `node scripts/build-site.mjs` after editing `docs/`.
+- When visible engine behavior changes, refresh the website's selected screenshots with real openFSX captures and update their captions and capture record. Keep source game resources and intermediate captures excluded.
 - Describe verified formats and behavior; distinguish future goals from working features.
 
 The owner has not selected a source license. Discuss licensing before submitting external implementation code.

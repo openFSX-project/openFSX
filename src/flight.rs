@@ -175,7 +175,7 @@ impl Parameters {
         if cl <= 0. {
             return Err("No positive maximum lift".into());
         }
-        Ok((2. * self.mass * GRAVITY / (density(altitude) * self.wing_area * cl)).sqrt())
+        Ok((2. * self.loading.mass * GRAVITY / (density(altitude) * self.wing_area * cl)).sqrt())
     }
     fn lift_drag(&self, alpha: f64, pitch_control: f64, qhat: f64) -> Result<(f64, f64)> {
         let cl = self.aero.lift.sample(alpha)? * self.lift_scalar
@@ -251,15 +251,29 @@ impl Parameters {
         );
         let power = self.power * c.throttle * PROPELLER_EFFICIENCY * rho / 1.225;
         let thrust = propeller_thrust(power, velocity[0].max(0.), rho, self.prop_area);
-        let force = add(add(add(lift, drag), side), [thrust, 0., 0.]);
+        let aero_force = add(add(lift, drag), side);
+        let thrust_force = [thrust, 0., 0.];
+        let force = add(aero_force, thrust_force);
+        // Initial model: AIR moments are referenced to the empty CG. Translate
+        // that wrench to the loaded CG; thrust acts at the configured engine.
+        let offset = |point: Vec3| std::array::from_fn(|i| point[i] - self.loading.cg[i]);
+        let moments = add(
+            moments,
+            add(
+                cross(offset(self.loading.empty_cg), aero_force),
+                cross(offset(self.engine_position), thrust_force),
+            ),
+        );
         let acceleration = add(
-            scale(orientation.rotate(force), 1. / self.mass),
+            scale(orientation.rotate(force), 1. / self.loading.mass),
             [0., 0., GRAVITY],
         );
-        let angular_momentum = std::array::from_fn(|i| self.inertia[i] * s.rates[i]);
+        let angular_momentum = self.loading.inertia.apply(s.rates);
         let gyroscopic = cross(s.rates, angular_momentum);
-        let angular_acceleration =
-            std::array::from_fn(|i| (moments[i] - gyroscopic[i]) / self.inertia[i]);
+        let angular_acceleration = self
+            .loading
+            .inertia
+            .solve(add(moments, scale(gyroscopic, -1.)));
         let qdot = s
             .orientation
             .product(Quaternion([0., p, q, r]))
@@ -296,7 +310,7 @@ impl Simulation {
         let pressure = 0.5 * rho * speed * speed * parameters.wing_area;
         let balance = |alpha: f64| -> Result<f64> {
             let (cl, cd) = parameters.lift_drag(alpha, 0., 0.)?;
-            Ok(pressure * (cl + cd * alpha.tan()) - parameters.mass * GRAVITY)
+            Ok(pressure * (cl + cd * alpha.tan()) - parameters.loading.mass * GRAVITY)
         };
         let mut low = -0.15;
         let mut high = parameters.aero.lift.peak()?.0;
@@ -323,11 +337,35 @@ impl Simulation {
         if divisor.abs() < 1e-9 {
             return Err("Aircraft has no usable trim moment coefficient".into());
         }
-        let trim = -(a.cm0
+        let mut trim = -(a.cm0
             + a.pitch.sample(alpha)?
             + a.cm_stabilizer * parameters.tail_incidence
             + a.cm_gear)
             / divisor;
+        // Correct the initial pitch balance for the configured loading and
+        // engine arm using the very same force/moment equations as integration.
+        let state = State {
+            position: [0., 0., -altitude],
+            velocity: [speed, 0., 0.],
+            orientation: Quaternion::pitch(alpha),
+            rates: [0.; 3],
+        };
+        let derivative = parameters.derivative(
+            state,
+            Controls {
+                throttle,
+                trim,
+                ..Default::default()
+            },
+        )?;
+        let moment = parameters.loading.inertia.apply(derivative.rates);
+        trim += moment[1] / (pressure * parameters.chord * divisor);
+        if moment[0].abs() > 1e-6 || moment[2].abs() > 1e-6 {
+            return Err(
+                "Initial level trim requires laterally balanced loading and engine placement"
+                    .into(),
+            );
+        }
         if !(0. ..=1.).contains(&throttle) || trim.abs() > 1. {
             return Err(format!(
                 "Trim exceeds available power/control: throttle {throttle:.3}, trim {trim:.3}"
@@ -407,6 +445,44 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::aircraft::own_parameters;
+    #[test]
+    fn shifted_loading_and_engine_arm_are_in_initial_trim() {
+        let mut p = own_parameters();
+        p.loading.cg = [0.12, 0., -0.08];
+        p.engine_position = [2., 0., 0.05];
+        p.loading.inertia =
+            crate::mass::Inertia::new([[1600., 0., -50.], [0., 2000., 0.], [-50., 0., 3000.]])
+                .unwrap();
+        let mut s = Simulation::trimmed(p.clone(), 50., 300.).unwrap();
+        for _ in 0..7200 {
+            s.step(s.controls, STEP).unwrap();
+        }
+        let t = s.telemetry().unwrap();
+        assert!((t.altitude - 300.).abs() < 1e-5);
+        assert!((t.speed - 50.).abs() < 1e-6);
+        p.loading.cg[1] = 0.2;
+        assert!(Simulation::trimmed(p, 50., 300.).is_err());
+    }
+    #[test]
+    fn coupled_free_rotation_obeys_euler_equation() {
+        let mut p = own_parameters();
+        p.loading.inertia =
+            crate::mass::Inertia::new([[1600., 20., -50.], [20., 2000., 30.], [-50., 30., 3000.]])
+                .unwrap();
+        let state = State {
+            position: [0., 0., -300.],
+            velocity: [0.; 3],
+            orientation: Quaternion::IDENTITY,
+            rates: [0.3, -0.2, 0.5],
+        };
+        let d = p.derivative(state, Controls::default()).unwrap();
+        let torque = p.loading.inertia.apply(d.rates);
+        let coupling = cross(state.rates, p.loading.inertia.apply(state.rates));
+        for i in 0..3 {
+            assert!((torque[i] + coupling[i]).abs() < 1e-9);
+        }
+        assert!(dot(state.rates, torque).abs() < 1e-9);
+    }
     #[test]
     fn quaternion_pitch_and_inverse_preserve_vectors() {
         let q = Quaternion::pitch(0.2);

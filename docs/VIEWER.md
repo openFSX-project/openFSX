@@ -48,7 +48,7 @@ The inspector prints each LOD's parts, triangle count, skipped skinned parts and
 cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1" --snapshot target/c172.ppm
 ```
 
-The same depth-tested pipeline renders without a window and writes a binary PPM. Keep snapshots of proprietary content local under ignored `target/`; do not add them to the site or repository.
+The same depth-tested pipeline renders without a window and writes a binary PPM. Keep working snapshots under ignored `target/`. Selected PNG engine screenshots are published in the website gallery at the project owner's request; original game resource files remain excluded. Use `node scripts/ppm-to-png.mjs target/c172.ppm target/c172.png` for lossless conversion.
 
 ## Known limits
 

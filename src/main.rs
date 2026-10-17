@@ -54,11 +54,20 @@ fn aircraft_report(folder: &Path, windows_1252: bool, check_flight: bool) -> Res
         aircraft.air_path.display()
     );
     println!(
-        "Gross mass: {:.2} kg | Wing: {:.3} m2 | Span: {:.3} m | Power: {:.2} kW",
-        p.mass,
+        "Loaded mass: {:.2} kg | Wing: {:.3} m2 | Span: {:.3} m | Power: {:.2} kW",
+        p.loading.mass,
         p.wing_area,
         p.span,
         p.power / 1000.
+    );
+    println!(
+        "Loading: empty {:.2}, payload {:.2}, full usable Avgas {:.2}, maximum {:.2} kg",
+        p.loading.empty_mass, p.loading.payload_mass, p.loading.fuel_mass, p.loading.max_mass
+    );
+    println!(
+        "Body CG (forward/right/down metres): {:?}\nLoaded inertia (kg m2): {:?}",
+        p.loading.cg,
+        p.loading.inertia.matrix()
     );
     let stall = p.predicted_stall(0.)? / KNOT;
     println!(

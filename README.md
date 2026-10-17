@@ -43,6 +43,10 @@ Flight mode starts at 90 kt and 300 m with solved initial trim. Use **Down/Up** 
 
 ## Website and GitHub Pages
 
+The website includes [real engine screenshots](site/assets/screenshots/README.md)
+of the textured C172 viewer and airborne prototype. Selected PNG captures are
+published; source game resources remain excluded.
+
 The original [logo and brand assets](site/assets/brand/README.md) include light,
 dark and monochrome SVG wordmarks and a square GitHub avatar. The artwork and
 its generator have a separate [MIT license](site/assets/brand/LICENSE).

@@ -4,6 +4,7 @@ pub mod cfg;
 #[cfg(feature = "viewer")]
 pub mod desktop_flight;
 pub mod flight;
+pub mod mass;
 pub mod math;
 pub mod mdl;
 pub mod texture;
