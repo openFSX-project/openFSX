@@ -122,3 +122,61 @@ Elevator frames 0 and 100 rendered through the same Vulkan path with identical
 camera framing; differences were confined to the tail region. Native **]**
 input advanced frame 50 to 55 and presented the updated geometry. This proves
 the inspected path, not FSX animation parity for all aircraft or channels.
+
+## Reference calibration
+
+`tools/fsx-reference` contains a separate Windows x86 reader for the original
+FSX process. Build it with `./scripts/build-reference.ps1`, load a stock C172
+flight in FSX and capture with:
+
+```powershell
+./target/fsx-reference.exe --fsx "./FSX" --output target/fsx-controls.ndjson --seconds 30
+```
+
+This reads surface angles, percentages, trim, yoke, throttle, on-ground state
+and aircraft title. It sends no control events. Record exact loading/settings
+and the input sequence alongside each local capture. Synthetic protocol checks
+pass, but no valid live capture has been established yet. A failed connection
+or an empty output is not calibration evidence. Flight mode still has no simulation-driven animation. Offline pose import is
+available for supported recorded bindings, as described below.
+
+## Inspect one captured pose
+
+```powershell
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1" --reference-pose target/fsx-controls.ndjson --reference-sample 0 --view rear --zoom 1.6
+```
+
+The sample index is zero-based. Import validates schema 1, the selected row's
+12 finite values, aircraft title, time and source label. Files are limited to
+64 MiB, rows to 16 KiB and indexes to fewer than 100,000. The window title and
+console identify the declared source and sample. Use the matching aircraft MDL;
+the tool prints the recorded title but cannot prove that it matches an arbitrary
+model file. Source labels are metadata, not proof of a capture's authenticity.
+
+The adapter resolves known variables in their requested units, then uses the
+model's own XAPS scale and bias to choose keyframes. Percent and percent-over-100
+conversion and degree/radian conversion are explicit. Unknown variables/units,
+code drivers, positive lag and standard autoplay are skipped with diagnostics.
+Shared transform IDs compose in file order; full multi-clip FSX equivalence
+remains unverified. This is one static pose, not temporal replay or flight input.
+It cannot be combined with --fly or manual --animation/--frame. Add --snapshot
+for offscreen output through the same renderer.
+
+For a reproducible pipeline check without an FSX server:
+
+```powershell
+./scripts/build-reference.ps1
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1" --reference-pose target/reference-synthetic.ndjson --view rear --zoom 1.6 --snapshot target/c172-reference-synthetic.ppm
+```
+
+The helper generates this original test sample with source **synthetic**; it
+contains invented values, not FSX measurements. On the local C172 it resolves
+seven of 28 animation groups and renders the posed aircraft. This checks the
+C# encoder, JSON import, unit adapter, authored key evaluation and GPU path.
+It does not establish physical calibration or FSX animation parity.
+
+On 18 October 2026, the original FSX displayed a Remote Desktop restriction
+and exited in the local test session. No live reference samples were obtained.
+Reference capture still needs a supported local Windows session with a loaded
+FSX flight. This limitation belongs to the observed original-game startup;
+the offline openFSX pipeline above does not launch it.

@@ -3,6 +3,53 @@ use fsx_geometry::{Mat4, IDENTITY};
 use std::collections::BTreeMap;
 
 type Result<T> = std::result::Result<T, String>;
+#[derive(Debug, PartialEq)]
+pub enum BindingStatus {
+    Applied(f32),
+    NotSim,
+    NoDirectDriver,
+    NoTracks,
+    StatefulLag,
+    Unavailable,
+}
+#[derive(Debug)]
+pub struct PosePlan {
+    pub frames: Vec<Option<f32>>,
+    pub status: Vec<BindingStatus>,
+}
+/// Resolve recorded variable values in the exact units requested by each clip.
+/// Unknown bindings stay in bind pose; positive lag requires a temporal evaluator.
+pub fn plan_pose(
+    clips: &[Clip],
+    mut lookup: impl FnMut(&str, &str) -> Option<f32>,
+) -> Result<PosePlan> {
+    let mut frames = Vec::with_capacity(clips.len());
+    let mut status = Vec::with_capacity(clips.len());
+    for clip in clips {
+        let state = if clip.kind != "Sim" {
+            BindingStatus::NotSim
+        } else if clip.tracks.is_empty() {
+            BindingStatus::NoTracks
+        } else if let Some(driver) = &clip.driver {
+            if driver.lag.is_some_and(|lag| lag > 0.) {
+                BindingStatus::StatefulLag
+            } else if let Some(value) = lookup(&driver.variable, &driver.units) {
+                BindingStatus::Applied(driver.frame(value, clip.length)?)
+            } else {
+                BindingStatus::Unavailable
+            }
+        } else {
+            BindingStatus::NoDirectDriver
+        };
+        frames.push(if let BindingStatus::Applied(frame) = state {
+            Some(frame)
+        } else {
+            None
+        });
+        status.push(state);
+    }
+    Ok(PosePlan { frames, status })
+}
 #[derive(Debug)]
 pub struct Clip {
     pub length: f32,
@@ -414,6 +461,37 @@ pub(crate) mod tests {
         );
         assert!(clip.transform(1, 5.).unwrap().is_none());
         assert!(clip.transform(0, f32::NAN).is_err());
+    }
+    #[test]
+    fn recorded_values_use_native_scale_bias_and_skip_unavailable_or_lagged_bindings() {
+        let mut clips = parse(&fixture()).unwrap();
+        let plan = plan_pose(&clips, |name, unit| {
+            assert_eq!(name, "TEST VALUE");
+            assert_eq!(unit, "percent");
+            Some(2.)
+        })
+        .unwrap();
+        assert_eq!(plan.frames, vec![Some(5.)]);
+        assert_eq!(plan.status, vec![BindingStatus::Applied(5.)]);
+        assert_eq!(
+            plan_pose(&clips, |_, _| None).unwrap().status,
+            vec![BindingStatus::Unavailable]
+        );
+        assert!(plan_pose(&clips, |_, _| Some(f32::NAN)).is_err());
+        clips[0].driver.as_mut().unwrap().lag = Some(10.);
+        assert_eq!(
+            plan_pose(&clips, |_, _| panic!("lag must not be ignored"))
+                .unwrap()
+                .status,
+            vec![BindingStatus::StatefulLag]
+        );
+        clips[0].kind = "Standard".into();
+        assert_eq!(
+            plan_pose(&clips, |_, _| panic!("standard clip is not Sim-driven"))
+                .unwrap()
+                .frames,
+            vec![None]
+        );
     }
     #[test]
     fn quaternion_sign_equivalence_uses_shortest_arc() {

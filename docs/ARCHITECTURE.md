@@ -26,6 +26,10 @@ There are no placeholder crates for unimplemented scenery, gauges or APIs.
 
 The root Cargo.toml is a virtual workspace with shared versions/dependencies.
 Its default member is fsx-check, preserving `cargo run -- inspect ...`.
+The separate `tools/fsx-reference` Windows x86 measurement helper reads an
+original running FSX through its installed client. It is outside the engine's
+Cargo graph; no subsystem links the original SimConnect DLL. Protocol checks
+use original synthetic packets and run in Windows CI without game resources.
 Build the native application with an explicit package:
 
 ```powershell

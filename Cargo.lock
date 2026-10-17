@@ -708,6 +708,7 @@ dependencies = [
  "fsx-sim",
  "fsx-ui",
  "fsx-vehicle",
+ "serde_json",
  "winit",
 ]
 

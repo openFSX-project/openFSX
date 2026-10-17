@@ -62,3 +62,25 @@ node scripts/ppm-to-png.mjs target/c172-elevator-100.ppm target/c172-elevator-10
 
 The aircraft artwork rights and publication scope above also apply to these
 selected captures. No original model or animation data file is included.
+
+## Synthetic reference-pose pipeline
+
+`c172-reference-synthetic.png` is a direct 960 x 720 GPU readback on
+18 October 2026. It imports the original invented sample written by
+`scripts/build-reference.ps1` into the stock C172 LOD 150 using the rear
+bind-bounds camera and zoom 1.6. The declared source is **synthetic**. Seven
+of 28 animation groups resolve from available direct bindings; other groups
+remain in bind pose. It is not a live FSX recording, calibrated response or
+reference-flight comparison. No AI image generation or compositing is used.
+
+```powershell
+./scripts/build-reference.ps1
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1" --reference-pose target/reference-synthetic.ndjson --view rear --zoom 1.6 --snapshot target/c172-reference-synthetic.ppm
+node scripts/ppm-to-png.mjs target/c172-reference-synthetic.ppm target/c172-reference-synthetic.png
+```
+
+Changing only the synthetic elevator_pct from -2.5 to 30 changes clip 7 from
+frame 47.5 to 80, with 2,661 changed RGB pixels confined to bounds (257, 380)
+to (441, 445) in this backend/camera check. This checks binding isolation, not
+physical accuracy. Other content, material, visibility and skinning limits
+remain. Aircraft artwork retains its respective owners' rights.

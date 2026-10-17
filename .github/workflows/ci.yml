@@ -24,3 +24,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace --all-features --locked
       - run: cargo build --locked -p fsx-app --features viewer --bin openfsx-viewer
+      - name: Build and check independent reference reader
+        shell: pwsh
+        run: ./scripts/build-reference.ps1

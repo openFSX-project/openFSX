@@ -16,6 +16,7 @@ use winit::{
     window::Window,
 };
 mod desktop_flight;
+mod reference_pose;
 struct App {
     model: Model,
     animation: Option<usize>,
@@ -33,6 +34,7 @@ struct App {
     last_title: Instant,
     visible: bool,
     debug_hud: bool,
+    reference_label: Option<String>,
 }
 fn flight_view(flight: &FlightSession, orbit: &mut Orbit) {
     orbit.center = flight.center();
@@ -114,7 +116,21 @@ impl ApplicationHandler for App {
             return;
         }
         let result = (|| {
-            let window=Arc::new(event_loop.create_window(Window::default_attributes().with_title(format!("openFSX • MDLX LOD {} • Drag: orbit | Wheel: zoom | R: reset | Esc: close",self.geometry.lod)).with_inner_size(winit::dpi::LogicalSize::new(1100.,760.))).map_err(|e|e.to_string())?);
+            let title = self.reference_label.clone().unwrap_or_else(|| {
+                format!(
+                    "openFSX • MDLX LOD {} • Drag: orbit | Wheel: zoom | R: reset | Esc: close",
+                    self.geometry.lod
+                )
+            });
+            let window = Arc::new(
+                event_loop
+                    .create_window(
+                        Window::default_attributes()
+                            .with_title(title)
+                            .with_inner_size(winit::dpi::LogicalSize::new(1100., 760.)),
+                    )
+                    .map_err(|e| e.to_string())?,
+            );
             let size = window.inner_size();
             self.gpu = Some(block_on(Gpu::new(
                 Some(window.clone()),
@@ -273,7 +289,7 @@ fn run() -> Result<(), String> {
             .ok_or("Usage: openfsx-viewer <model.mdl> [options]\nFlight: openfsx-viewer <aircraft folder> --fly [--variant N] [--windows-1252]\nOptions: --lod N --texture-dir folder --no-textures --snapshot output.ppm --seconds N")?,
     );
     if path == Path::new("--help") || path == Path::new("-h") {
-        println!("openfsx-viewer <model.mdl> [--lod N] [--texture-dir folder | --no-textures]\nopenfsx-viewer <aircraft folder> --fly [--ground] [--variant N] [--windows-1252] [--lod N]\nWindows menu: openfsx-viewer <FSX installation> --menu\nAnimation inspector: --animation N [--frame N] (use inspect-model for IDs; [ / ] scrub)\nOrbit camera: --view front|rear --zoom N (0.1..10)\nOptional: --debug-hud (experimental telemetry); --snapshot output.ppm [--seconds N, flight only, 0..300]\nFlight keys: Down/Up pull/push; Left/Right bank; Q/E rudder; PageUp/PageDown throttle; F1 idle; F4 full power; B parking brake; Space wheel brakes; Home/End trim; P pause; R reset; Esc close.");
+        println!("openfsx-viewer <model.mdl> [--lod N] [--texture-dir folder | --no-textures]\nopenfsx-viewer <aircraft folder> --fly [--ground] [--variant N] [--windows-1252] [--lod N]\nWindows menu: openfsx-viewer <FSX installation> --menu\nAnimation inspector: --animation N [--frame N] (use inspect-model for IDs; [ / ] scrub)\nRecorded pose: --reference-pose sample.ndjson [--reference-sample N] (inspection only)\nOrbit camera: --view front|rear --zoom N (0.1..10)\nOptional: --debug-hud (experimental telemetry); --snapshot output.ppm [--seconds N, flight only, 0..300]\nFlight keys: Down/Up pull/push; Left/Right bank; Q/E rudder; PageUp/PageDown throttle; F1 idle; F4 full power; B parking brake; Space wheel brakes; Home/End trim; P pause; R reset; Esc close.");
         return Ok(());
     }
     let (mut lod, mut snapshot) = (None, None);
@@ -286,8 +302,22 @@ fn run() -> Result<(), String> {
     let mut frame = None;
     let mut rear_view = false;
     let mut zoom: f32 = 1.;
+    let mut reference_path = None;
+    let mut reference_index = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
+            Some("--reference-pose") => {
+                reference_path = Some(PathBuf::from(
+                    args.next().ok_or("Expected reference NDJSON path")?,
+                ))
+            }
+            Some("--reference-sample") => {
+                reference_index = Some(
+                    args.next()
+                        .and_then(|s| s.to_str().and_then(|s| s.parse::<usize>().ok()))
+                        .ok_or("Expected zero-based reference sample index")?,
+                )
+            }
             Some("--view") => {
                 rear_view = match args
                     .next()
@@ -375,6 +405,8 @@ fn run() -> Result<(), String> {
             || frame.is_some()
             || rear_view
             || zoom != 1.
+            || reference_path.is_some()
+            || reference_index.is_some()
         {
             return Err("--menu takes an FSX installation path and cannot be combined with renderer options".into());
         }
@@ -400,6 +432,42 @@ fn run() -> Result<(), String> {
         .map(|a| a.model.as_path())
         .unwrap_or(&path);
     let model = Model::load(model_path)?;
+    if reference_index.is_some() && reference_path.is_none() {
+        return Err("--reference-sample requires --reference-pose".into());
+    }
+    if reference_path.is_some() && (fly || animation.is_some() || frame.is_some()) {
+        return Err(
+            "Reference pose inspection cannot be combined with --fly or manual --animation/--frame"
+                .into(),
+        );
+    }
+    let mut reference_label = None;
+    let reference_plan = if let Some(path) = &reference_path {
+        let index = reference_index.unwrap_or(0);
+        let sample = reference_pose::Sample::load(path, index)?;
+        let plan = fsx_model::animation::plan_pose(&model.animations, |name, units| {
+            sample.lookup(name, units)
+        })?;
+        let applied = plan.frames.iter().filter(|f| f.is_some()).count();
+        if applied == 0 {
+            return Err("No available reference variables drive this model's direct, stateless animation tracks".into());
+        }
+        println!(
+            "Reference pose: declared source {} | sample {} | elapsed {:.3} s | aircraft {:?}",
+            sample.source, index, sample.elapsed, sample.title
+        );
+        println!("Applied {applied}/{} animation groups. Other clips remain in bind pose; code, visibility and temporal lag are not evaluated.",plan.frames.len());
+        for (i, status) in plan.status.iter().enumerate() {
+            println!("  Clip {i}: {status:?}");
+        }
+        reference_label = Some(format!(
+            "openFSX Reference pose | {} | sample {index} | {applied} groups | Esc close",
+            sample.source
+        ));
+        Some(plan)
+    } else {
+        None
+    };
     if frame.is_some() && animation.is_none() {
         return Err("--frame requires --animation".into());
     }
@@ -410,7 +478,9 @@ fn run() -> Result<(), String> {
         return Err("--view and --zoom are orbit-viewer options".into());
     }
     let frame = frame.unwrap_or(0.);
-    let geometry = if let Some(index) = animation {
+    let geometry = if let Some(plan) = &reference_plan {
+        model.posed_geometry(lod, &plan.frames)?
+    } else if let Some(index) = animation {
         let clip = model
             .animations
             .get(index)
@@ -451,7 +521,7 @@ fn run() -> Result<(), String> {
         model.animated_nodes,
         geometry.skipped_skinned_parts
     );
-    println!("Preview limitations: diffuse DDS only; approximate alpha blending; no skinning or visibility evaluation. Animation keys require explicit manual selection.");
+    println!("Preview limitations: diffuse DDS only; approximate alpha blending; no skinning or visibility evaluation. Keys are evaluated only for explicit clip selection or supported reference bindings.");
     if let Some(index) = animation {
         println!(
             "Manual animation {index}: frame {frame} / {} | use [ / ] to scrub by five frames",
@@ -525,6 +595,7 @@ fn run() -> Result<(), String> {
         last_title: Instant::now() - Duration::from_secs(1),
         visible: true,
         debug_hud,
+        reference_label,
     };
     EventLoop::new()
         .map_err(|e| e.to_string())?

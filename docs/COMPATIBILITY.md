@@ -24,6 +24,8 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | BGL / scenery | Not implemented | No airport or terrain runtime |
 | XML gauges | Not implemented | No expression engine |
 | DLL / GAU / SimConnect | Not implemented | Native ABI/API research required |
+| Original-FSX measurement tool | Synthetic protocol checks only | Separate x86 reader under tools/fsx-reference; original FSX refused the observed RDP session; no live capture verified or SimConnect server in openFSX |
+| Recorded pose inspection | Initial static subset | One schema-1 NDJSON sample drives available XAPS bindings; synthetic C172 pipeline checked, no live calibration or temporal lag/visibility evaluation |
 | Audio, AI, multiplayer | Not implemented | Future subsystems |
 
 ## Local evidence
