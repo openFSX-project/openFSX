@@ -1,0 +1,79 @@
+# openFSX
+
+An independent, experimental runtime for content from Microsoft Flight Simulator X, inspired by the approach of [openOMSI](https://github.com/openOMSI-org/openOMSI).
+
+**Research prototype — not a playable flight simulator.** Current work includes an aircraft catalog inspector, a bounds-checked MDLX geometry reader and an experimental native model viewer. Flight dynamics, scenery loading, gauges and add-on APIs are not implemented.
+
+[Repository](https://github.com/openFSX-project/openFSX) · [Website](https://openfsx-project.github.io/openFSX/)
+
+## Approach
+
+Build a new engine in Rust, read content from the user's own FSX installation, and establish compatibility through reproducible tests. No original executable code, aircraft, textures, scenery or SDK binaries belong in this repository. The local `FSX/` directory is ignored by Git.
+
+The viewer uses wgpu and winit, with Windows x64 as the first target and automatic graphics-backend selection. The first offscreen render was verified on an NVIDIA RTX 2080 through Vulkan. Full compatibility with existing aircraft and native add-ons is a long-term research goal, not an existing feature.
+
+## Quick start
+
+Install stable Rust and the Windows MSVC C++ build tools. Run from the repository root:
+
+```powershell
+# List variants in your own FSX installation.
+cargo run -- inspect "./FSX" --windows-1252
+
+# Inspect geometry and available LODs.
+cargo run -- inspect-model "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl"
+
+# Open the experimental native viewer.
+cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150
+```
+
+Drag to orbit, scroll to zoom, use arrow keys to rotate, press **R** to reset and **Esc** to close. The viewer displays solid geometry in bind pose. Textures, visibility evaluation, animation playback and skin deformation are absent. Omitted skinned parts are reported. See [the viewer guide](docs/VIEWER.md).
+
+The CFG inspector reads `title` values from `[fltsim.N]` under `SimObjects/Airplanes`. `--windows-1252` explicitly selects that code page for every file; omit it for ASCII/UTF-8 installations. Encodings are not guessed. The presence of `fsx.exe` checks directory structure, not license ownership. Neither tool launches FSX or modifies its installation.
+
+## Website and GitHub Pages
+
+The English website lives in **`site/`**. Its documentation-oriented layout follows the example of [openomsi.org](https://openomsi.org), with independent branding and content. Relative asset URLs and hash routes support the GitHub Pages `/openFSX/` path.
+
+```powershell
+node scripts/build-site.mjs
+node scripts/preview.mjs
+```
+
+Open `http://127.0.0.1:4174`. The preview server exposes only public website files, never the adjacent game installation. Documentation is generated from `docs/` without npm or external Markdown scripts.
+
+To publish: push to `main` and select **Settings → Pages → Build and deployment → Source → GitHub Actions**. The Pages workflow generates the documentation, uploads `site/`, then deploys it. Expected URL: `https://openfsx-project.github.io/openFSX/`. A manual trigger is also available. Only a successful Actions deployment confirms publication.
+
+## Development
+
+```powershell
+cargo test --locked
+cargo fmt --check
+cargo build --locked --features viewer --bin openfsx-viewer
+node scripts/build-site.mjs --check
+```
+
+Tests use small, original synthetic data. Real installation checks are local and optional; game data is not redistributed with CI. Read [architecture](docs/ARCHITECTURE.md), [compatibility](docs/COMPATIBILITY.md), [format notes](docs/FORMATS.md) and [contribution guidance](CONTRIBUTING.md).
+
+```text
+src/                  Content tools, MDLX reader, math and native viewer
+docs/                 English documentation, also published on the site
+site/                 GitHub Pages website
+scripts/              Documentation generation and local preview
+.github/workflows/    Rust checks and Pages deployment
+FSX/                  Local user installation — ignored, never distributed
+target/               Builds and local snapshots — ignored
+```
+
+## Project status and rights
+
+openFSX is independent and is not affiliated with Microsoft, Dovetail Games or openOMSI. Product names belong to their owners. Original content requires your own installation and compliance with applicable terms. Do not commit extracted models, textures, paid add-ons or SDK files.
+
+The owner has not selected a source license yet. Public visibility alone does not grant an open-source license; add LICENSE before accepting external implementation contributions. No openOMSI or other third-party implementation code has been copied into this project.
+
+## References
+
+- [openOMSI](https://github.com/openOMSI-org/openOMSI): independent runtime approach.
+- [Microsoft aircraft documentation](https://docs.flightsimulator.com/html/Content_Configuration/SimObjects/Aircraft_SimO/Aircraft.htm): modern documentation with legacy notes, not a full FSX specification.
+- [FSDeveloper MDLX research](https://www.fsdeveloper.com/wiki/index.php/MDL_file_format_%28FSX%29): community observations, checked against local files and synthetic fixtures.
+- [GitHub Pages custom workflows](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).

@@ -1,0 +1,5 @@
+/target/
+/FSX/
+__pycache__/
+*.log
+.DS_Store
