@@ -6,9 +6,10 @@ was started. The GPU was an NVIDIA RTX 2080 using the Vulkan backend. The
 flight image uses the CFG station weights and full usable Avgas loading.
 
 Both captures are direct 960 × 720 GPU readbacks, converted losslessly from
-PPM to PNG. There is no FSX scenery, AI image generation, compositing,
-or added instrument overlay. Flight ground/runway geometry is original
-openFSX test content. The renderer is the same pipeline used by the window.
+PPM to PNG. There is no FSX scenery, AI image generation or post-production
+compositing. The flight panel is drawn by openFSX from live simulation state
+inside the GPU renderer. Flight ground/runway geometry is original openFSX
+test content. The renderer is the same pipeline used by the window.
 
 From the repository root, with your own installation:
 

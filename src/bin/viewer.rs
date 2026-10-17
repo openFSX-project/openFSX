@@ -160,6 +160,9 @@ struct Gpu {
     draws: Vec<GpuDraw>,
     model_matrix: Mat4,
     flight: bool,
+    hud: Option<openfsx::hud::Readout>,
+    hud_pipeline: wgpu::RenderPipeline,
+    hud_vertex: wgpu::Buffer,
     presented: bool,
 }
 struct GpuDraw {
@@ -330,6 +333,50 @@ impl Gpu {
         };
         let pipeline = create_pipeline(false);
         let blend_pipeline = create_pipeline(true);
+        let hud_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Original flight overlay"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../hud.wgsl").into()),
+        });
+        let hud_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Flight overlay layout"),
+            bind_group_layouts: &[],
+            push_constant_ranges: &[],
+        });
+        let hud_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Flight overlay"),
+            layout: Some(&hud_layout),
+            vertex: wgpu::VertexState {
+                module: &hud_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: 24,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x4],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &hud_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+        let hud_vertex = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Flight overlay vertices"),
+            size: 65536 * 24,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Camera"),
             layout: &camera_layout,
@@ -537,6 +584,9 @@ impl Gpu {
             draws,
             model_matrix: math::IDENTITY,
             flight,
+            hud: None,
+            hud_pipeline,
+            hud_vertex,
             presented: false,
         })
     }
@@ -569,7 +619,11 @@ impl Gpu {
             surface.configure(&self.device, &self.config);
         }
     }
-    fn encode(&self, view: &wgpu::TextureView, orbit: &Orbit) -> wgpu::CommandEncoder {
+    fn encode(
+        &self,
+        view: &wgpu::TextureView,
+        orbit: &Orbit,
+    ) -> Result<wgpu::CommandEncoder, String> {
         self.queue.write_buffer(
             &self.uniform,
             0,
@@ -641,7 +695,35 @@ impl Gpu {
                 pass.draw(draw.range.clone(), 0..1);
             }
         }
-        encoder
+        if let Some(readout) = &self.hud {
+            let vertices = openfsx::hud::vertices(readout, self.config.width, self.config.height);
+            if vertices.len() > 65536 {
+                return Err("Flight overlay exceeds vertex capacity".into());
+            }
+            self.queue.write_buffer(
+                &self.hud_vertex,
+                0,
+                &bytes(vertices.iter().flatten().copied()),
+            );
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Flight overlay"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.hud_pipeline);
+            pass.set_vertex_buffer(0, self.hud_vertex.slice(..));
+            pass.draw(0..vertices.len() as u32, 0..1);
+        }
+        Ok(encoder)
     }
     fn draw(&mut self, orbit: &Orbit) -> Result<(), String> {
         let surface = self.surface.as_ref().ok_or("No window surface")?;
@@ -655,7 +737,7 @@ impl Gpu {
             Err(e) => return Err(e.to_string()),
         };
         let view = frame.texture.create_view(&Default::default());
-        self.queue.submit([self.encode(&view, orbit).finish()]);
+        self.queue.submit([self.encode(&view, orbit)?.finish()]);
         frame.present();
         if !self.presented {
             println!("First native window frame presented successfully");
@@ -686,7 +768,7 @@ impl Gpu {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        let mut encoder = self.encode(&texture.create_view(&Default::default()), orbit);
+        let mut encoder = self.encode(&texture.create_view(&Default::default()), orbit)?;
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -765,6 +847,11 @@ impl App {
             flight_view(flight, &mut self.orbit);
             if let Some(gpu) = &mut self.gpu {
                 gpu.model_matrix = flight.model_matrix();
+                gpu.hud = Some(openfsx::hud::Readout::new(
+                    flight.simulation.telemetry()?,
+                    flight.simulation.controls,
+                    flight.paused,
+                )?);
             }
             if now.duration_since(self.last_title) >= Duration::from_millis(250) {
                 if let Some(window) = &self.window {
@@ -1057,6 +1144,11 @@ fn run() -> Result<(), String> {
         ))?;
         if let Some(flight) = &flight {
             gpu.model_matrix = flight.model_matrix();
+            gpu.hud = Some(openfsx::hud::Readout::new(
+                flight.simulation.telemetry()?,
+                flight.simulation.controls,
+                flight.paused,
+            )?);
         }
         return gpu.snapshot(&orbit, &path);
     }

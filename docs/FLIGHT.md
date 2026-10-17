@@ -37,7 +37,26 @@ then released. Dedicated navigation keys and NumLock-off numpad navigation
 events share the same controls. Number input with NumLock on is not treated
 as a directional command. Letter bindings use physical key positions.
 
-The window title reports airspeed, altitude, vertical speed, pitch, bank and throttle. The camera follows the aircraft. The runway and grid are original test geometry, not FSX scenery. First ground contact stops the simulation until reset: there is no landing-gear suspension, taxiing, bounce or damage model yet.
+The window title and an original on-screen overlay report live flight state.
+The camera follows the aircraft. The runway and grid are original test geometry,
+not FSX scenery. First ground contact stops the simulation until reset: there
+is no landing-gear suspension, taxiing, bounce or damage model yet.
+
+## On-screen flight panel
+
+- TAS is true airspeed in knots, not indicated airspeed.
+- ALT is height in feet above the flat test plane, not pressure altitude.
+- V/S is vertical speed in feet per minute, positive upwards.
+- HDG is heading in degrees clockwise from the local test world's north. No magnetic model or geographic navigation is implemented.
+- THR and TRIM are normalized throttle and elevator-trim commands in percent.
+- The attitude display uses body roll and pitch in degrees. Pitch marks are spaced by 10 degrees; right bank rotates the horizon counterclockwise, and pitch-up moves it below the fixed aircraft symbol.
+- AIRBORNE, PAUSED, POST-PEAK LIFT and GROUND status come from the simulation. The post-peak message is a curve-region diagnostic, not a validated stall warning system.
+
+The panel scales with the window and is rendered by the same GPU path in
+offscreen captures. Its original geometry and pixel letterforms require no
+external fonts, gauge files or textures. It is a diagnostic flight overlay;
+FSX cockpit instruments and XML gauges remain unimplemented. The panel updates
+per rendered frame; the window title updates four times per second.
 
 ## Reproducible checks
 
@@ -112,18 +131,19 @@ The full-power values describe a transient scenario, not a steady-state climb sp
 
 The NVIDIA RTX 2080 / Vulkan path produced an offscreen flight frame and presented a frame in the native window. Automated tests exercise keyboard mapping, short taps, key release, pause/reset and frame partitioning.
 
-End-to-end window input was checked on 17 October 2026 at commit ca4697d,
-before the loaded-mass update, using Windows Computer Use keyboard injection.
-A Right tap changed displayed bank from +0.0 to +0.1
-degrees. A subsequent Down tap was followed by pitch +2.7 degrees and climb
-+15 ft/min, compared with the initial +2.6 degrees and zero climb. These values
-are observations after short impulses, not controlled performance benchmarks.
-P displayed PAUSED; R restored 90.0 kt, 984 ft, zero bank and initial trim;
-Esc closed the process successfully. The injected arrow had physical code
-Numpad6 and logical ArrowRight, which exposed and verified the navigation-key
-mapping fix. This check establishes delivered window input and a resulting
-simulation response. Sustained physical keyboard holds, controller hardware,
-other aircraft, graphics backends and platforms remain unverified.
+End-to-end window input was rechecked on 17 October 2026 with the loaded-mass
+model and on-screen panel using Windows Computer Use keyboard injection.
+A Right tap changed displayed bank from +0.0 to +0.1 degrees. A subsequent
+Down tap was followed by pitch +2.1 degrees and approximately +20 ft/min climb,
+compared with the initial +2.0 degrees and zero climb. These values are
+observations after short impulses, not controlled performance benchmarks.
+P displayed PAUSED on the panel; R restored 90.0 kt, 984 ft, zero bank and
+initial trim; Esc closed the process successfully. Earlier event tracing
+identified an injected arrow as physical Numpad6 and logical ArrowRight;
+both dedicated and numpad navigation are handled. This check establishes
+delivered window input, simulation response and visible telemetry changes.
+Sustained physical keyboard holds, controller hardware, other aircraft,
+graphics backends and platforms remain unverified.
 
 ## Remaining work
 

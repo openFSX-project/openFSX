@@ -39,7 +39,7 @@ Drag to orbit, scroll to zoom, use arrow keys to rotate, press **R** to reset an
 
 The CFG inspector reads `title` values from `[fltsim.N]` under `SimObjects/Airplanes`. `--windows-1252` explicitly selects that code page for every file; omit it for ASCII/UTF-8 installations. Encodings are not guessed. The presence of `fsx.exe` checks directory structure, not license ownership. Neither tool launches FSX or modifies its installation.
 
-Flight mode starts at 90 kt and 300 m with solved initial trim. Use **Down/Up** to pull/push, **Left/Right** to bank, **Q/E** for rudder, **Page Up/Down** for throttle, **Home/End** for trim, **P** to pause and **R** to reset. Window-title telemetry reports speed, height and attitude. The ground is original test geometry. Read the [flight guide](docs/FLIGHT.md) for the actual data subset, approximation choices, controls and observed results. Flight behavior has not been validated against recorded FSX trajectories.
+Flight mode starts at 90 kt and 300 m with solved initial trim. Use **Down/Up** to pull/push, **Left/Right** to bank, **Q/E** for rudder, **Page Up/Down** for throttle, **Home/End** for trim, **P** to pause and **R** to reset. An on-screen panel reports true airspeed, height, vertical speed, local heading, throttle, trim, attitude and status. The ground is original test geometry. Read the [flight guide](docs/FLIGHT.md) for the actual data subset, approximation choices, controls and observed results. Flight behavior has not been validated against recorded FSX trajectories.
 
 ## Website and GitHub Pages
 
