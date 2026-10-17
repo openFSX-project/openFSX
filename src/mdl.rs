@@ -16,11 +16,21 @@ pub struct Model {
     indices: Vec<u16>,
     matrices: Vec<Mat4>,
     pub animated_nodes: usize,
-    materials: Vec<[f32; 4]>,
+    pub materials: Vec<Material>,
+}
+#[derive(Clone, Debug)]
+pub struct Material {
+    pub diffuse: [f32; 4],
+    pub diffuse_texture: Option<usize>,
+    pub alpha_blend: bool,
+    pub alpha_function: u32,
+    pub alpha_threshold: f32,
+    pub clamp_texture: bool,
 }
 #[derive(Debug)]
 struct Buffer {
     positions: Vec<[f32; 3]>,
+    uvs: Vec<[f32; 2]>,
     skinned: bool,
 }
 #[derive(Debug)]
@@ -35,12 +45,19 @@ pub struct Part {
 }
 #[derive(Debug)]
 pub struct Geometry {
-    /// Interleaved position, face normal and diffuse RGB; one vertex per corner.
-    pub vertices: Vec<[f32; 9]>,
+    /// Interleaved position, face normal and UV; one vertex per corner.
+    pub vertices: Vec<[f32; 8]>,
+    pub batches: Vec<DrawBatch>,
     pub min: [f32; 3],
     pub max: [f32; 3],
     pub skipped_skinned_parts: usize,
     pub lod: u32,
+}
+#[derive(Debug)]
+pub struct DrawBatch {
+    pub range: std::ops::Range<u32>,
+    pub material: usize,
+    pub center: [f32; 3],
 }
 
 fn u32_at(b: &[u8], i: usize) -> Result<u32> {
@@ -124,15 +141,35 @@ impl Model {
             .map(|(_, data)| text(data))
             .unwrap_or_default();
         let data = chunks(single(&root, b"MDLD")?)?;
-        let textures = records(single(&data, b"TEXT")?, 64)?.map(text).collect();
+        let textures: Vec<String> = records(single(&data, b"TEXT")?, 64)?.map(text).collect();
         let materials = records(single(&data, b"MATE")?, 120)?
             .map(|r| {
-                Ok([
-                    f32_at(r, 36)?,
-                    f32_at(r, 40)?,
-                    f32_at(r, 44)?,
-                    f32_at(r, 48)?,
-                ])
+                let flags = u32_at(r, 0)?;
+                let texture = if flags & 2 != 0 {
+                    Some(u32_at(r, 8)? as usize)
+                } else {
+                    None
+                };
+                if texture.is_some_and(|index| index >= textures.len()) {
+                    return Err("MATE diffuse texture reference out of range".into());
+                }
+                Ok(Material {
+                    diffuse: [
+                        f32_at(r, 36)?,
+                        f32_at(r, 40)?,
+                        f32_at(r, 44)?,
+                        f32_at(r, 48)?,
+                    ],
+                    diffuse_texture: texture,
+                    alpha_blend: u32_at(r, 100)? == 5 && u32_at(r, 104)? == 6,
+                    alpha_function: if flags & 0x00400000 != 0 {
+                        u32_at(r, 108)?
+                    } else {
+                        0
+                    },
+                    alpha_threshold: f32_at(r, 112)? / 255.,
+                    clamp_texture: u32_at(r, 4)? & 4 != 0,
+                })
             })
             .collect::<Result<Vec<_>>>()?;
         let indices = records(single(&data, b"INDE")?, 2)?
@@ -144,8 +181,12 @@ impl Model {
                 let positions = records(bytes, 32)?
                     .map(|r| Ok([f32_at(r, 0)?, f32_at(r, 4)?, f32_at(r, 8)?]))
                     .collect::<Result<Vec<_>>>()?;
+                let uvs = records(bytes, 32)?
+                    .map(|r| Ok([f32_at(r, 24)?, f32_at(r, 28)?]))
+                    .collect::<Result<Vec<_>>>()?;
                 buffers.push(Buffer {
                     positions,
+                    uvs,
                     skinned: false,
                 });
             } else if &id == b"SKIN" {
@@ -320,6 +361,7 @@ impl Model {
             return Err("Decoded geometry exceeds the 3 million vertex limit".into());
         }
         let mut vertices = Vec::with_capacity(total);
+        let mut batches = Vec::new();
         let mut min = [f32::INFINITY; 3];
         let mut max = [f32::NEG_INFINITY; 3];
         let mut skipped_skinned_parts = 0;
@@ -330,7 +372,9 @@ impl Model {
                 continue;
             }
             let matrix = self.matrices[part.scene];
-            let color = self.materials[part.material];
+            let start = vertices.len() as u32;
+            let mut part_min = [f32::INFINITY; 3];
+            let mut part_max = [f32::NEG_INFINITY; 3];
             for triangle in self.indices[part.index_offset..part.index_offset + part.index_count]
                 .chunks_exact(3)
             {
@@ -347,16 +391,25 @@ impl Model {
                     math::sub(points[1], points[0]),
                     math::sub(points[2], points[0]),
                 ));
-                for point in points {
+                for (corner, point) in points.into_iter().enumerate() {
                     for i in 0..3 {
                         min[i] = min[i].min(point[i]);
                         max[i] = max[i].max(point[i]);
+                        part_min[i] = part_min[i].min(point[i]);
+                        part_max[i] = part_max[i].max(point[i]);
                     }
+                    let uv = buffer.uvs[part.vertex_offset + triangle[corner] as usize];
                     vertices.push([
-                        point[0], point[1], point[2], normal[0], normal[1], normal[2], color[0],
-                        color[1], color[2],
+                        point[0], point[1], point[2], normal[0], normal[1], normal[2], uv[0], uv[1],
                     ]);
                 }
+            }
+            if vertices.len() as u32 > start {
+                batches.push(DrawBatch {
+                    range: start..vertices.len() as u32,
+                    material: part.material,
+                    center: std::array::from_fn(|i| (part_min[i] + part_max[i]) * 0.5),
+                });
             }
         }
         if vertices.is_empty() {
@@ -364,6 +417,7 @@ impl Model {
         }
         Ok(Geometry {
             vertices,
+            batches,
             min,
             max,
             skipped_skinned_parts,
@@ -454,5 +508,28 @@ mod tests {
         let mut invalid = original;
         invalid[scene + 4..scene + 6].copy_from_slice(&1i16.to_le_bytes());
         assert!(Model::parse(&invalid).unwrap_err().contains("AMAP"));
+    }
+    #[test]
+    fn uv_coordinates_and_draw_ranges_are_preserved() {
+        let mut bytes = model_bytes(2);
+        let vertex = bytes.windows(4).position(|s| s == b"VERT").unwrap() + 8;
+        bytes[vertex + 24..vertex + 28].copy_from_slice(&0.25f32.to_le_bytes());
+        bytes[vertex + 28..vertex + 32].copy_from_slice(&0.75f32.to_le_bytes());
+        let geometry = Model::parse(&bytes).unwrap().geometry(None).unwrap();
+        assert_eq!(&geometry.vertices[0][6..8], &[0.25, 0.75]);
+        assert_eq!(geometry.batches[0].range, 0..3);
+        assert_eq!(geometry.batches[0].material, 0);
+        assert_eq!(geometry.batches[0].center, [0.5, 0., 0.5]);
+        bytes[vertex + 24..vertex + 28].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(Model::parse(&bytes).is_err());
+    }
+    #[test]
+    fn diffuse_references_must_point_into_texture_list() {
+        let mut bytes = model_bytes(2);
+        let material = bytes.windows(4).position(|s| s == b"MATE").unwrap() + 8;
+        bytes[material..material + 4].copy_from_slice(&2u32.to_le_bytes());
+        assert!(Model::parse(&bytes)
+            .unwrap_err()
+            .contains("texture reference"));
     }
 }

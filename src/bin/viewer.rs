@@ -1,7 +1,8 @@
 //! Native MDLX viewer and reproducible offscreen rendering, independent of fsx.exe.
 use openfsx::{
     math::{self, Mat4},
-    mdl::{Geometry, Model},
+    mdl::{Geometry, Material, Model},
+    texture::{self, Image},
 };
 use std::{
     future::Future,
@@ -43,6 +44,59 @@ fn bytes(values: impl IntoIterator<Item = f32>) -> Vec<u8> {
     values.into_iter().flat_map(f32::to_le_bytes).collect()
 }
 
+struct Appearance {
+    materials: Vec<Material>,
+    images: Vec<Option<Image>>,
+}
+impl Appearance {
+    fn load(model: &Model, geometry: &Geometry, folder: Option<&Path>) -> Result<Self, String> {
+        let mut images: Vec<Option<Image>> = (0..model.textures.len()).map(|_| None).collect();
+        let mut used = std::collections::BTreeSet::new();
+        for batch in &geometry.batches {
+            if let Some(index) = model.materials[batch.material].diffuse_texture {
+                used.insert(index);
+            }
+        }
+        let mut loaded = 0;
+        let mut memory = 0usize;
+        if let Some(folder) = folder {
+            for &index in &used {
+                let name = &model.textures[index];
+                let result = texture::find(folder, name).and_then(|path| {
+                    let path = path.ok_or_else(|| format!("Texture not found: {name}"))?;
+                    let image = Image::load_dds(&path)?;
+                    println!("Texture: {name} {}x{}", image.width, image.height);
+                    Ok(image)
+                });
+                match result {
+                    Ok(image) => {
+                        memory = memory
+                            .checked_add(image.rgba.len())
+                            .ok_or("Texture memory overflow")?;
+                        if memory > 256 * 1024 * 1024 {
+                            return Err(
+                                "Selected diffuse textures exceed 256 MiB decoded memory".into()
+                            );
+                        }
+                        images[index] = Some(image);
+                        loaded += 1;
+                    }
+                    Err(error) => eprintln!("Diffuse fallback for {name}: {error}"),
+                }
+            }
+            println!(
+                "Diffuse textures: {loaded}/{} loaded ({} MiB decoded)",
+                used.len(),
+                memory / (1024 * 1024)
+            );
+        }
+        Ok(Self {
+            materials: model.materials.clone(),
+            images,
+        })
+    }
+}
+
 struct Orbit {
     center: [f32; 3],
     radius: f32,
@@ -66,18 +120,20 @@ impl Orbit {
         }
     }
     fn matrix(&self, aspect: f32) -> Mat4 {
-        let eye = [
-            self.center[0] + self.distance * self.yaw.sin() * self.pitch.cos(),
-            self.center[1] + self.distance * self.pitch.sin(),
-            self.center[2] + self.distance * self.yaw.cos() * self.pitch.cos(),
-        ];
         math::camera(
-            eye,
+            self.eye(),
             self.center,
             aspect,
             self.radius * 0.01,
             self.radius * 100.,
         )
+    }
+    fn eye(&self) -> [f32; 3] {
+        [
+            self.center[0] + self.distance * self.yaw.sin() * self.pitch.cos(),
+            self.center[1] + self.distance * self.pitch.sin(),
+            self.center[2] + self.distance * self.yaw.cos() * self.pitch.cos(),
+        ]
     }
     fn zoom(&mut self, delta: f32) {
         self.distance =
@@ -90,16 +146,25 @@ struct Gpu {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
+    blend_pipeline: wgpu::RenderPipeline,
     vertex: wgpu::Buffer,
     uniform: wgpu::Buffer,
     bind: wgpu::BindGroup,
     depth: wgpu::TextureView,
-    count: u32,
+    material_binds: Vec<wgpu::BindGroup>,
+    draws: Vec<GpuDraw>,
+}
+struct GpuDraw {
+    range: std::ops::Range<u32>,
+    material: usize,
+    center: [f32; 3],
+    blended: bool,
 }
 impl Gpu {
     async fn new(
         window: Option<Arc<Window>>,
         geometry: &Geometry,
+        appearance: &Appearance,
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
@@ -162,20 +227,70 @@ impl Gpu {
             mapped_at_creation: false,
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Solid MDLX preview"),
+            label: Some("Diffuse MDLX preview"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../viewer.wgsl").into()),
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Camera layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Material layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Viewer pipeline layout"),
+            bind_group_layouts: &[&camera_layout, &material_layout],
+            push_constant_ranges: &[],
+        });
+        let create_pipeline = |blended: bool| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("MDLX triangles"),
-            layout: None,
+            layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: 36,
+                    array_stride: 32,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x3],
+                    attributes: &wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x2],
                 }],
             },
             fragment: Some(wgpu::FragmentState {
@@ -184,7 +299,7 @@ impl Gpu {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: None,
+                    blend: if blended {Some(wgpu::BlendState::ALPHA_BLENDING)}else{None},
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -194,7 +309,7 @@ impl Gpu {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
+                depth_write_enabled: !blended,
                 depth_compare: wgpu::CompareFunction::Less,
                 stencil: Default::default(),
                 bias: Default::default(),
@@ -202,15 +317,126 @@ impl Gpu {
             multisample: Default::default(),
             multiview: None,
             cache: None,
-        });
+        })
+        };
+        let pipeline = create_pipeline(false);
+        let blend_pipeline = create_pipeline(true);
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Camera"),
-            layout: &pipeline.get_bind_group_layout(0),
+            layout: &camera_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: uniform.as_entire_binding(),
             }],
         });
+        let upload = |image: &Image| {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("DDS diffuse"),
+                size: wgpu::Extent3d {
+                    width: image.width,
+                    height: image.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: Default::default(),
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &image.rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(image.width * 4),
+                    rows_per_image: Some(image.height),
+                },
+                wgpu::Extent3d {
+                    width: image.width,
+                    height: image.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            texture.create_view(&Default::default())
+        };
+        let white = upload(&Image {
+            width: 1,
+            height: 1,
+            rgba: vec![255; 4],
+        });
+        let views = appearance
+            .images
+            .iter()
+            .map(|image| image.as_ref().map(upload))
+            .collect::<Vec<_>>();
+        let mut material_binds = Vec::new();
+        for material in &appearance.materials {
+            let view = material
+                .diffuse_texture
+                .and_then(|index| views[index].as_ref());
+            let params = [
+                material.diffuse[0],
+                material.diffuse[1],
+                material.diffuse[2],
+                material.diffuse[3],
+                f32::from(view.is_some()),
+                f32::from(material.alpha_blend),
+                material.alpha_function as f32,
+                material.alpha_threshold,
+            ];
+            let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Diffuse material"),
+                contents: &bytes(params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let address = if material.clamp_texture {
+                wgpu::AddressMode::ClampToEdge
+            } else {
+                wgpu::AddressMode::Repeat
+            };
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("Diffuse sampler"),
+                address_mode_u: address,
+                address_mode_v: address,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            });
+            material_binds.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Diffuse material"),
+                layout: &material_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(view.unwrap_or(&white)),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: uniform.as_entire_binding(),
+                    },
+                ],
+            }));
+        }
+        let draws = geometry
+            .batches
+            .iter()
+            .map(|batch| GpuDraw {
+                range: batch.range.clone(),
+                material: batch.material,
+                center: batch.center,
+                blended: appearance.materials[batch.material].alpha_blend,
+            })
+            .collect();
         let vertex = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("MDLX geometry"),
             contents: &bytes(geometry.vertices.iter().flatten().copied()),
@@ -223,15 +449,13 @@ impl Gpu {
             queue,
             config,
             pipeline,
+            blend_pipeline,
             vertex,
             uniform,
             bind,
             depth,
-            count: geometry
-                .vertices
-                .len()
-                .try_into()
-                .map_err(|_| "Too many vertices")?,
+            material_binds,
+            draws,
         })
     }
     fn depth(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
@@ -300,7 +524,26 @@ impl Gpu {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind, &[]);
             pass.set_vertex_buffer(0, self.vertex.slice(..));
-            pass.draw(0..self.count, 0..1);
+            for draw in self.draws.iter().filter(|draw| !draw.blended) {
+                pass.set_bind_group(1, &self.material_binds[draw.material], &[]);
+                pass.draw(draw.range.clone(), 0..1);
+            }
+            let mut blended = self
+                .draws
+                .iter()
+                .filter(|draw| draw.blended)
+                .collect::<Vec<_>>();
+            let eye = orbit.eye();
+            let distance = |draw: &GpuDraw| {
+                let d = math::sub(draw.center, eye);
+                math::dot(d, d)
+            };
+            blended.sort_by(|a, b| distance(b).total_cmp(&distance(a)));
+            pass.set_pipeline(&self.blend_pipeline);
+            for draw in blended {
+                pass.set_bind_group(1, &self.material_binds[draw.material], &[]);
+                pass.draw(draw.range.clone(), 0..1);
+            }
         }
         encoder
     }
@@ -394,6 +637,7 @@ impl Gpu {
 }
 struct App {
     geometry: Geometry,
+    appearance: Appearance,
     orbit: Orbit,
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
@@ -412,6 +656,7 @@ impl ApplicationHandler for App {
             self.gpu = Some(block_on(Gpu::new(
                 Some(window.clone()),
                 &self.geometry,
+                &self.appearance,
                 size.width.max(1),
                 size.height.max(1),
             ))?);
@@ -500,9 +745,10 @@ fn run() -> Result<(), String> {
     let mut args = std::env::args_os().skip(1);
     let path = PathBuf::from(
         args.next()
-            .ok_or("Usage: openfsx-viewer <model.mdl> [--lod N] [--snapshot output.ppm]")?,
+            .ok_or("Usage: openfsx-viewer <model.mdl> [--lod N] [--texture-dir folder | --no-textures] [--snapshot output.ppm]")?,
     );
     let (mut lod, mut snapshot) = (None, None);
+    let (mut texture_dir, mut no_textures) = (None, false);
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--lod") => {
@@ -515,11 +761,31 @@ fn run() -> Result<(), String> {
             Some("--snapshot") => {
                 snapshot = Some(PathBuf::from(args.next().ok_or("Expected snapshot path")?))
             }
+            Some("--texture-dir") => {
+                texture_dir = Some(PathBuf::from(args.next().ok_or("Expected texture folder")?))
+            }
+            Some("--no-textures") => no_textures = true,
             _ => return Err("Unknown viewer argument".into()),
         }
     }
     let model = Model::load(&path)?;
     let geometry = model.geometry(lod)?;
+    if no_textures && texture_dir.is_some() {
+        return Err("Use either --texture-dir or --no-textures".into());
+    }
+    let default_texture = path
+        .parent()
+        .and_then(Path::parent)
+        .map(|path| path.join("texture"));
+    let appearance = Appearance::load(
+        &model,
+        &geometry,
+        if no_textures {
+            None
+        } else {
+            texture_dir.as_deref().or(default_texture.as_deref())
+        },
+    )?;
     println!(
         "{} | LOD {} | {} triangles | {} animated nodes in bind pose | {} skinned parts omitted",
         model.name,
@@ -528,13 +794,14 @@ fn run() -> Result<(), String> {
         model.animated_nodes,
         geometry.skipped_skinned_parts
     );
-    println!("Preview limitations: no textures, skinning, animation or visibility evaluation; all unskinned parts are opaque.");
+    println!("Preview limitations: diffuse DDS only; approximate alpha blending; no skinning, animation or visibility evaluation.");
     let orbit = Orbit::new(&geometry);
     if let Some(path) = snapshot {
-        return block_on(Gpu::new(None, &geometry, 960, 720))?.snapshot(&orbit, &path);
+        return block_on(Gpu::new(None, &geometry, &appearance, 960, 720))?.snapshot(&orbit, &path);
     }
     let mut app = App {
         geometry,
+        appearance,
         orbit,
         window: None,
         gpu: None,

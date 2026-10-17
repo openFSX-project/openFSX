@@ -2,7 +2,7 @@
 
 An independent, experimental runtime for content from Microsoft Flight Simulator X, inspired by the approach of [openOMSI](https://github.com/openOMSI-org/openOMSI).
 
-**Research prototype — not a playable flight simulator.** Current work includes an aircraft catalog inspector, a bounds-checked MDLX geometry reader and an experimental native model viewer. Flight dynamics, scenery loading, gauges and add-on APIs are not implemented.
+**Research prototype — not a playable flight simulator.** Current work includes an aircraft catalog inspector, a bounds-checked MDLX geometry reader and an experimental native viewer with diffuse DDS textures. Flight dynamics, scenery loading, gauges and add-on APIs are not implemented.
 
 [Repository](https://github.com/openFSX-project/openFSX) · [Website](https://openfsx-project.github.io/openFSX/)
 
@@ -24,10 +24,10 @@ cargo run -- inspect "./FSX" --windows-1252
 cargo run -- inspect-model "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl"
 
 # Open the experimental native viewer.
-cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150
+cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1"
 ```
 
-Drag to orbit, scroll to zoom, use arrow keys to rotate, press **R** to reset and **Esc** to close. The viewer displays solid geometry in bind pose. Textures, visibility evaluation, animation playback and skin deformation are absent. Omitted skinned parts are reported. See [the viewer guide](docs/VIEWER.md).
+Drag to orbit, scroll to zoom, use arrow keys to rotate, press **R** to reset and **Esc** to close. The viewer displays bind-pose geometry with diffuse DDS textures and approximate alpha blending. DXT1/3/5 and masked 32-bit RGB DDS top mips are decoded; texture.cfg fallback directories are searched. Missing textures fall back to diffuse color and are reported. Visibility evaluation, animation playback and skin deformation remain absent. See [the viewer guide](docs/VIEWER.md).
 
 The CFG inspector reads `title` values from `[fltsim.N]` under `SimObjects/Airplanes`. `--windows-1252` explicitly selects that code page for every file; omit it for ASCII/UTF-8 installations. Encodings are not guessed. The presence of `fsx.exe` checks directory structure, not license ownership. Neither tool launches FSX or modifies its installation.
 
