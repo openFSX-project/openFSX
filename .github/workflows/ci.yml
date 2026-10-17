@@ -10,16 +10,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - run: cargo fmt --check
-      - run: cargo test --locked
+      - run: cargo fmt --all --check
+      - run: cargo test --workspace --locked
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - run: node scripts/check-architecture.mjs
       - run: node scripts/build-site.mjs --check
   windows-viewer:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --locked --features viewer
-      - run: cargo build --locked --features viewer --bin openfsx-viewer
+      - run: cargo test --workspace --all-features --locked
+      - run: cargo build --locked -p fsx-app --features viewer --bin openfsx-viewer

@@ -10,7 +10,8 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | Installation | Directory structure check | fsx.exe and standard Airplanes folder |
 | aircraft.cfg | Partial | Variant references, geometry, station payload, full usable Avgas loading, loaded CG/inertia tensor and engine/control parameters; explicit encoding |
 | MDLX | Partial | Packed chunks, VERT, INDE, PART, LOD, static TRAN/AMAP/SCEN |
-| Native viewer | Experimental | Diffuse textured geometry, approximate alpha blending; no animation |
+| Native viewer | Experimental | Diffuse textured geometry, approximate alpha blending; manual native-key inspection |
+| MDLX animation keys | Initial inspection subset | ANIB/XANI/XANS/XANK and SGAL; explicit clip/frame, linear translation, quaternion slerp; no automatic SimVar/code/visibility evaluation |
 | Skinned MDLX parts | Omitted with a count | No bone deformation |
 | MDL8, MDL9, P3D | Unsupported | Explicit format error |
 | DDS diffuse maps | Partial | DXT1/3/5 and masked 32-bit RGB, top mip only; up to 4096 pixels per dimension |
@@ -39,7 +40,7 @@ On 17 October 2026, the CFG inspector found **117 aircraft variants with no read
 
 The C172 exterior MDLX file has six LODs (5, 15, 35, 75, 150 and 400), nine texture references and 148 animated scene nodes. LOD 150 yields 11,314 solid triangles without skinned omissions. LOD 400 yields 13,527 triangles after omitting one skinned part. These counts establish geometry decoding, not correct animation or textured appearance.
 
-An offscreen C172 LOD 150 render was produced using the same wgpu pipeline as the native window, on an NVIDIA RTX 2080 through Vulkan. The Blue/Gold livery in texture.1 loads four of five referenced diffuse DDS files, including shared interior and pilot maps resolved through fallback. The missing DECAL_NNUMBER.DDS is reported; dynamic registration generation is not implemented. Visual inspection confirmed the blue/gold exterior mapping after preserving DDS row order and the original MDLX UV coordinates. Animated states, interactive camera input and other backends are not established by this check.
+An offscreen C172 LOD 150 render was produced using the same wgpu pipeline as the native window, on an NVIDIA RTX 2080 through Vulkan. The Blue/Gold livery in texture.1 loads four of five referenced diffuse DDS files, including shared interior and pilot maps resolved through fallback. The missing DECAL_NNUMBER.DDS is reported; dynamic registration generation is not implemented. Visual inspection confirmed the blue/gold exterior mapping after preserving DDS row order and the original MDLX UV coordinates. Automatic animation state, interactive camera input and other backends are not established by this offscreen check. Manual native-key inspection is recorded separately in the [viewer guide](VIEWER.md).
 
 The game installation and source resources are excluded from Git. Selected PNG engine screenshots are published in the website gallery at the project owner's request; intermediate captures remain under ignored target. CI uses original synthetic fixtures and does not contain or download FSX resources.
 

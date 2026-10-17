@@ -1,10 +1,10 @@
 //! Load the initial single-engine, legacy-AIR aircraft subset into SI units.
 use crate::{
     air::{Aerodynamics, AirFile},
-    cfg::{decode, Config},
     ground::Gear,
     mass::{body_position, vector, Loading},
 };
+use fsx_cfg::{decode, Config};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -199,8 +199,9 @@ impl Parameters {
         Ok(p)
     }
 }
-#[cfg(test)]
-pub(crate) fn own_parameters() -> Parameters {
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn own_parameters() -> Parameters {
     Parameters {
         loading: crate::mass::Loading {
             mass: 1000.,

@@ -1,0 +1,12 @@
+[package]
+name = "fsx-sim"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+fsx-vehicle.workspace = true
+fsx-geometry.workspace = true
+
+[dev-dependencies]
+fsx-vehicle = { workspace = true, features = ["test-support"] }

@@ -1,5 +1,6 @@
+#![cfg(target_os = "windows")]
 //! Independent menu host. Original UI artwork is read only from the user's FSX.
-use crate::cfg::{decode, Config};
+use fsx_cfg::{decode, Config};
 use std::{
     borrow::Cow,
     fs,
@@ -112,7 +113,7 @@ fn asset(
 ) -> Response<Cow<'static, [u8]>> {
     let path = request.uri().path();
     let content:Option<(&str,Vec<u8>)>=match path {
-        "/"|"/index.html"=>Some(("text/html; charset=utf-8",include_bytes!("shell.html").to_vec())),
+        "/"|"/index.html"=>Some(("text/html; charset=utf-8",include_bytes!("../../../launcher/index.html").to_vec())),
         "/catalog.json"=>Some(("application/json",serde_json::to_vec(&catalog.iter().enumerate().map(|(i,e)|serde_json::json!({"id":i,"title":e.title,"manufacturer":e.manufacturer,"kind":e.kind,"variation":e.variation,"preview":e.preview.is_some(),"default":e.folder.file_name().is_some_and(|s|s.eq_ignore_ascii_case("C172"))&&e.variant==0})).collect::<Vec<_>>()).unwrap())),
         _=>{
             let file=if let Some(name)=path.strip_prefix("/uires/") {

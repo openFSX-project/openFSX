@@ -25,7 +25,7 @@ Install stable Rust and the Windows MSVC C++ build tools. Run from the repositor
 
 ```powershell
 # Open the experimental FSX-style Free Flight menu (Windows / WebView2).
-cargo run --features viewer --bin openfsx-viewer -- "./FSX" --menu
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX" --menu
 
 # List variants in your own FSX installation.
 cargo run -- inspect "./FSX" --windows-1252
@@ -34,16 +34,16 @@ cargo run -- inspect "./FSX" --windows-1252
 cargo run -- inspect-model "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl"
 
 # Open the experimental native viewer.
-cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1"
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1"
 
 # Start an airborne C172 test with keyboard controls.
-cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --variant 0 --windows-1252 --lod 150
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --variant 0 --windows-1252 --lod 150
 
 # Start on the original test runway, with parking brake applied.
-cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --ground --windows-1252 --lod 150
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --ground --windows-1252 --lod 150
 ```
 
-Drag to orbit, scroll to zoom, use arrow keys to rotate, press **R** to reset and **Esc** to close. The viewer displays bind-pose geometry with diffuse DDS textures and approximate alpha blending. DXT1/3/5 and masked 32-bit RGB DDS top mips are decoded; texture.cfg fallback directories are searched. Missing textures fall back to diffuse color and are reported. Visibility evaluation, animation playback and skin deformation remain absent. See [the viewer guide](docs/VIEWER.md).
+Drag to orbit, scroll to zoom, use arrow keys to rotate, press **R** to reset and **Esc** to close. The viewer displays bind-pose geometry with diffuse DDS textures and approximate alpha blending. DXT1/3/5 and masked 32-bit RGB DDS top mips are decoded; texture.cfg fallback directories are searched. Missing textures fall back to diffuse color and are reported. Visibility evaluation, automatic animation drivers and skin deformation remain absent. Use **--animation N --frame N** to inspect authored rotation/translation keys; **[ / ]** scrub the selected clip. The inspector lists file-local animation IDs. See [the viewer guide](docs/VIEWER.md).
 
 The CFG inspector reads `title` values from `[fltsim.N]` under `SimObjects/Airplanes`. `--windows-1252` explicitly selects that code page for every file; omit it for ASCII/UTF-8 installations. Encodings are not guessed. The presence of `fsx.exe` checks directory structure, not license ownership. Neither tool launches FSX or modifies its installation.
 
@@ -79,17 +79,32 @@ To publish: push to `main` and select **Settings → Pages → Build and deploym
 ## Development
 
 ```powershell
-cargo test --locked
-cargo test --locked --features viewer
-cargo fmt --check
-cargo build --locked --features viewer --bin openfsx-viewer
+cargo test --workspace --all-features --locked
+cargo fmt --all --check
+cargo build --locked -p fsx-app --features viewer --bin openfsx-viewer
+node scripts/check-architecture.mjs
 node scripts/build-site.mjs --check
 ```
+
+The source layout follows openOMSI: subsystem crates, a separate developer tool, launcher frontend and shared assets. See the [workspace map](docs/ARCHITECTURE.md).
 
 Tests use small, original synthetic data. Real installation checks are local and optional; game data is not redistributed with CI. Read [architecture](docs/ARCHITECTURE.md), [compatibility](docs/COMPATIBILITY.md), [format notes](docs/FORMATS.md) and [contribution guidance](CONTRIBUTING.md).
 
 ```text
-src/                  CFG/AIR/MDLX/DDS readers, dynamics and native rendering
+Cargo.toml            Virtual Cargo workspace and shared dependencies
+crates/
+  fsx-cfg/            CFG reader and code pages
+  fsx-geometry/       Matrices and rigid orientation
+  fsx-model/          MDLX, scene graph and animation keys
+  fsx-texture/        DDS and livery lookup
+  fsx-vehicle/        Aircraft/AIR data, mass and contact definitions
+  fsx-sim/            Flight integration and wheel contact forces
+  fsx-render/         wgpu renderer and offscreen capture
+  fsx-ui/             Native Windows menu host
+  fsx-app/            Application event loop and input
+launcher/             Independent menu frontend
+assets/               Owned runtime shaders
+tools/fsx-check/      Headless inspection and consistency-check CLI
 docs/                 English documentation, also published on the site
 site/                 GitHub Pages website
 scripts/              Documentation generation and local preview

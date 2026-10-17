@@ -699,6 +699,87 @@ dependencies = [
 ]
 
 [[package]]
+name = "fsx-app"
+version = "0.1.0"
+dependencies = [
+ "fsx-geometry",
+ "fsx-model",
+ "fsx-render",
+ "fsx-sim",
+ "fsx-ui",
+ "fsx-vehicle",
+ "winit",
+]
+
+[[package]]
+name = "fsx-cfg"
+version = "0.1.0"
+
+[[package]]
+name = "fsx-check"
+version = "0.1.0"
+dependencies = [
+ "fsx-cfg",
+ "fsx-model",
+ "fsx-sim",
+ "fsx-vehicle",
+]
+
+[[package]]
+name = "fsx-geometry"
+version = "0.1.0"
+
+[[package]]
+name = "fsx-model"
+version = "0.1.0"
+dependencies = [
+ "fsx-geometry",
+]
+
+[[package]]
+name = "fsx-render"
+version = "0.1.0"
+dependencies = [
+ "fsx-geometry",
+ "fsx-model",
+ "fsx-sim",
+ "fsx-texture",
+ "fsx-vehicle",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
+name = "fsx-sim"
+version = "0.1.0"
+dependencies = [
+ "fsx-geometry",
+ "fsx-vehicle",
+]
+
+[[package]]
+name = "fsx-texture"
+version = "0.1.0"
+
+[[package]]
+name = "fsx-ui"
+version = "0.1.0"
+dependencies = [
+ "fsx-cfg",
+ "serde_json",
+ "winit",
+ "wry",
+]
+
+[[package]]
+name = "fsx-vehicle"
+version = "0.1.0"
+dependencies = [
+ "fsx-cfg",
+ "fsx-geometry",
+]
+
+[[package]]
 name = "futures-channel"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1954,16 +2035,6 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
-
-[[package]]
-name = "openfsx"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "wgpu",
- "winit",
- "wry",
-]
 
 [[package]]
 name = "option-ext"

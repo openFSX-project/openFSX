@@ -37,13 +37,12 @@ fn titles(text: &str) -> Vec<String> {
     result
 }
 
-use openfsx::cfg::decode;
+use fsx_cfg::decode;
+use fsx_sim::AircraftDynamics;
 
 fn takeoff_report(folder: &Path, windows_1252: bool) -> Result<(), String> {
-    use openfsx::{
-        aircraft::{Aircraft, KNOT},
-        flight::{Simulation, STEP},
-    };
+    use fsx_sim::flight::{Simulation, STEP};
+    use fsx_vehicle::aircraft::{Aircraft, KNOT};
     let aircraft = Aircraft::load(folder, 0, windows_1252)?;
     let mut s = Simulation::on_ground(aircraft.parameters)?;
     println!(
@@ -135,10 +134,8 @@ fn takeoff_report(folder: &Path, windows_1252: bool) -> Result<(), String> {
 }
 
 fn aircraft_report(folder: &Path, windows_1252: bool, check_flight: bool) -> Result<(), String> {
-    use openfsx::{
-        aircraft::{Aircraft, KNOT},
-        flight::{Simulation, STEP},
-    };
+    use fsx_sim::flight::{Simulation, STEP};
+    use fsx_vehicle::aircraft::{Aircraft, KNOT};
     let aircraft = Aircraft::load(folder, 0, windows_1252)?;
     let p = &aircraft.parameters;
     println!(
@@ -314,7 +311,7 @@ fn main() -> ExitCode {
         };
     }
     if args.len() == 2 && args[0] == "inspect-model" {
-        return match openfsx::mdl::Model::load(Path::new(&args[1])) {
+        return match fsx_model::Model::load(Path::new(&args[1])) {
             Ok(model) => {
                 println!(
                     "MDLX: {} | {} textures | {} animated nodes",
@@ -328,6 +325,24 @@ fn main() -> ExitCode {
                         Err(e) => { eprintln!("LOD {lod}: {e}"); return ExitCode::FAILURE; }
                     }
                 }
+                for (index, clip) in model.animations.iter().enumerate() {
+                    let driver = clip
+                        .driver
+                        .as_ref()
+                        .map(|d| {
+                            format!(
+                                "{} # {} (scale {}, bias {}, lag {:?})",
+                                d.variable, d.units, d.scale, d.bias, d.lag
+                            )
+                        })
+                        .unwrap_or_else(|| "code-driven or standard; no direct Sim binding".into());
+                    println!(
+                        "Animation {index}: {} | {} frames | {} tracks | {driver}",
+                        clip.kind,
+                        clip.length,
+                        clip.track_count()
+                    );
+                }
                 ExitCode::SUCCESS
             }
             Err(e) => {
@@ -339,7 +354,7 @@ fn main() -> ExitCode {
     if !(args.len() == 2 || (args.len() == 3 && args[2] == "--windows-1252"))
         || args[0] != "inspect"
     {
-        eprintln!("Usage:\n  openfsx inspect <FSX folder> [--windows-1252]\n  openfsx inspect-model <model.mdl>\n  openfsx inspect-aircraft <aircraft folder> [--windows-1252]\n  openfsx flight-check <aircraft folder> [--windows-1252]\n  openfsx takeoff-check <aircraft folder> [--windows-1252]\nFor the experimental model viewer, build openfsx-viewer with --features viewer.");
+        eprintln!("Usage:\n  openfsx inspect <FSX folder> [--windows-1252]\n  openfsx inspect-model <model.mdl>\n  openfsx inspect-aircraft <aircraft folder> [--windows-1252]\n  openfsx flight-check <aircraft folder> [--windows-1252]\n  openfsx takeoff-check <aircraft folder> [--windows-1252]\nFor the experimental model viewer, build package fsx-app with --features viewer (binary openfsx-viewer).");
         return ExitCode::from(2);
     }
     match inspect(Path::new(&args[1]), args.len() == 3) {

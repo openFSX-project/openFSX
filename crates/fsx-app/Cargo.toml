@@ -1,0 +1,27 @@
+[package]
+name = "fsx-app"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+fsx-vehicle.workspace = true
+fsx-sim.workspace = true
+fsx-model.workspace = true
+fsx-geometry.workspace = true
+fsx-render = { workspace = true, optional = true }
+winit = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+fsx-ui = { workspace = true, optional = true }
+
+[features]
+viewer = ["dep:fsx-render", "dep:winit", "dep:fsx-ui"]
+
+[[bin]]
+name = "openfsx-viewer"
+path = "src/main.rs"
+required-features = ["viewer"]
+
+[dev-dependencies]
+fsx-vehicle = { workspace = true, features = ["test-support"] }

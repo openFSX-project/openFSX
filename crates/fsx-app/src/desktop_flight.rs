@@ -1,9 +1,7 @@
 //! Keyboard input and fixed-step scheduling shared with the native flight window.
-use crate::{
-    aircraft::{Parameters, FOOT, KNOT},
-    flight::{Simulation, STEP},
-    math::Mat4,
-};
+use fsx_geometry::Mat4;
+use fsx_sim::flight::{Simulation, STEP};
+use fsx_vehicle::aircraft::{Parameters, FOOT, KNOT};
 use std::collections::HashSet;
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 
@@ -166,7 +164,8 @@ mod tests {
     use super::*;
     #[test]
     fn runway_reset_parking_brake_and_power_keys() {
-        let mut session = FlightSession::on_ground(crate::aircraft::own_parameters()).unwrap();
+        let mut session =
+            FlightSession::on_ground(fsx_vehicle::aircraft::own_parameters()).unwrap();
         assert!(session.parking_brake && session.simulation.ground_contact);
         session.key(KeyCode::F4, true);
         session.key(KeyCode::F4, false);
@@ -214,7 +213,7 @@ mod tests {
     }
     #[test]
     fn tap_between_physics_steps_is_not_lost() {
-        let mut flight = FlightSession::new(crate::aircraft::own_parameters()).unwrap();
+        let mut flight = FlightSession::new(fsx_vehicle::aircraft::own_parameters()).unwrap();
         flight.key(KeyCode::ArrowRight, true);
         flight.key(KeyCode::ArrowRight, false);
         flight.advance(STEP * 0.4).unwrap();
@@ -232,8 +231,8 @@ mod tests {
     }
     #[test]
     fn keyboard_press_release_pause_and_frame_partition() {
-        let mut a = FlightSession::new(crate::aircraft::own_parameters()).unwrap();
-        let mut b = FlightSession::new(crate::aircraft::own_parameters()).unwrap();
+        let mut a = FlightSession::new(fsx_vehicle::aircraft::own_parameters()).unwrap();
+        let mut b = FlightSession::new(fsx_vehicle::aircraft::own_parameters()).unwrap();
         a.key(KeyCode::ArrowRight, true);
         b.key(KeyCode::ArrowRight, true);
         for _ in 0..30 {

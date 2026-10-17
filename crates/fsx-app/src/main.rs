@@ -1,0 +1,543 @@
+//! Native application and event loop; rendering lives in fsx-render.
+use desktop_flight::FlightSession;
+use fsx_model::{Geometry, Model};
+use fsx_render::{block_on, Appearance, Gpu, Orbit};
+use fsx_vehicle::aircraft::Aircraft;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use winit::{
+    application::ApplicationHandler,
+    event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
+    window::Window,
+};
+mod desktop_flight;
+struct App {
+    model: Model,
+    animation: Option<usize>,
+    frame: f32,
+    geometry: Geometry,
+    appearance: Appearance,
+    orbit: Orbit,
+    window: Option<Arc<Window>>,
+    gpu: Option<Gpu>,
+    dragging: bool,
+    cursor: Option<(f64, f64)>,
+    error: Option<String>,
+    flight: Option<FlightSession>,
+    last_frame: Instant,
+    last_title: Instant,
+    visible: bool,
+    debug_hud: bool,
+}
+fn flight_view(flight: &FlightSession, orbit: &mut Orbit) {
+    orbit.center = flight.center();
+    orbit.yaw = flight.heading() + std::f32::consts::PI + 0.35;
+    orbit.pitch = 0.25;
+    orbit.far = 20000.;
+}
+impl App {
+    fn scrub(&mut self, delta: f32) -> Result<(), String> {
+        let Some(index) = self.animation else {
+            return Ok(());
+        };
+        self.frame = (self.frame + delta).clamp(0., self.model.animations[index].length);
+        let mut frames = vec![None; self.model.animations.len()];
+        frames[index] = Some(self.frame);
+        let geometry = self
+            .model
+            .posed_geometry(Some(self.geometry.lod), &frames)?;
+        if let Some(gpu) = &mut self.gpu {
+            gpu.update_geometry(&geometry)?;
+        }
+        self.geometry = geometry;
+        if let Some(w) = &self.window {
+            w.set_title(&format!(
+                "openFSX Animation {index} | frame {:.2} / {:.2} | [ / ] scrub | Esc close",
+                self.frame, self.model.animations[index].length
+            ));
+        }
+        Ok(())
+    }
+    fn advance_flight(&mut self) -> Result<(), String> {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_frame).as_secs_f64();
+        self.last_frame = now;
+        if let Some(flight) = &mut self.flight {
+            flight.advance(elapsed)?;
+            flight_view(flight, &mut self.orbit);
+            if let Some(gpu) = &mut self.gpu {
+                gpu.model_matrix = flight.model_matrix();
+                gpu.hud = if self.debug_hud {
+                    Some(fsx_render::hud::Readout::new(
+                        flight.simulation.telemetry()?,
+                        flight.simulation.controls,
+                        flight.paused,
+                    )?)
+                } else {
+                    None
+                };
+            }
+            if now.duration_since(self.last_title) >= Duration::from_millis(250) {
+                if let Some(window) = &self.window {
+                    window.set_title(&flight.title()?);
+                }
+                self.last_title = now;
+            }
+        }
+        Ok(())
+    }
+}
+impl ApplicationHandler for App {
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
+        if matches!(cause, StartCause::ResumeTimeReached { .. }) {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+    }
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.visible && self.flight.as_ref().is_some_and(|f| !f.paused) {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + Duration::from_millis(16),
+            ));
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }
+    }
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+        let result = (|| {
+            let window=Arc::new(event_loop.create_window(Window::default_attributes().with_title(format!("openFSX • MDLX LOD {} • Drag: orbit | Wheel: zoom | R: reset | Esc: close",self.geometry.lod)).with_inner_size(winit::dpi::LogicalSize::new(1100.,760.))).map_err(|e|e.to_string())?);
+            let size = window.inner_size();
+            self.gpu = Some(block_on(Gpu::new(
+                Some(window.clone()),
+                &self.geometry,
+                &self.appearance,
+                self.flight.is_some(),
+                size.width.max(1),
+                size.height.max(1),
+            ))?);
+            window.request_redraw();
+            self.window = Some(window);
+            self.scrub(0.)?;
+            self.last_frame = Instant::now();
+            Ok::<_, String>(())
+        })();
+        if let Err(error) = result {
+            self.error = Some(error);
+            event_loop.exit();
+        }
+    }
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _id: winit::window::WindowId,
+        event: WindowEvent,
+    ) {
+        if let WindowEvent::KeyboardInput { event, .. } = &event {
+            if let (Some(flight), Some(key)) = (
+                &mut self.flight,
+                desktop_flight::flight_key(event.physical_key, &event.logical_key),
+            ) {
+                let pressed = event.state == ElementState::Pressed;
+                flight.key(key, pressed);
+                if pressed && !event.repeat {
+                    match key {
+                        KeyCode::Escape => event_loop.exit(),
+                        KeyCode::KeyP => {
+                            flight.paused = !flight.paused;
+                            flight.clear_keys();
+                            self.last_frame = Instant::now();
+                        }
+                        KeyCode::KeyR => {
+                            if let Err(error) = flight.reset() {
+                                self.error = Some(error);
+                                event_loop.exit();
+                            }
+                            self.last_frame = Instant::now();
+                        }
+                        _ => {}
+                    }
+                    self.last_title = Instant::now() - Duration::from_secs(1);
+                }
+            }
+        }
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Resized(size) => {
+                self.visible = size.width > 0 && size.height > 0;
+                if !self.visible {
+                    if let Some(flight) = &mut self.flight {
+                        flight.paused = true;
+                        flight.clear_keys();
+                    }
+                }
+                if let Some(gpu) = &mut self.gpu {
+                    gpu.resize(size.width, size.height);
+                }
+            }
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } => self.dragging = state == ElementState::Pressed && self.flight.is_none(),
+            WindowEvent::Focused(false) => {
+                self.dragging = false;
+                self.cursor = None;
+                if let Some(flight) = &mut self.flight {
+                    flight.paused = true;
+                    flight.clear_keys();
+                    self.last_title = Instant::now() - Duration::from_secs(1);
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                if let Some((x, y)) = self.cursor {
+                    if self.dragging {
+                        self.orbit.yaw += (position.x - x) as f32 * 0.008;
+                        self.orbit.pitch =
+                            (self.orbit.pitch + (position.y - y) as f32 * 0.008).clamp(-1.45, 1.45);
+                    }
+                }
+                self.cursor = Some((position.x, position.y));
+            }
+            WindowEvent::MouseWheel { delta, .. } => self.orbit.zoom(match delta {
+                MouseScrollDelta::LineDelta(_, y) => y,
+                MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.,
+            }),
+            WindowEvent::KeyboardInput { ref event, .. }
+                if event.state == ElementState::Pressed && self.flight.is_none() =>
+            {
+                match event.physical_key {
+                    PhysicalKey::Code(KeyCode::BracketLeft | KeyCode::BracketRight) => {
+                        let delta = if event.physical_key == PhysicalKey::Code(KeyCode::BracketLeft)
+                        {
+                            -5.
+                        } else {
+                            5.
+                        };
+                        if let Err(error) = self.scrub(delta) {
+                            self.error = Some(error);
+                            event_loop.exit();
+                        }
+                    }
+                    PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
+                    PhysicalKey::Code(KeyCode::KeyR) => self.orbit = Orbit::new(&self.geometry),
+                    PhysicalKey::Code(KeyCode::ArrowLeft) => self.orbit.yaw -= 0.12,
+                    PhysicalKey::Code(KeyCode::ArrowRight) => self.orbit.yaw += 0.12,
+                    PhysicalKey::Code(KeyCode::ArrowUp) => {
+                        self.orbit.pitch = (self.orbit.pitch + 0.1).min(1.45)
+                    }
+                    PhysicalKey::Code(KeyCode::ArrowDown) => {
+                        self.orbit.pitch = (self.orbit.pitch - 0.1).max(-1.45)
+                    }
+                    _ => {}
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                if let Err(error) = self.advance_flight() {
+                    self.error = Some(error);
+                    event_loop.exit();
+                    return;
+                }
+                if let Some(gpu) = &mut self.gpu {
+                    if self.visible {
+                        if let Err(error) = gpu.draw(&self.orbit) {
+                            self.error = Some(error);
+                            event_loop.exit();
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        // Event-driven rendering: no busy redraw loop while the view is idle.
+        if let Some(window) = &self.window {
+            if !matches!(event, WindowEvent::RedrawRequested) {
+                window.request_redraw();
+            }
+        }
+    }
+}
+
+fn run() -> Result<(), String> {
+    let mut args = std::env::args_os().skip(1);
+    let path = PathBuf::from(
+        args.next()
+            .ok_or("Usage: openfsx-viewer <model.mdl> [options]\nFlight: openfsx-viewer <aircraft folder> --fly [--variant N] [--windows-1252]\nOptions: --lod N --texture-dir folder --no-textures --snapshot output.ppm --seconds N")?,
+    );
+    if path == Path::new("--help") || path == Path::new("-h") {
+        println!("openfsx-viewer <model.mdl> [--lod N] [--texture-dir folder | --no-textures]\nopenfsx-viewer <aircraft folder> --fly [--ground] [--variant N] [--windows-1252] [--lod N]\nWindows menu: openfsx-viewer <FSX installation> --menu\nAnimation inspector: --animation N [--frame N] (use inspect-model for IDs; [ / ] scrub)\nOrbit camera: --view front|rear --zoom N (0.1..10)\nOptional: --debug-hud (experimental telemetry); --snapshot output.ppm [--seconds N, flight only, 0..300]\nFlight keys: Down/Up pull/push; Left/Right bank; Q/E rudder; PageUp/PageDown throttle; F1 idle; F4 full power; B parking brake; Space wheel brakes; Home/End trim; P pause; R reset; Esc close.");
+        return Ok(());
+    }
+    let (mut lod, mut snapshot) = (None, None);
+    let (mut texture_dir, mut no_textures) = (None, false);
+    let (mut fly, mut variant, mut windows_1252, mut seconds) = (false, 0u32, false, 0f64);
+    let mut ground = false;
+    let mut menu = false;
+    let mut debug_hud = false;
+    let mut animation = None;
+    let mut frame = None;
+    let mut rear_view = false;
+    let mut zoom: f32 = 1.;
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("--view") => {
+                rear_view = match args
+                    .next()
+                    .and_then(|s| s.to_str().map(str::to_owned))
+                    .as_deref()
+                {
+                    Some("front") => false,
+                    Some("rear") => true,
+                    _ => return Err("--view expects front or rear".into()),
+                }
+            }
+            Some("--zoom") => {
+                zoom = args
+                    .next()
+                    .and_then(|s| s.to_str().and_then(|s| s.parse().ok()))
+                    .ok_or("Expected zoom factor")?;
+                if !zoom.is_finite() || !(0.1..=10.).contains(&zoom) {
+                    return Err("Zoom must be finite and within 0.1..10".into());
+                }
+            }
+            Some("--lod") => {
+                lod = Some(
+                    args.next()
+                        .and_then(|s| s.to_str().and_then(|s| s.parse().ok()))
+                        .ok_or("Expected an integer LOD")?,
+                )
+            }
+            Some("--snapshot") => {
+                snapshot = Some(PathBuf::from(args.next().ok_or("Expected snapshot path")?))
+            }
+            Some("--texture-dir") => {
+                texture_dir = Some(PathBuf::from(args.next().ok_or("Expected texture folder")?))
+            }
+            Some("--no-textures") => no_textures = true,
+            Some("--fly") => fly = true,
+            Some("--ground") => ground = true,
+            Some("--menu") => menu = true,
+            Some("--debug-hud") => debug_hud = true,
+            Some("--animation") => {
+                animation = Some(
+                    args.next()
+                        .and_then(|s| s.to_str().and_then(|s| s.parse::<usize>().ok()))
+                        .ok_or("Expected animation index")?,
+                )
+            }
+            Some("--frame") => {
+                frame = Some(
+                    args.next()
+                        .and_then(|s| s.to_str().and_then(|s| s.parse::<f32>().ok()))
+                        .ok_or("Expected animation frame")?,
+                )
+            }
+            Some("--windows-1252") => windows_1252 = true,
+            Some("--variant") => {
+                variant = args
+                    .next()
+                    .and_then(|s| s.to_str().and_then(|s| s.parse().ok()))
+                    .ok_or("Expected a numeric aircraft variant")?
+            }
+            Some("--seconds") => {
+                seconds = args
+                    .next()
+                    .and_then(|s| s.to_str().and_then(|s| s.parse().ok()))
+                    .ok_or("Expected snapshot flight duration")?
+            }
+            _ => return Err("Unknown viewer argument".into()),
+        }
+    }
+    if !seconds.is_finite()
+        || !(0. ..=300.).contains(&seconds)
+        || (seconds > 0. && (!fly || snapshot.is_none()))
+    {
+        return Err("--seconds requires --fly and --snapshot, between 0 and 300 seconds".into());
+    }
+    if menu {
+        if fly
+            || ground
+            || snapshot.is_some()
+            || debug_hud
+            || lod.is_some()
+            || variant != 0
+            || no_textures
+            || texture_dir.is_some()
+            || animation.is_some()
+            || frame.is_some()
+            || rear_view
+            || zoom != 1.
+        {
+            return Err("--menu takes an FSX installation path and cannot be combined with renderer options".into());
+        }
+        #[cfg(target_os = "windows")]
+        {
+            return fsx_ui::run(&path);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            return Err("The FSX menu host currently requires Windows".into());
+        }
+    }
+    let aircraft = if fly {
+        Some(Aircraft::load(&path, variant, windows_1252)?)
+    } else {
+        None
+    };
+    if ground && !fly {
+        return Err("--ground requires --fly".into());
+    }
+    let model_path = aircraft
+        .as_ref()
+        .map(|a| a.model.as_path())
+        .unwrap_or(&path);
+    let model = Model::load(model_path)?;
+    if frame.is_some() && animation.is_none() {
+        return Err("--frame requires --animation".into());
+    }
+    if animation.is_some() && fly {
+        return Err("Manual animation inspection cannot be combined with --fly".into());
+    }
+    if fly && (rear_view || zoom != 1.) {
+        return Err("--view and --zoom are orbit-viewer options".into());
+    }
+    let frame = frame.unwrap_or(0.);
+    let geometry = if let Some(index) = animation {
+        let clip = model
+            .animations
+            .get(index)
+            .ok_or("Animation index outside model catalog; use inspect-model to list animations")?;
+        if !frame.is_finite() || frame < 0. || frame > clip.length {
+            return Err("Animation frame must be finite and within clip length".into());
+        }
+        let mut frames = vec![None; model.animations.len()];
+        frames[index] = Some(frame);
+        model.posed_geometry(lod, &frames)?
+    } else {
+        model.geometry(lod)?
+    };
+    if no_textures && texture_dir.is_some() {
+        return Err("Use either --texture-dir or --no-textures".into());
+    }
+    let default_texture = model_path
+        .parent()
+        .and_then(Path::parent)
+        .map(|path| path.join("texture"));
+    let appearance = Appearance::load(
+        &model,
+        &geometry,
+        if no_textures {
+            None
+        } else {
+            texture_dir
+                .as_deref()
+                .or(aircraft.as_ref().map(|a| a.texture.as_path()))
+                .or(default_texture.as_deref())
+        },
+    )?;
+    println!(
+        "{} | LOD {} | {} triangles | {} animated scene nodes | {} skinned parts omitted",
+        model.name,
+        geometry.lod,
+        geometry.vertices.len() / 3,
+        model.animated_nodes,
+        geometry.skipped_skinned_parts
+    );
+    println!("Preview limitations: diffuse DDS only; approximate alpha blending; no skinning or visibility evaluation. Animation keys require explicit manual selection.");
+    if let Some(index) = animation {
+        println!(
+            "Manual animation {index}: frame {frame} / {} | use [ / ] to scrub by five frames",
+            model.animations[index].length
+        );
+    }
+    let mut orbit = Orbit::new(&model.geometry(lod)?);
+    if rear_view {
+        orbit.yaw += std::f32::consts::PI;
+    }
+    orbit.distance = (orbit.distance / zoom).clamp(orbit.radius * 1.1, orbit.radius * 30.);
+    let mut flight = aircraft
+        .map(|a| {
+            if ground {
+                FlightSession::on_ground(a.parameters)
+            } else {
+                FlightSession::new(a.parameters)
+            }
+        })
+        .transpose()?;
+    if let Some(flight) = &mut flight {
+        if ground {
+            println!("Experimental runway start: fixed tricycle gear, parking brake on. B releases brake; F4 full power; F1 idle; Space wheel brakes.");
+        } else {
+            println!("Initial airborne prototype: 90 kt, 300 m; no FSX flight-model parity.");
+        }
+        println!("Controls: Down/Up pull/push | Left/Right bank | Q/E rudder | PageUp/PageDown throttle | Home/End trim | P pause | R reset | Esc close");
+        for _ in 0..(seconds / fsx_sim::flight::STEP).round() as usize {
+            flight.advance(fsx_sim::flight::STEP)?;
+        }
+        println!("{}", flight.title()?);
+        flight_view(flight, &mut orbit);
+    }
+    if let Some(path) = snapshot {
+        let mut gpu = block_on(Gpu::new(
+            None,
+            &geometry,
+            &appearance,
+            flight.is_some(),
+            960,
+            720,
+        ))?;
+        if let Some(flight) = &flight {
+            gpu.model_matrix = flight.model_matrix();
+            gpu.hud = if debug_hud {
+                Some(fsx_render::hud::Readout::new(
+                    flight.simulation.telemetry()?,
+                    flight.simulation.controls,
+                    flight.paused,
+                )?)
+            } else {
+                None
+            };
+        }
+        return gpu.snapshot(&orbit, &path);
+    }
+    let mut app = App {
+        model,
+        animation,
+        frame,
+        geometry,
+        appearance,
+        orbit,
+        window: None,
+        gpu: None,
+        dragging: false,
+        cursor: None,
+        error: None,
+        flight,
+        last_frame: Instant::now(),
+        last_title: Instant::now() - Duration::from_secs(1),
+        visible: true,
+        debug_hud,
+    };
+    EventLoop::new()
+        .map_err(|e| e.to_string())?
+        .run_app(&mut app)
+        .map_err(|e| e.to_string())?;
+    app.error.map_or(Ok(()), Err)
+}
+fn main() -> std::process::ExitCode {
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}

@@ -11,7 +11,7 @@ a complete aircraft system model and validated landing behavior are absent.
 From the repository root, with your own FSX installation under FSX:
 
 ```powershell
-cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --variant 0 --windows-1252 --lod 150
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --variant 0 --windows-1252 --lod 150
 ```
 
 In flight mode the positional path is an aircraft folder, not an MDL file. The selected fltsim.N entry resolves the AIR file, exterior model.cfg entry and texture folder. Variant 0 selects the Blue/Gold C172 in the verified installation. Encoding selection is explicit; omit --windows-1252 for UTF-8 CFG files.
@@ -21,7 +21,7 @@ The flight starts airborne at 90 knots true airspeed and 300 metres above a loca
 Add --ground for a runway start:
 
 ```powershell
-cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --ground --windows-1252 --lod 150
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --ground --windows-1252 --lod 150
 ```
 
 This settles the suspension with power off, positions the aircraft near the
@@ -86,7 +86,7 @@ per rendered frame; the window title updates four times per second.
 cargo run -- inspect-aircraft "./FSX/SimObjects/Airplanes/C172" --windows-1252
 cargo run -- flight-check "./FSX/SimObjects/Airplanes/C172" --windows-1252
 cargo run -- takeoff-check "./FSX/SimObjects/Airplanes/C172" --windows-1252
-cargo test --features viewer --locked
+cargo test --workspace --all-features --locked
 ```
 
 flight-check loads variant 0, reports converted parameters, then runs fixed-control trim, initial control-sign, full-power response and power-off pull scenarios. Its acceptance gates check internal numerical consistency and signs. They are not validation against recorded FSX trajectories.
@@ -94,7 +94,7 @@ flight-check loads variant 0, reports converted parameters, then runs fixed-cont
 An offscreen flight frame uses the same geometry and GPU pipeline as the window:
 
 ```powershell
-cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --debug-hud --windows-1252 --lod 150 --seconds 10 --snapshot target/c172-flight.ppm
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --debug-hud --windows-1252 --lod 150 --seconds 10 --snapshot target/c172-flight.ppm
 ```
 
 The snapshot advances the trimmed state at 120 Hz before rendering. Duration is limited to 300 seconds and requires --fly and --snapshot. Keep working captures under ignored target. Selected PNG engine screenshots are published in the website gallery at the project owner's request; source game resources are never published. Convert captures losslessly with `node scripts/ppm-to-png.mjs target/c172-flight.ppm target/c172-flight.png`.

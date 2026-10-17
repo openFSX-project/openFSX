@@ -2,25 +2,73 @@
 
 openFSX is an independent runtime for a user's installed FSX content. Original executable code and game resources are not distributed. The openOMSI approach is an inspiration; its implementation is not copied.
 
-## Current code
+## Workspace layout
 
-| Component | Responsibility | State |
+The repository follows the subsystem-workspace layout of
+[openOMSI](https://github.com/openOMSI-org/openOMSI): engine packages under
+`crates/`, developer tools under `tools/`, launcher frontend under `launcher/`,
+shared runtime resources under `assets/`, and documentation/site/build scripts
+at the root. The implementation and FSX-specific boundaries are independent.
+There are no placeholder crates for unimplemented scenery, gauges or APIs.
+
+| Package | Responsibility | Internal dependencies |
 | --- | --- | --- |
-| CLI | Installation checks and aircraft titles | Partial |
-| MDLX reader | Chunk bounds, geometry, LODs, static scene transforms | Partial |
-| Math | Column-major transforms and orbit camera | Implemented for the viewer |
-| DDS / texture lookup | Top mip decoding and texture.cfg fallback search | Partial |
-| Native viewer | winit window and wgpu diffuse textured geometry | Experimental |
-| Flight simulation | Legacy AIR/CFG subset, 6DOF RK4 and keyboard-controlled airborne mode | Experimental; C172 consistency checks only |
-| World | Earth coordinates, terrain, BGL and streaming | Not implemented |
-| Gauges | XML expressions, simulation variables and instruments | Not implemented |
-| Add-on bridge | SimConnect and research into DLL/GAU compatibility | Not implemented |
+| fsx-cfg | CFG parsing and explicit code-page decoding | None |
+| fsx-geometry | Matrices, camera math and double-precision rigid orientation | None |
+| fsx-model | MDLX geometry, materials, scene graph and authored animation keys | fsx-geometry |
+| fsx-texture | DDS top-mip decoding and texture.cfg fallback lookup | None |
+| fsx-vehicle | Aircraft CFG/AIR data, static loading and contact definitions | fsx-cfg, fsx-geometry |
+| fsx-sim | 6DOF integration, aerodynamics and wheel contact forces | fsx-vehicle, fsx-geometry |
+| fsx-render | wgpu resources, materials, draw passes, debugging overlay and readback | model, texture, geometry, vehicle, sim |
+| fsx-ui | Windows WebView2 menu host and bounded installation asset access | fsx-cfg |
+| fsx-app | Native event loop, keyboard flight adapter and view orchestration | content, sim, render, UI |
+| tools/fsx-check | Headless openfsx CLI and repeatable local content/flight checks | cfg, model, vehicle, sim |
 
-Keep useful modules together until their interfaces stabilize. Do not create empty crates for future subsystems.
+The root Cargo.toml is a virtual workspace with shared versions/dependencies.
+Its default member is fsx-check, preserving `cargo run -- inspect ...`.
+Build the native application with an explicit package:
+
+```powershell
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- --help
+cargo test --workspace --all-features --locked
+node scripts/check-architecture.mjs
+```
+
+`launcher/index.html` is embedded by fsx-ui. Owned WGSL shaders under
+`assets/shaders/` are embedded by fsx-render. The local `FSX/` installation
+remains ignored and outside all workspace packages and public site roots.
+The Windows helper `scripts/build-windows.cmd` builds both release binaries
+under `target/release/`; it does not package game content.
+
+## Dependency boundaries
+
+File readers and vehicle definitions do not depend on the simulator, windowing
+or GPU. Vehicle contact configuration computes static spring parameters; the
+runtime force law is a local extension trait in fsx-sim. Aerodynamic methods
+likewise extend immutable vehicle parameters inside fsx-sim. Shared rigid
+orientation lives in fsx-geometry, avoiding a vehicle/simulation cycle.
+
+The renderer consumes decoded content and readout data. It owns no application
+event loop or pilot input. fsx-app connects the selected aircraft, fixed-step
+session, renderer and menu. fsx-sim has no renderer or UI dependency.
+
+`scripts/architecture.json` declares allowed internal dependency directions;
+`node scripts/check-architecture.mjs` checks Cargo metadata and source roots.
+CI runs the guard along with workspace tests and the native build. Adding a
+subsystem requires an explicit layer rule. Original synthetic aircraft fixtures
+are exposed only by fsx-vehicle's test-support feature for cross-crate tests.
+
+## Current coverage
+
+The crates reflect implemented boundaries, not completed FSX subsystems.
+Content decoding, rendering, manual key inspection and flight remain partial.
+Earth coordinates, airport/BGL terrain streaming, XML gauges, SimVars,
+SimConnect and native add-on bridges are still unimplemented. Compatibility
+claims must follow the evidence in the [compatibility record](COMPATIBILITY.md).
 
 ## Rendering boundary
 
-The MDLX reader produces validated world-space triangles for one LOD. It applies the static TRAN/AMAP/SCEN hierarchy. Animated nodes remain in their stored bind pose. Skinning and visibility expressions are not evaluated. Omitted skinned parts are counted; complete visual compatibility must not be claimed.
+The MDLX reader produces validated world-space triangles for one LOD. It applies the static TRAN/AMAP/SCEN hierarchy. Animated nodes stay in bind pose by default; explicit manual clip/frame inspection evaluates authored rotation and translation keys. Skinning and visibility expressions are not evaluated. Omitted skinned parts are counted; complete visual compatibility must not be claimed.
 
 The renderer uses a depth buffer, diffuse DDS maps, material RGB fallback and face lighting. Opaque parts write depth first; ordinary source-alpha/inverse-source-alpha parts are drawn back to front by part center without depth writes. Alpha tests are evaluated separately from blending. This is approximate transparency, not parity with FSX material rendering. Normal/specular maps, reflection, effects and live aircraft state remain future work. Offscreen snapshots use the same pipeline as the window.
 

@@ -1,0 +1,12 @@
+[package]
+name = "fsx-vehicle"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+fsx-cfg.workspace = true
+fsx-geometry.workspace = true
+
+[features]
+test-support = []

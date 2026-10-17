@@ -178,8 +178,9 @@ pub struct Aerodynamics {
     pub side_roll_rate: f64,
     pub side_yaw_rate: f64,
 }
-#[cfg(test)]
-pub(crate) fn own_air() -> Vec<u8> {
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn own_air() -> Vec<u8> {
     let curve = |points: &[(f64, f64)]| {
         let mut b = (points.len() as u32).to_le_bytes().to_vec();
         for (x, y) in points {

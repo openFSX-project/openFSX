@@ -28,7 +28,7 @@ The reader checks parent bounds, record sizes, references, local triangle indice
 
 DirectX row-vector matrices are interpreted as transposed column-vector matrices with the same scalar storage. Child transforms compose with parents. Face normals are recomputed after transforming triangles, avoiding incorrect normal transforms under nonuniform scale.
 
-Animated nodes use static matrices, not evaluated keys. Skinned parts are omitted and counted. Triangle fans/strips, unreachable scene nodes and unsupported format generations are rejected explicitly.
+Animated nodes use static matrices by default; explicit manual clip selection evaluates rotation/translation keys. Skinned parts are omitted and counted. Triangle fans/strips, unreachable scene nodes and unsupported format generations are rejected explicitly.
 
 ## DDS and texture lookup
 
@@ -40,7 +40,7 @@ texture.cfg is read only for fltsim fallback entries, in numeric order. Relative
 
 ## Next work
 
-Tested bind-pose skinning, visibility/animation evaluation, material parity and generated registration textures. Back each interpretation with synthetic fixtures and local observations; do not silently reinterpret unknown layouts.
+Tested bind-pose skinning, simulation-driven animation and visibility evaluation, material parity and generated registration textures. Back each interpretation with synthetic fixtures and local observations; do not silently reinterpret unknown layouts.
 
 ## AIR subset
 
@@ -49,3 +49,30 @@ Legacy AIR files are sequences of a little-endian u32 identifier and u32 payload
 Curve payloads contain a u32 point count followed by pairs of f64 angle/value entries. Angles must be finite and strictly increasing. The current reader uses linear interpolation and clamps outside the endpoint domain. It loads lift versus body AoA from 0x0404 and pitch moment versus AoA from 0x0473, plus selected signed integer and double coefficients from the 250-byte 0x1101 layout. Integer aerodynamic derivatives use the documented 1/2048 scale. Modern override records are rejected until their precedence is implemented.
 
 The independent reader was checked against field definitions distributed with AirEd and the local C172 data. Reference: [aircraft dynamics resources](https://www.aero.sors.fr/fsairfile.html). Source definitions and game data are not included. The [flight guide](FLIGHT.md) documents coordinate signs, units, approximations and numerical evidence; decoding these records does not establish complete FSX flight-model behavior.
+
+## MDLX animation-key subset
+
+ANIB in the observed C172 contains an inner packed RIFF with XANH and XANL,
+followed by zero padding. XANL holds XANI groups: GUID bytes, float length,
+a 16-byte type field and a terminated parameter string, then packed children.
+XAPS contains terminated variable/units/scale/bias/optional-lag fields; XAPC
+code is not executed. XANS begins with channel type, transform ID and float
+track length. Observed channels 0 and 2 contain XANK keys with a one-byte kind,
+float frame and respectively XYZW quaternion (kind 4) or XYZ translation
+(kind 3). SGAL is one signed 16-bit transform ID per scene node, with -1 for
+no linkage. Multiple groups can reference the same transform ID.
+
+The reader validates parent lengths, zero padding, terminated strings, finite
+values, increasing key times within track length, nonzero quaternions,
+duplicate channels and SGAL references. Limits apply to clips, tracks and
+keys. Other channel layouts fail explicitly. Keys clamp at their endpoints;
+interior translation is linear and rotation uses normalized shortest-arc slerp.
+The pose API composes selected clip deltas in file order after static local
+matrices, then traverses parents before children. Arbitrary multi-clip
+composition has not been compared with FSX.
+
+The binary interpretation was checked against local bytes and original
+synthetic fixtures. The [Prepar3D modeling SDK](https://www.prepar3d.com/SDKv3/LearningCenter/modeling/using_modeling_tools.html)
+explains variable scaling/bias and lag semantics; reading those fields does
+not establish an implemented SimVar or gauge system. See the
+[viewer guide](VIEWER.md) for supported inspection and its evidence.

@@ -14,9 +14,9 @@ test content. The renderer is the same pipeline used by the window.
 From the repository root, with your own installation:
 
 ```powershell
-cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1" --snapshot target/c172-viewer.ppm
-cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --debug-hud --windows-1252 --lod 150 --seconds 10 --snapshot target/c172-flight.ppm
-cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --ground --debug-hud --windows-1252 --lod 150 --snapshot target/c172-ground.ppm
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1" --snapshot target/c172-viewer.ppm
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --debug-hud --windows-1252 --lod 150 --seconds 10 --snapshot target/c172-flight.ppm
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --ground --debug-hud --windows-1252 --lod 150 --snapshot target/c172-ground.ppm
 node scripts/ppm-to-png.mjs target/c172-viewer.ppm target/c172-viewer.png
 node scripts/ppm-to-png.mjs target/c172-flight.ppm target/c172-flight.png
 node scripts/ppm-to-png.mjs target/c172-ground.ppm target/c172-ground.png
@@ -42,3 +42,23 @@ checked. Other menu sections are incomplete; pixel parity is not verified.
 The installed artwork retains its respective owners' rights. No raw bitmap or
 thumbnail asset is redistributed; the selected window screenshot is published
 at the project owner's request.
+
+## Authored elevator key inspection
+
+`c172-elevator-0.png` and `c172-elevator-100.png` are direct 960 x 720 GPU
+readbacks from the manual animation inspector, taken on 17 October 2026.
+They use stock C172 animation group 7, LOD 150, the same bind-bounds rear camera
+and zoom 1.6. Only the selected clip/frame differs; other clips stay in bind
+pose. The two images differ within pixel bounds (258, 377) to (440, 452),
+with 4,000 changed RGB pixels in the tail region. This checks local key
+application, not calibrated flight response or full FSX animation parity.
+
+```powershell
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1" --animation 7 --frame 0 --view rear --zoom 1.6 --snapshot target/c172-elevator-0.ppm
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1" --animation 7 --frame 100 --view rear --zoom 1.6 --snapshot target/c172-elevator-100.ppm
+node scripts/ppm-to-png.mjs target/c172-elevator-0.ppm target/c172-elevator-0.png
+node scripts/ppm-to-png.mjs target/c172-elevator-100.ppm target/c172-elevator-100.png
+```
+
+The aircraft artwork rights and publication scope above also apply to these
+selected captures. No original model or animation data file is included.

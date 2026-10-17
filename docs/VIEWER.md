@@ -9,7 +9,7 @@ The same executable also has an experimental --fly mode with an aircraft-folder 
 Use stable Rust, the Windows MSVC toolchain and a GPU with current Vulkan or DirectX 12 drivers. wgpu chooses an available backend:
 
 ```powershell
-cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1"
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1"
 ```
 
 For orbit inspection pass an explicit MDL path from your own installation. Flight mode resolves exterior model and texture paths through the selected aircraft.cfg/model.cfg variant.
@@ -45,21 +45,21 @@ The inspector prints each LOD's parts, triangle count, skipped skinned parts and
 ## Offscreen validation
 
 ```powershell
-cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1" --snapshot target/c172.ppm
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1" --snapshot target/c172.ppm
 ```
 
 The same depth-tested pipeline renders without a window and writes a binary PPM. Keep working snapshots under ignored `target/`. Selected PNG engine screenshots are published in the website gallery at the project owner's request; original game resource files remain excluded. Use `node scripts/ppm-to-png.mjs target/c172.ppm target/c172.png` for lossless conversion.
 
 ## Known limits
 
-Diffuse textures and flat face lighting only, with approximate ordinary alpha blending and MDLX alpha tests. Transparent parts are sorted by their centers; intersecting transparent triangles are not sorted individually. Other blend modes, accurate FSX material lighting, specular/bump/reflection maps and texture mip chains are absent. No visibility expressions, animation playback, skinning, attachments or effects. Bind pose can expose normally hidden alternatives, including multiple propeller states. Startup diagnostics report these limits.
+Diffuse textures and flat face lighting only, with approximate ordinary alpha blending and MDLX alpha tests. Transparent parts are sorted by their centers; intersecting transparent triangles are not sorted individually. Other blend modes, accurate FSX material lighting, specular/bump/reflection maps and texture mip chains are absent. No visibility expressions, automatic animation drivers, skinning, attachments or effects. Manual native-key inspection is described below. Bind pose can expose normally hidden alternatives, including multiple propeller states. Startup diagnostics report these limits.
 
 Windows x64 is the initial target. The first offscreen C172 render was verified on an NVIDIA RTX 2080 through Vulkan. Building on another platform or backend does not establish rendering support there.
 
 ## FSX-style menu on Windows
 
 ```powershell
-cargo run --features viewer --bin openfsx-viewer -- "./FSX" --menu
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX" --menu
 ```
 
 The menu host requires the Microsoft Edge WebView2 Runtime. It reads the local
@@ -83,3 +83,42 @@ launching flight directly to enable the independent debugging overlay.
 The host serves only its own HTML/catalog, an exact bitmap allowlist and indexed
 thumbnail paths canonicalized inside the installation. It does not serve the
 FSX directory as a general web root or expose filesystem paths in the catalog.
+
+## Inspect authored animation keys
+
+List the model's animation catalog first:
+
+```powershell
+cargo run -- inspect-model "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl"
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1" --animation 7 --frame 50 --view rear --zoom 1.6
+```
+
+For the verified stock C172, animation 7 is the elevator group. Indexes are
+file-local, not a universal aircraft API. **[** and **]** scrub five authored
+keyframes at a time. The title displays the selected clip and frame. Rotation
+uses normalized XYZW quaternions and shortest-arc spherical interpolation;
+translation is linear. Native key deltas compose after the static local node
+matrix, then inherit parent transforms. Draw topology, texture coordinates and
+material selection stay fixed while positions, face normals and draw centers
+update. No original animation implementation is executed.
+
+`--view front|rear` and `--zoom N` set a reproducible initial orbit camera.
+These options and `--animation` are for model inspection, not flight mode.
+The camera initially uses bind-pose bounds so two frame captures have identical
+framing. R resets the orbit around the current pose. Add `--snapshot path.ppm`
+to capture a chosen pose without opening a window.
+
+This is manual key inspection, not simulation-driven animation. Direct Sim
+bindings are decoded and listed, including variable, units, scale, bias and
+optional lag. Their units, signs and response still need FSX reference tests
+before connection to the flight state. Code expressions, visibility conditions,
+standard autoplay timing/randomization, animation lag and skin deformation are
+not evaluated. Other clips remain in bind pose; mutually exclusive propeller
+and wheel alternatives can still be visible together. A clip with no geometry
+tracks is reported as such and has no visual effect.
+
+Local C172 evidence: 28 groups decode, 27 with rotation/translation tracks.
+Elevator frames 0 and 100 rendered through the same Vulkan path with identical
+camera framing; differences were confined to the tail region. Native **]**
+input advanced frame 50 to 55 and presented the updated geometry. This proves
+the inspected path, not FSX animation parity for all aircraft or channels.

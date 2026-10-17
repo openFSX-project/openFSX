@@ -101,3 +101,6 @@ mod tests {
         );
     }
 }
+
+mod rigid;
+pub use rigid::Quaternion;

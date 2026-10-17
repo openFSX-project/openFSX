@@ -1,10 +1,11 @@
 //! Initial six-degree-of-freedom airborne dynamics, not FSX flight-model parity.
 //! SI units; right-handed body forward/right/down and world north/east/down.
-use crate::aircraft::Parameters;
+use crate::ground::GroundForces;
+use fsx_vehicle::aircraft::Parameters;
 type Result<T> = std::result::Result<T, String>;
 type Vec3 = [f64; 3];
 pub const STEP: f64 = 1. / 120.;
-pub const GRAVITY: f64 = 9.80665;
+pub use fsx_vehicle::GRAVITY;
 pub const PROPELLER_EFFICIENCY: f64 = 0.8;
 fn add(a: Vec3, b: Vec3) -> Vec3 {
     std::array::from_fn(|i| a[i] + b[i])
@@ -34,50 +35,7 @@ fn unit(v: Vec3) -> Vec3 {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Quaternion(pub [f64; 4]);
-impl Quaternion {
-    pub const IDENTITY: Self = Self([1., 0., 0., 0.]);
-    pub fn pitch(angle: f64) -> Self {
-        Self([(angle * 0.5).cos(), 0., (angle * 0.5).sin(), 0.])
-    }
-    pub fn normalized(self) -> Result<Self> {
-        let n = self.0.iter().map(|x| x * x).sum::<f64>().sqrt();
-        if !n.is_finite() || n < 1e-12 {
-            return Err("Invalid orientation quaternion".into());
-        }
-        Ok(Self(self.0.map(|x| x / n)))
-    }
-    pub fn product(self, b: Self) -> Self {
-        let [w, x, y, z] = self.0;
-        let [v, a, c, d] = b.0;
-        Self([
-            w * v - x * a - y * c - z * d,
-            w * a + x * v + y * d - z * c,
-            w * c - x * d + y * v + z * a,
-            w * d + x * c - y * a + z * v,
-        ])
-    }
-    pub fn inverse(self) -> Self {
-        let [w, x, y, z] = self.0;
-        Self([w, -x, -y, -z])
-    }
-    pub fn rotate(self, v: Vec3) -> Vec3 {
-        let [_, x, y, z] = self.0;
-        let imaginary = [x, y, z];
-        let twice = scale(cross(imaginary, v), 2.);
-        add(v, add(scale(twice, self.0[0]), cross(imaginary, twice)))
-    }
-    /// Roll right, pitch up and heading right, radians.
-    pub fn euler(self) -> Vec3 {
-        let [w, x, y, z] = self.0;
-        [
-            (2. * (w * x + y * z)).atan2(1. - 2. * (x * x + y * y)),
-            (2. * (w * y - z * x)).clamp(-1., 1.).asin(),
-            (2. * (w * z + x * y)).atan2(1. - 2. * (y * y + z * z)),
-        ]
-    }
-}
+pub use fsx_geometry::Quaternion;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Controls {
     /// Positive pull, bank right, yaw right; normalized controls and trim in -1..1.
@@ -177,8 +135,13 @@ fn propeller_thrust(power: f64, forward: f64, rho: f64, area: f64) -> f64 {
     }
     (low + high) * 0.5
 }
-impl Parameters {
-    pub fn predicted_stall(&self, altitude: f64) -> Result<f64> {
+pub trait AircraftDynamics {
+    fn predicted_stall(&self, altitude: f64) -> Result<f64>;
+    fn lift_drag(&self, alpha: f64, pitch_control: f64, qhat: f64) -> Result<(f64, f64)>;
+    fn derivative(&self, s: State, c: Controls) -> Result<State>;
+}
+impl AircraftDynamics for Parameters {
+    fn predicted_stall(&self, altitude: f64) -> Result<f64> {
         let (_, peak) = self.aero.lift.peak()?;
         let cl = peak * self.lift_scalar + self.aero.cl_stabilizer * self.tail_incidence;
         if cl <= 0. {

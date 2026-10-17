@@ -1,6 +1,6 @@
 //! Independently implemented, bounds-checked subset of the FSX MDLX container.
-//! No animation evaluation, visibility expressions, or skin deformation yet.
-use crate::math::{self, Mat4, IDENTITY};
+//! Native rotation/translation key inspection; no visibility VM or skin deformation.
+use fsx_geometry::{self as math, Mat4, IDENTITY};
 use std::{collections::BTreeMap, fs, path::Path};
 
 type Result<T> = std::result::Result<T, String>;
@@ -17,6 +17,15 @@ pub struct Model {
     matrices: Vec<Mat4>,
     pub animated_nodes: usize,
     pub materials: Vec<Material>,
+    pub animations: Vec<animation::Clip>,
+    scene: Vec<SceneNode>,
+    traversal: Vec<usize>,
+}
+#[derive(Debug, Clone)]
+struct SceneNode {
+    parent: Option<usize>,
+    local: Mat4,
+    animation: i16,
 }
 #[derive(Clone, Debug)]
 pub struct Material {
@@ -224,11 +233,37 @@ impl Model {
         if nodes.is_empty() || nodes.len() > 4096 {
             return Err("Unsupported scene node count".into());
         }
+        let animations = match data.iter().find(|(tag, _)| tag == b"ANIB") {
+            Some(_) => animation::parse(single(&data, b"ANIB")?)?,
+            None => Vec::new(),
+        };
+        let links = match data.iter().find(|(tag, _)| tag == b"SGAL") {
+            Some(_) => records(single(&data, b"SGAL")?, 2)?
+                .map(|r| i16::from_le_bytes(r.try_into().unwrap()))
+                .collect(),
+            None => vec![-1; nodes.len()],
+        };
+        if links.len() != nodes.len()
+            || links.iter().any(|&id| {
+                id < -1 || (id >= 0 && !animations.iter().any(|a| a.contains(id as u32)))
+            })
+        {
+            return Err("Invalid SGAL animation linkage".into());
+        }
+        let mut scene = vec![
+            SceneNode {
+                parent: None,
+                local: IDENTITY,
+                animation: -1
+            };
+            nodes.len()
+        ];
+        let mut traversal = Vec::with_capacity(nodes.len());
         let mut matrices = vec![IDENTITY; nodes.len()];
         let mut seen = vec![false; nodes.len()];
-        let mut pending = vec![(0usize, IDENTITY)];
+        let mut pending = vec![(0usize, IDENTITY, None)];
         let mut animated_nodes = 0;
-        while let Some((index, parent)) = pending.pop() {
+        while let Some((index, parent, parent_index)) = pending.pop() {
             let &[child, peer, offset] = nodes
                 .get(index)
                 .ok_or("Scene node reference out of range")?;
@@ -252,12 +287,21 @@ impl Model {
                     .get(transform)
                     .ok_or("TRAN reference out of range")?,
             );
-            for (next, matrix) in [(peer, parent), (child, matrices[index])] {
+            scene[index] = SceneNode {
+                parent: parent_index,
+                local: transforms[transform],
+                animation: links[index],
+            };
+            traversal.push(index);
+            for (next, matrix, ancestor) in [
+                (peer, parent, parent_index),
+                (child, matrices[index], Some(index)),
+            ] {
                 if next < -1 {
                     return Err("Invalid negative scene reference".into());
                 }
                 if next >= 0 {
-                    pending.push((next as usize, matrix));
+                    pending.push((next as usize, matrix, ancestor));
                 }
             }
         }
@@ -301,6 +345,9 @@ impl Model {
             matrices,
             animated_nodes,
             materials,
+            animations,
+            scene,
+            traversal,
         };
         model.validate_parts()?;
         Ok(model)
@@ -345,6 +392,44 @@ impl Model {
     }
 
     pub fn geometry(&self, requested: Option<u32>) -> Result<Geometry> {
+        self.geometry_with_matrices(requested, &self.matrices)
+    }
+
+    /// None leaves a clip in bind pose; Some(frame) evaluates its native keys.
+    /// Clip deltas compose in file order after the node's static local matrix.
+    pub fn posed_geometry(
+        &self,
+        requested: Option<u32>,
+        frames: &[Option<f32>],
+    ) -> Result<Geometry> {
+        if frames.len() != self.animations.len() || frames.iter().flatten().any(|x| !x.is_finite())
+        {
+            return Err("Pose must contain one finite optional frame per animation".into());
+        }
+        let mut matrices = vec![IDENTITY; self.scene.len()];
+        for &index in &self.traversal {
+            let node = &self.scene[index];
+            let mut local = node.local;
+            if node.animation >= 0 {
+                for (clip, frame) in self.animations.iter().zip(frames) {
+                    if let Some(frame) = frame {
+                        if let Some(delta) = clip.transform(node.animation as u32, *frame)? {
+                            local = math::multiply(local, delta);
+                        }
+                    }
+                }
+            }
+            matrices[index] =
+                math::multiply(node.parent.map(|p| matrices[p]).unwrap_or(IDENTITY), local);
+        }
+        self.geometry_with_matrices(requested, &matrices)
+    }
+
+    fn geometry_with_matrices(
+        &self,
+        requested: Option<u32>,
+        matrices: &[Mat4],
+    ) -> Result<Geometry> {
         let lod = requested.unwrap_or(*self.lods.keys().next_back().ok_or("No LODs")?);
         let parts = self
             .lods
@@ -371,7 +456,7 @@ impl Model {
                 skipped_skinned_parts += 1;
                 continue;
             }
-            let matrix = self.matrices[part.scene];
+            let matrix = matrices[part.scene];
             let start = vertices.len() as u32;
             let mut part_min = [f32::INFINITY; 3];
             let mut part_max = [f32::NEG_INFINITY; 3];
@@ -429,6 +514,63 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn posed_hierarchy_preserves_parent_translation_and_topology() {
+        let mut model = Model::parse(&model_bytes(2)).unwrap();
+        model.animations = animation::parse(&animation::tests::fixture()).unwrap();
+        assert_eq!(
+            model.geometry(None).unwrap().vertices,
+            model.posed_geometry(None, &[None]).unwrap().vertices
+        );
+        model.scene[0].animation = 0;
+        model.scene[0].local[12] = 3.;
+        let geometry = model.posed_geometry(None, &[Some(5.)]).unwrap();
+        assert!((geometry.vertices[0][0] - 8.).abs() < 1e-5);
+        assert_eq!(geometry.vertices.len(), 3);
+        assert_eq!(geometry.batches[0].range, 0..3);
+        model.scene.push(SceneNode {
+            parent: Some(0),
+            local: IDENTITY,
+            animation: -1,
+        });
+        model.traversal.push(1);
+        model.lods.get_mut(&100).unwrap()[0].scene = 1;
+        let child = model.posed_geometry(None, &[Some(5.)]).unwrap();
+        assert_eq!(geometry.vertices, child.vertices);
+        assert!(model.posed_geometry(None, &[]).is_err());
+        assert!(model.posed_geometry(None, &[Some(f32::NAN)]).is_err());
+    }
+    #[test]
+    fn animation_linkage_is_checked_against_decoded_tracks() {
+        let bytes = model_bytes(2);
+        let root = chunks(&bytes[12..]).unwrap();
+        let data = single(&root, b"MDLD").unwrap();
+        let build = |link: i16| {
+            chunk(
+                b"RIFF",
+                &[
+                    b"MDLX".as_slice(),
+                    &chunk(
+                        b"MDLD",
+                        &[
+                            data,
+                            &chunk(b"ANIB", &animation::tests::fixture()),
+                            &chunk(b"SGAL", &link.to_le_bytes()),
+                        ]
+                        .concat(),
+                    ),
+                ]
+                .concat(),
+            )
+        };
+        let model = Model::parse(&build(0)).unwrap();
+        assert_eq!(model.animations.len(), 1);
+        assert!(
+            (model.posed_geometry(None, &[Some(5.)]).unwrap().vertices[0][0] - 5.).abs() < 1e-5
+        );
+        assert!(Model::parse(&build(99)).unwrap_err().contains("SGAL"));
+        assert!(Model::parse(&build(-2)).unwrap_err().contains("SGAL"));
+    }
     fn chunk(id: &[u8; 4], data: &[u8]) -> Vec<u8> {
         [id.as_slice(), &(data.len() as u32).to_le_bytes(), data].concat()
     }
@@ -533,3 +675,5 @@ mod tests {
             .contains("texture reference"));
     }
 }
+
+pub mod animation;

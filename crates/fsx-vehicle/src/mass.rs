@@ -1,8 +1,6 @@
 //! Static aircraft loading and a body-axis inertia tensor, in SI units.
-use crate::{
-    aircraft::{FOOT, POUND, SLUG_FOOT_SQUARED},
-    cfg::Config,
-};
+use crate::aircraft::{FOOT, POUND, SLUG_FOOT_SQUARED};
+use fsx_cfg::Config;
 type Vec3 = [f64; 3];
 type Matrix = [[f64; 3]; 3];
 

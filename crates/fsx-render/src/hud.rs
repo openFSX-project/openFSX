@@ -1,8 +1,6 @@
 //! Original vector/pixel flight overlay, independent of FSX gauges and fonts.
-use crate::{
-    aircraft::{FOOT, KNOT},
-    flight::{Controls, Telemetry},
-};
+use fsx_sim::flight::{Controls, Telemetry};
+use fsx_vehicle::aircraft::{FOOT, KNOT};
 
 pub type Vertex = [f32; 6]; // clip x/y, linear RGBA
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
