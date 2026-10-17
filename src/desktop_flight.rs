@@ -5,12 +5,34 @@ use crate::{
     math::Mat4,
 };
 use std::collections::HashSet;
-use winit::keyboard::KeyCode;
+use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
+
+/// Honor navigation semantics for both dedicated keys and NumLock-off numpad
+/// events. Keep the existing physical bindings for letter controls.
+pub fn flight_key(physical: PhysicalKey, logical: &Key) -> Option<KeyCode> {
+    Some(match logical {
+        Key::Named(NamedKey::ArrowUp) => KeyCode::ArrowUp,
+        Key::Named(NamedKey::ArrowDown) => KeyCode::ArrowDown,
+        Key::Named(NamedKey::ArrowLeft) => KeyCode::ArrowLeft,
+        Key::Named(NamedKey::ArrowRight) => KeyCode::ArrowRight,
+        Key::Named(NamedKey::PageUp) => KeyCode::PageUp,
+        Key::Named(NamedKey::PageDown) => KeyCode::PageDown,
+        Key::Named(NamedKey::Home) => KeyCode::Home,
+        Key::Named(NamedKey::End) => KeyCode::End,
+        _ => match physical {
+            PhysicalKey::Code(code) => code,
+            PhysicalKey::Unidentified(_) => return None,
+        },
+    })
+}
 
 pub struct FlightSession {
     pub simulation: Simulation,
     pub paused: bool,
     keys: HashSet<KeyCode>,
+    // A complete tap can arrive between two fixed steps. Sample it once rather
+    // than dropping the press when its release precedes the next redraw.
+    pending_presses: HashSet<KeyCode>,
     accumulator: f64,
     initial: Parameters,
 }
@@ -20,6 +42,7 @@ impl FlightSession {
             simulation: Simulation::trimmed(parameters.clone(), 90. * KNOT, 300.)?,
             paused: false,
             keys: HashSet::new(),
+            pending_presses: HashSet::new(),
             accumulator: 0.,
             initial: parameters,
         })
@@ -30,13 +53,16 @@ impl FlightSession {
     }
     pub fn key(&mut self, key: KeyCode, pressed: bool) {
         if pressed {
-            self.keys.insert(key);
+            if self.keys.insert(key) {
+                self.pending_presses.insert(key);
+            }
         } else {
             self.keys.remove(&key);
         }
     }
     pub fn clear_keys(&mut self) {
         self.keys.clear();
+        self.pending_presses.clear();
         self.accumulator = 0.;
     }
     pub fn advance(&mut self, elapsed: f64) -> Result<(), String> {
@@ -50,7 +76,8 @@ impl FlightSession {
         self.accumulator += elapsed.min(0.25);
         while self.accumulator + 1e-12 >= STEP {
             let axis = |positive, negative| {
-                f64::from(self.keys.contains(&positive)) - f64::from(self.keys.contains(&negative))
+                let active = |key| self.keys.contains(&key) || self.pending_presses.contains(&key);
+                f64::from(active(positive)) - f64::from(active(negative))
             };
             let mut c = self.simulation.controls;
             c.pitch = axis(KeyCode::ArrowDown, KeyCode::ArrowUp) * 0.5;
@@ -60,6 +87,7 @@ impl FlightSession {
                 (c.throttle + axis(KeyCode::PageUp, KeyCode::PageDown) * STEP * 0.25).clamp(0., 1.);
             c.trim = (c.trim + axis(KeyCode::Home, KeyCode::End) * STEP * 0.15).clamp(-1., 1.);
             self.simulation.step(c, STEP)?;
+            self.pending_presses.clear();
             self.accumulator = (self.accumulator - STEP).max(0.);
             if self.simulation.ground_contact {
                 self.accumulator = 0.;
@@ -108,6 +136,48 @@ impl FlightSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn navigation_uses_logical_key_with_numlock_off() {
+        assert_eq!(
+            flight_key(
+                PhysicalKey::Code(KeyCode::Numpad6),
+                &Key::Named(NamedKey::ArrowRight)
+            ),
+            Some(KeyCode::ArrowRight)
+        );
+        assert_eq!(
+            flight_key(
+                PhysicalKey::Code(KeyCode::Numpad6),
+                &Key::Character("6".into())
+            ),
+            Some(KeyCode::Numpad6)
+        );
+        assert_eq!(
+            flight_key(
+                PhysicalKey::Code(KeyCode::KeyQ),
+                &Key::Character("a".into())
+            ),
+            Some(KeyCode::KeyQ)
+        );
+    }
+    #[test]
+    fn tap_between_physics_steps_is_not_lost() {
+        let mut flight = FlightSession::new(crate::aircraft::own_parameters()).unwrap();
+        flight.key(KeyCode::ArrowRight, true);
+        flight.key(KeyCode::ArrowRight, false);
+        flight.advance(STEP * 0.4).unwrap();
+        assert_eq!(flight.simulation.time, 0.);
+        flight.advance(STEP * 0.6).unwrap();
+        assert_eq!(flight.simulation.controls.roll, 0.5);
+        assert!(flight.simulation.state.rates[0] > 0.);
+        flight.advance(STEP).unwrap();
+        assert_eq!(flight.simulation.controls.roll, 0.);
+        flight.key(KeyCode::ArrowLeft, true);
+        flight.key(KeyCode::ArrowLeft, false);
+        flight.clear_keys();
+        flight.advance(STEP).unwrap();
+        assert_eq!(flight.simulation.controls.roll, 0.);
+    }
     #[test]
     fn keyboard_press_release_pause_and_frame_partition() {
         let mut a = FlightSession::new(crate::aircraft::own_parameters()).unwrap();

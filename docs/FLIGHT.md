@@ -32,6 +32,11 @@ The flight starts airborne at 90 knots true airspeed and 300 metres above a loca
 
 Releasing a directional key centers that control. Throttle and trim remain at their last positions. Opposing keys cancel each other. Keyboard deflections use half the configured control range. Losing window focus or minimizing pauses the flight and clears held controls; press P to resume.
 
+A tap completed between physics steps is sampled for one 1/120-second step,
+then released. Dedicated navigation keys and NumLock-off numpad navigation
+events share the same controls. Number input with NumLock on is not treated
+as a directional command. Letter bindings use physical key positions.
+
 The window title reports airspeed, altitude, vertical speed, pitch, bank and throttle. The camera follows the aircraft. The runway and grid are original test geometry, not FSX scenery. First ground contact stops the simulation until reset: there is no landing-gear suspension, taxiing, bounce or damage model yet.
 
 ## Reproducible checks
@@ -81,7 +86,19 @@ On 17 October 2026, with the local C172 at configured maximum gross mass of 1,15
 
 The full-power values describe a transient scenario, not a steady-state climb specification. The post-peak flag establishes curve entry, not validated stall, spin or recovery behavior.
 
-The NVIDIA RTX 2080 / Vulkan path produced an offscreen flight frame and presented a frame in the native window. Automated tests exercise keyboard mapping, key release, pause/reset and frame partitioning. End-to-end physical keyboard injection was not verified: the desktop automation helper could not initialize. Other aircraft, graphics backends and platforms remain unverified.
+The NVIDIA RTX 2080 / Vulkan path produced an offscreen flight frame and presented a frame in the native window. Automated tests exercise keyboard mapping, short taps, key release, pause/reset and frame partitioning.
+
+End-to-end window input was checked on 17 October 2026 using Windows Computer
+Use keyboard injection. A Right tap changed displayed bank from +0.0 to +0.1
+degrees. A subsequent Down tap was followed by pitch +2.7 degrees and climb
++15 ft/min, compared with the initial +2.6 degrees and zero climb. These values
+are observations after short impulses, not controlled performance benchmarks.
+P displayed PAUSED; R restored 90.0 kt, 984 ft, zero bank and initial trim;
+Esc closed the process successfully. The injected arrow had physical code
+Numpad6 and logical ArrowRight, which exposed and verified the navigation-key
+mapping fix. This check establishes delivered window input and a resulting
+simulation response. Sustained physical keyboard holds, controller hardware,
+other aircraft, graphics backends and platforms remain unverified.
 
 ## Remaining work
 

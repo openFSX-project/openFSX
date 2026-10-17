@@ -830,7 +830,10 @@ impl ApplicationHandler for App {
         event: WindowEvent,
     ) {
         if let WindowEvent::KeyboardInput { event, .. } = &event {
-            if let (Some(flight), PhysicalKey::Code(key)) = (&mut self.flight, event.physical_key) {
+            if let (Some(flight), Some(key)) = (
+                &mut self.flight,
+                openfsx::desktop_flight::flight_key(event.physical_key, &event.logical_key),
+            ) {
                 let pressed = event.state == ElementState::Pressed;
                 flight.key(key, pressed);
                 if pressed && !event.repeat {
