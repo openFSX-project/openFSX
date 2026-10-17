@@ -29,32 +29,52 @@ pub fn flight_key(physical: PhysicalKey, logical: &Key) -> Option<KeyCode> {
 pub struct FlightSession {
     pub simulation: Simulation,
     pub paused: bool,
+    pub parking_brake: bool,
     keys: HashSet<KeyCode>,
     // A complete tap can arrive between two fixed steps. Sample it once rather
     // than dropping the press when its release precedes the next redraw.
     pending_presses: HashSet<KeyCode>,
     accumulator: f64,
     initial: Parameters,
+    initial_ground: bool,
 }
 impl FlightSession {
     pub fn new(parameters: Parameters) -> Result<Self, String> {
+        Self::with_start(parameters, false)
+    }
+    pub fn on_ground(parameters: Parameters) -> Result<Self, String> {
+        Self::with_start(parameters, true)
+    }
+    fn with_start(parameters: Parameters, ground: bool) -> Result<Self, String> {
         Ok(Self {
-            simulation: Simulation::trimmed(parameters.clone(), 90. * KNOT, 300.)?,
+            simulation: if ground {
+                Simulation::on_ground(parameters.clone())?
+            } else {
+                Simulation::trimmed(parameters.clone(), 90. * KNOT, 300.)?
+            },
             paused: false,
+            parking_brake: ground,
             keys: HashSet::new(),
             pending_presses: HashSet::new(),
             accumulator: 0.,
             initial: parameters,
+            initial_ground: ground,
         })
     }
     pub fn reset(&mut self) -> Result<(), String> {
-        *self = Self::new(self.initial.clone())?;
+        *self = Self::with_start(self.initial.clone(), self.initial_ground)?;
         Ok(())
     }
     pub fn key(&mut self, key: KeyCode, pressed: bool) {
         if pressed {
             if self.keys.insert(key) {
                 self.pending_presses.insert(key);
+                match key {
+                    KeyCode::F1 => self.simulation.controls.throttle = 0.,
+                    KeyCode::F4 => self.simulation.controls.throttle = 1.,
+                    KeyCode::KeyB => self.parking_brake = !self.parking_brake,
+                    _ => {}
+                }
             }
         } else {
             self.keys.remove(&key);
@@ -69,7 +89,7 @@ impl FlightSession {
         if !elapsed.is_finite() || elapsed < 0. {
             return Err("Invalid frame time".into());
         }
-        if self.paused || self.simulation.ground_contact {
+        if self.paused {
             self.accumulator = 0.;
             return Ok(());
         }
@@ -83,16 +103,20 @@ impl FlightSession {
             c.pitch = axis(KeyCode::ArrowDown, KeyCode::ArrowUp) * 0.5;
             c.roll = axis(KeyCode::ArrowRight, KeyCode::ArrowLeft) * 0.5;
             c.yaw = axis(KeyCode::KeyE, KeyCode::KeyQ) * 0.5;
+            c.brake = if self.parking_brake
+                || self.keys.contains(&KeyCode::Space)
+                || self.pending_presses.contains(&KeyCode::Space)
+            {
+                1.
+            } else {
+                0.
+            };
             c.throttle =
                 (c.throttle + axis(KeyCode::PageUp, KeyCode::PageDown) * STEP * 0.25).clamp(0., 1.);
             c.trim = (c.trim + axis(KeyCode::Home, KeyCode::End) * STEP * 0.15).clamp(-1., 1.);
             self.simulation.step(c, STEP)?;
             self.pending_presses.clear();
             self.accumulator = (self.accumulator - STEP).max(0.);
-            if self.simulation.ground_contact {
-                self.accumulator = 0.;
-                break;
-            }
         }
         Ok(())
     }
@@ -121,10 +145,14 @@ impl FlightSession {
     }
     pub fn title(&self) -> Result<String, String> {
         let t = self.simulation.telemetry()?;
-        let status = if t.ground_contact {
-            "GROUND CONTACT — R reset"
-        } else if self.paused {
+        let status = if self.paused {
             "PAUSED — P resume"
+        } else if t.ground_contact {
+            if self.parking_brake {
+                "GROUND — PARKING BRAKE"
+            } else {
+                "GROUND"
+            }
         } else if t.stalled {
             "POST-PEAK LIFT"
         } else {
@@ -136,6 +164,30 @@ impl FlightSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn runway_reset_parking_brake_and_power_keys() {
+        let mut session = FlightSession::on_ground(crate::aircraft::own_parameters()).unwrap();
+        assert!(session.parking_brake && session.simulation.ground_contact);
+        session.key(KeyCode::F4, true);
+        session.key(KeyCode::F4, false);
+        assert_eq!(session.simulation.controls.throttle, 1.);
+        session.key(KeyCode::KeyB, true);
+        session.key(KeyCode::KeyB, true);
+        session.key(KeyCode::KeyB, false);
+        assert!(!session.parking_brake);
+        session.advance(STEP).unwrap();
+        assert_eq!(session.simulation.controls.brake, 0.);
+        session.key(KeyCode::Space, true);
+        session.advance(STEP).unwrap();
+        assert_eq!(session.simulation.controls.brake, 1.);
+        session.key(KeyCode::Space, false);
+        session.key(KeyCode::F1, true);
+        session.key(KeyCode::F1, false);
+        assert_eq!(session.simulation.controls.throttle, 0.);
+        session.reset().unwrap();
+        assert!(session.parking_brake && session.simulation.ground_contact);
+        assert_eq!(session.simulation.time, 0.);
+    }
     #[test]
     fn navigation_uses_logical_key_with_numlock_off() {
         assert_eq!(

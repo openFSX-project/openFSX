@@ -5,7 +5,7 @@ using a user-installed stock C172 Blue/Gold livery at LOD 150. No FSX process
 was started. The GPU was an NVIDIA RTX 2080 using the Vulkan backend. The
 flight image uses the CFG station weights and full usable Avgas loading.
 
-Both captures are direct 960 × 720 GPU readbacks, converted losslessly from
+All three captures are direct 960 × 720 GPU readbacks, converted losslessly from
 PPM to PNG. There is no FSX scenery, AI image generation or post-production
 compositing. The flight panel is drawn by openFSX from live simulation state
 inside the GPU renderer. Flight ground/runway geometry is original openFSX
@@ -16,8 +16,10 @@ From the repository root, with your own installation:
 ```powershell
 cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1" --snapshot target/c172-viewer.ppm
 cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --windows-1252 --lod 150 --seconds 10 --snapshot target/c172-flight.ppm
+cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --ground --windows-1252 --lod 150 --snapshot target/c172-ground.ppm
 node scripts/ppm-to-png.mjs target/c172-viewer.ppm target/c172-viewer.png
 node scripts/ppm-to-png.mjs target/c172-flight.ppm target/c172-flight.png
+node scripts/ppm-to-png.mjs target/c172-ground.ppm target/c172-ground.png
 ```
 
 Publish selected screenshots only. Keep intermediate captures in ignored

@@ -7,7 +7,7 @@
 
 An independent, experimental runtime for content from Microsoft Flight Simulator X, inspired by the approach of [openOMSI](https://github.com/openOMSI-org/openOMSI).
 
-**Research prototype with an initial airborne test mode.** Current work includes content inspectors, a textured MDLX viewer and keyboard-controlled flight using a limited CFG/AIR dynamics subset. It is not a complete FSX replacement: ground handling, scenery loading, gauges and add-on APIs remain unimplemented.
+**Research prototype with airborne and runway starts.** Current work includes content inspectors, a textured MDLX viewer and keyboard-controlled flight using a limited CFG/AIR dynamics subset. Three fixed-wheel contacts support test-plane ground roll and departure. It is not a complete FSX replacement: reference-flight comparison, broader ground/landing behavior, scenery loading, gauges and add-on APIs remain ahead.
 
 [Repository](https://github.com/openFSX-project/openFSX) · [Website](https://openfsx-project.github.io/openFSX/)
 
@@ -33,6 +33,9 @@ cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/
 
 # Start an airborne C172 test with keyboard controls.
 cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --variant 0 --windows-1252 --lod 150
+
+# Start on the original test runway, with parking brake applied.
+cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --ground --windows-1252 --lod 150
 ```
 
 Drag to orbit, scroll to zoom, use arrow keys to rotate, press **R** to reset and **Esc** to close. The viewer displays bind-pose geometry with diffuse DDS textures and approximate alpha blending. DXT1/3/5 and masked 32-bit RGB DDS top mips are decoded; texture.cfg fallback directories are searched. Missing textures fall back to diffuse color and are reported. Visibility evaluation, animation playback and skin deformation remain absent. See [the viewer guide](docs/VIEWER.md).
@@ -40,6 +43,10 @@ Drag to orbit, scroll to zoom, use arrow keys to rotate, press **R** to reset an
 The CFG inspector reads `title` values from `[fltsim.N]` under `SimObjects/Airplanes`. `--windows-1252` explicitly selects that code page for every file; omit it for ASCII/UTF-8 installations. Encodings are not guessed. The presence of `fsx.exe` checks directory structure, not license ownership. Neither tool launches FSX or modifies its installation.
 
 Flight mode starts at 90 kt and 300 m with solved initial trim. Use **Down/Up** to pull/push, **Left/Right** to bank, **Q/E** for rudder, **Page Up/Down** for throttle, **Home/End** for trim, **P** to pause and **R** to reset. An on-screen panel reports true airspeed, height, vertical speed, local heading, throttle, trim, attitude and status. The ground is original test geometry. Read the [flight guide](docs/FLIGHT.md) for the actual data subset, approximation choices, controls and observed results. Flight behavior has not been validated against recorded FSX trajectories.
+
+With --ground, **B** toggles the parking brake, **F4/F1** select full/idle power,
+and **Space** holds wheel brakes. The same simulation continues through wheel
+contact and liftoff. Run `cargo run -- takeoff-check "./FSX/SimObjects/Airplanes/C172" --windows-1252` for the documented parking, braking and departure checks.
 
 ## Website and GitHub Pages
 

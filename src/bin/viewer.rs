@@ -872,12 +872,7 @@ impl ApplicationHandler for App {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.visible
-            && self
-                .flight
-                .as_ref()
-                .is_some_and(|f| !f.paused && !f.simulation.ground_contact)
-        {
+        if self.visible && self.flight.as_ref().is_some_and(|f| !f.paused) {
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 Instant::now() + Duration::from_millis(16),
             ));
@@ -1036,12 +1031,13 @@ fn run() -> Result<(), String> {
             .ok_or("Usage: openfsx-viewer <model.mdl> [options]\nFlight: openfsx-viewer <aircraft folder> --fly [--variant N] [--windows-1252]\nOptions: --lod N --texture-dir folder --no-textures --snapshot output.ppm --seconds N")?,
     );
     if path == Path::new("--help") || path == Path::new("-h") {
-        println!("openfsx-viewer <model.mdl> [--lod N] [--texture-dir folder | --no-textures]\nopenfsx-viewer <aircraft folder> --fly [--variant N] [--windows-1252] [--lod N]\nOptional: --snapshot output.ppm [--seconds N, flight only, 0..300]\nFlight keys: Down/Up pull/push; Left/Right bank; Q/E rudder; PageUp/PageDown throttle; Home/End trim; P pause; R reset; Esc close.");
+        println!("openfsx-viewer <model.mdl> [--lod N] [--texture-dir folder | --no-textures]\nopenfsx-viewer <aircraft folder> --fly [--ground] [--variant N] [--windows-1252] [--lod N]\nOptional: --snapshot output.ppm [--seconds N, flight only, 0..300]\nFlight keys: Down/Up pull/push; Left/Right bank; Q/E rudder; PageUp/PageDown throttle; F1 idle; F4 full power; B parking brake; Space wheel brakes; Home/End trim; P pause; R reset; Esc close.");
         return Ok(());
     }
     let (mut lod, mut snapshot) = (None, None);
     let (mut texture_dir, mut no_textures) = (None, false);
     let (mut fly, mut variant, mut windows_1252, mut seconds) = (false, 0u32, false, 0f64);
+    let mut ground = false;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--lod") => {
@@ -1059,6 +1055,7 @@ fn run() -> Result<(), String> {
             }
             Some("--no-textures") => no_textures = true,
             Some("--fly") => fly = true,
+            Some("--ground") => ground = true,
             Some("--windows-1252") => windows_1252 = true,
             Some("--variant") => {
                 variant = args
@@ -1086,6 +1083,9 @@ fn run() -> Result<(), String> {
     } else {
         None
     };
+    if ground && !fly {
+        return Err("--ground requires --fly".into());
+    }
     let model_path = aircraft
         .as_ref()
         .map(|a| a.model.as_path())
@@ -1122,10 +1122,20 @@ fn run() -> Result<(), String> {
     println!("Preview limitations: diffuse DDS only; approximate alpha blending; no skinning, animation or visibility evaluation.");
     let mut orbit = Orbit::new(&geometry);
     let mut flight = aircraft
-        .map(|a| FlightSession::new(a.parameters))
+        .map(|a| {
+            if ground {
+                FlightSession::on_ground(a.parameters)
+            } else {
+                FlightSession::new(a.parameters)
+            }
+        })
         .transpose()?;
     if let Some(flight) = &mut flight {
-        println!("Initial airborne prototype: 90 kt, 300 m; no takeoff/landing or FSX flight-model parity.");
+        if ground {
+            println!("Experimental runway start: fixed tricycle gear, parking brake on. B releases brake; F4 full power; F1 idle; Space wheel brakes.");
+        } else {
+            println!("Initial airborne prototype: 90 kt, 300 m; no FSX flight-model parity.");
+        }
         println!("Controls: Down/Up pull/push | Left/Right bank | Q/E rudder | PageUp/PageDown throttle | Home/End trim | P pause | R reset | Esc close");
         for _ in 0..(seconds / openfsx::flight::STEP).round() as usize {
             flight.advance(openfsx::flight::STEP)?;

@@ -10,7 +10,7 @@ const files = new Map([
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/docs.js', ['docs.js', 'text/javascript; charset=utf-8']],
   ['/favicon.svg', ['favicon.svg', 'image/svg+xml']],
-  ...['c172-viewer.png', 'c172-flight.png'].map(name => [`/assets/screenshots/${name}`, [`assets/screenshots/${name}`, 'image/png']]),
+  ...['c172-viewer.png', 'c172-flight.png', 'c172-ground.png'].map(name => [`/assets/screenshots/${name}`, [`assets/screenshots/${name}`, 'image/png']]),
   ...['openfsx-light.svg', 'openfsx-dark.svg', 'openfsx-mono.svg', 'openfsx-icon.svg'].map(name => [`/assets/brand/${name}`, [`assets/brand/${name}`, 'image/svg+xml']]),
   ...['openfsx-avatar.png', 'openfsx-preview.png'].map(name => [`/assets/brand/${name}`, [`assets/brand/${name}`, 'image/png']]),
 ]);

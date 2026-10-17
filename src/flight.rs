@@ -86,12 +86,20 @@ pub struct Controls {
     pub yaw: f64,
     pub trim: f64,
     pub throttle: f64,
+    pub brake: f64,
 }
 impl Controls {
     fn validated(self) -> Result<Self> {
-        if [self.pitch, self.roll, self.yaw, self.trim, self.throttle]
-            .iter()
-            .any(|x| !x.is_finite())
+        if [
+            self.pitch,
+            self.roll,
+            self.yaw,
+            self.trim,
+            self.throttle,
+            self.brake,
+        ]
+        .iter()
+        .any(|x| !x.is_finite())
         {
             return Err("Non-finite pilot control".into());
         }
@@ -101,6 +109,7 @@ impl Controls {
             yaw: self.yaw.clamp(-1., 1.),
             trim: self.trim.clamp(-1., 1.),
             throttle: self.throttle.clamp(0., 1.),
+            brake: self.brake.clamp(0., 1.),
         })
     }
 }
@@ -253,15 +262,21 @@ impl Parameters {
         let thrust = propeller_thrust(power, velocity[0].max(0.), rho, self.prop_area);
         let aero_force = add(add(lift, drag), side);
         let thrust_force = [thrust, 0., 0.];
-        let force = add(aero_force, thrust_force);
+        let (ground_force, ground_moment, _) =
+            self.gear
+                .forces(State { orientation, ..s }, self.loading.cg, c);
+        let force = add(add(aero_force, thrust_force), ground_force);
         // Initial model: AIR moments are referenced to the empty CG. Translate
         // that wrench to the loaded CG; thrust acts at the configured engine.
         let offset = |point: Vec3| std::array::from_fn(|i| point[i] - self.loading.cg[i]);
         let moments = add(
-            moments,
+            ground_moment,
             add(
-                cross(offset(self.loading.empty_cg), aero_force),
-                cross(offset(self.engine_position), thrust_force),
+                moments,
+                add(
+                    cross(offset(self.loading.empty_cg), aero_force),
+                    cross(offset(self.engine_position), thrust_force),
+                ),
             ),
         );
         let acceleration = add(
@@ -296,6 +311,29 @@ pub struct Simulation {
     pub ground_contact: bool,
 }
 impl Simulation {
+    pub fn on_ground(parameters: Parameters) -> Result<Self> {
+        let mut s = Self::trimmed(parameters, 65. * crate::aircraft::KNOT, 300.)?;
+        let p = &s.parameters;
+        let height = p.ground_height - (p.loading.cg[2] - p.loading.empty_cg[2]);
+        s.state = State {
+            position: [-400., 0., -height],
+            velocity: [0.; 3],
+            orientation: Quaternion::pitch(p.gear.static_pitch),
+            rates: [0.; 3],
+        };
+        s.controls.throttle = 0.;
+        s.controls.brake = 1.;
+        // Settle the suspension with power off; this does not constrain motion
+        // once the user releases the brake or moves the controls.
+        for _ in 0..2400 {
+            s.step(s.controls, 1. / 480.)?;
+        }
+        if !s.ground_contact {
+            return Err("Runway start did not settle on the configured wheels".into());
+        }
+        s.time = 0.;
+        Ok(s)
+    }
     pub fn trimmed(parameters: Parameters, speed: f64, altitude: f64) -> Result<Self> {
         if !speed.is_finite()
             || speed <= 0.
@@ -395,7 +433,13 @@ impl Simulation {
             );
         }
         let controls = controls.validated()?;
-        if self.ground_contact {
+        // Contact dynamics need smaller steps than the airborne update. RK4
+        // still integrates the same state and forces, including during liftoff.
+        if dt > 1. / 480. && (-self.state.position[2] < 10. || self.ground_contact) {
+            let count = (dt / (1. / 480.)).ceil() as usize;
+            for _ in 0..count {
+                self.step(controls, dt / count as f64)?;
+            }
             return Ok(());
         }
         let s = self.state;
@@ -412,10 +456,15 @@ impl Simulation {
         if !next.finite() || length(next.velocity) > 500. || length(next.rates) > 50. {
             return Err("Flight state left the supported numeric envelope".into());
         }
-        self.ground_contact = next.position[2] >= -self.parameters.ground_height;
-        if self.ground_contact {
-            next.position[2] = -self.parameters.ground_height;
+        if next.position[2] >= 0. {
+            return Err("Aircraft CG penetrated test ground; reset required".into());
         }
+        self.ground_contact = self
+            .parameters
+            .gear
+            .forces(next, self.parameters.loading.cg, controls)
+            .2
+            > 0;
         self.state = next;
         self.controls = controls;
         self.time += dt;
@@ -558,18 +607,22 @@ mod tests {
         assert_eq!(s.time, 0.);
     }
     #[test]
-    fn ground_contact_halts_integration_without_bouncing() {
-        let mut s = Simulation::trimmed(own_parameters(), 50., 300.).unwrap();
-        s.state.position[2] = -1.001;
-        s.state.velocity[2] = 10.;
-        s.step(s.controls, STEP).unwrap();
+    fn ground_contact_supports_weight_without_freezing_time() {
+        let mut s = Simulation::on_ground(own_parameters()).unwrap();
         assert!(s.ground_contact);
-        assert_eq!(s.state.position[2], -1.);
-        let time = s.time;
         let position = s.state.position;
-        s.step(s.controls, STEP).unwrap();
-        assert_eq!(s.state.position, position);
-        assert_eq!(s.time, time);
+        for _ in 0..1200 {
+            s.step(s.controls, STEP).unwrap();
+        }
+        assert!(s.time > 9.9);
+        assert!((s.state.position[2] - position[2]).abs() < 0.01);
+        assert!(s.telemetry().unwrap().speed < 0.01);
+        s.controls.throttle = 1.;
+        s.controls.brake = 0.;
+        for _ in 0..120 {
+            s.step(s.controls, STEP).unwrap();
+        }
+        assert!(s.state.velocity[0] > 0.5);
     }
     #[test]
     fn controlled_motion_converges_with_smaller_rk4_steps() {

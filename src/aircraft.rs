@@ -2,6 +2,7 @@
 use crate::{
     air::{Aerodynamics, AirFile},
     cfg::{decode, Config},
+    ground::Gear,
     mass::{body_position, vector, Loading},
 };
 use std::{
@@ -37,6 +38,7 @@ pub struct Parameters {
     pub cruise_speed: f64,
     pub reference_stall: f64,
     pub ground_height: f64,
+    pub gear: Gear,
     pub engine_position: [f64; 3],
     pub aero: Aerodynamics,
 }
@@ -136,6 +138,7 @@ impl Parameters {
             Ok(n)
         };
         let loading = Loading::from_config(c)?;
+        let gear = Gear::from_config(c, &loading)?;
         let wing_area = required("airplane_geometry", "wing_area", FOOT * FOOT)?;
         let span = required("airplane_geometry", "wing_span", FOOT)?;
         let diameter = required("propeller", "propeller_diameter", FOOT)?;
@@ -147,6 +150,7 @@ impl Parameters {
         let engine_position = body_position(datum, vector(c, "GeneralEngineData", "Engine.0")?);
         let p = Self {
             loading,
+            gear,
             wing_area,
             span,
             chord: wing_area / span,
@@ -228,6 +232,39 @@ pub(crate) fn own_parameters() -> Parameters {
         cruise_speed: 55.,
         reference_stall: 27.,
         ground_height: 1.,
+        gear: crate::ground::Gear {
+            static_pitch: 0.,
+            omitted_contacts: 0,
+            wheels: vec![
+                crate::ground::Wheel {
+                    position: [2., 0., 1.1],
+                    compression: 0.1,
+                    travel: 0.3,
+                    stiffness: 32688.8333333333,
+                    damping: 3000.,
+                    steering: 0.4,
+                    braked: false,
+                },
+                crate::ground::Wheel {
+                    position: [-1., -1.5, 1.1],
+                    compression: 0.1,
+                    travel: 0.3,
+                    stiffness: 32688.8333333333,
+                    damping: 2000.,
+                    steering: 0.,
+                    braked: true,
+                },
+                crate::ground::Wheel {
+                    position: [-1., 1.5, 1.1],
+                    compression: 0.1,
+                    travel: 0.3,
+                    stiffness: 32688.8333333333,
+                    damping: 2000.,
+                    steering: 0.,
+                    braked: true,
+                },
+            ],
+        },
         engine_position: [0.; 3],
         aero: AirFile::parse(&crate::air::own_air())
             .unwrap()

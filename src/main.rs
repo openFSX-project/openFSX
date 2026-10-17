@@ -39,6 +39,101 @@ fn titles(text: &str) -> Vec<String> {
 
 use openfsx::cfg::decode;
 
+fn takeoff_report(folder: &Path, windows_1252: bool) -> Result<(), String> {
+    use openfsx::{
+        aircraft::{Aircraft, KNOT},
+        flight::{Simulation, STEP},
+    };
+    let aircraft = Aircraft::load(folder, 0, windows_1252)?;
+    let mut s = Simulation::on_ground(aircraft.parameters)?;
+    println!(
+        "{} | {} fixed wheels | {} non-wheel contacts omitted",
+        aircraft.title,
+        s.parameters.gear.wheels.len(),
+        s.parameters.gear.omitted_contacts
+    );
+    println!(
+        "Settled: height {:.4} m | pitch {:.3} deg | speed {:.6} m/s | trim {:.5}",
+        s.telemetry()?.altitude,
+        s.telemetry()?.attitude[1].to_degrees(),
+        s.telemetry()?.speed,
+        s.controls.trim
+    );
+    let start = s.state.position;
+    for _ in 0..2400 {
+        s.step(s.controls, STEP)?;
+    }
+    let t = s.telemetry()?;
+    println!(
+        "20 s power-off parking: speed {:.6} m/s | height {:.4} m | north drift {:.4} m",
+        t.speed,
+        t.altitude,
+        s.state.position[0] - start[0]
+    );
+    if t.speed > 0.2
+        || (s.state.position[0] - start[0]).abs() > 1.
+        || (s.state.position[2] - start[2]).abs() > 0.1
+    {
+        return Err("Ground parking consistency failed".into());
+    }
+    let mut controls = s.controls;
+    let mut braking = Simulation::on_ground(s.parameters.clone())?;
+    braking.state.velocity[0] = 10.;
+    let brake_start = braking.state.position[0];
+    for _ in 0..1200 {
+        braking.step(braking.controls, STEP)?;
+    }
+    println!(
+        "10 m/s braking: final speed {:.4} m/s | distance {:.2} m",
+        braking.telemetry()?.speed,
+        braking.state.position[0] - brake_start
+    );
+    if braking.telemetry()?.speed > 0.3 || braking.state.position[0] - brake_start > 30. {
+        return Err("Braking consistency failed".into());
+    }
+    controls.throttle = 1.;
+    controls.brake = 0.;
+    let start = s.state.position;
+    let time = s.time;
+    let mut rotation = None;
+    let mut liftoff = None;
+    for _ in 0..7200 {
+        if rotation.is_none() && s.telemetry()?.speed >= 55. * KNOT {
+            rotation = Some(s.time);
+            println!("Rotation input at {:.2} s", s.time - time);
+        }
+        controls.pitch = if rotation.is_some_and(|r| s.time - r < 2.) {
+            0.12
+        } else {
+            0.
+        };
+        s.step(controls, STEP)?;
+        if !s.ground_contact && liftoff.is_none() && s.telemetry()?.altitude > 3. {
+            liftoff = Some((
+                s.time - time,
+                s.state.position[0] - start[0],
+                s.telemetry()?.speed / KNOT,
+            ));
+        }
+        if s.telemetry()?.altitude > 30. && !s.ground_contact {
+            println!("First airborne clearance above 3 m: {liftoff:?} (seconds, north distance metres, knots)");
+            println!(
+                "Climb gate: {:.2} s | {:.2} kt | {:.2} m | {:.2} m/s",
+                s.time - time,
+                s.telemetry()?.speed / KNOT,
+                s.telemetry()?.altitude,
+                s.telemetry()?.climb
+            );
+            println!("PASS: ground roll and departure under explicit fixed pilot inputs. Not an FSX performance comparison.");
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "Takeoff did not reach 30 m in 60 s: {:?}",
+        s.telemetry()?
+    ))
+}
+
 fn aircraft_report(folder: &Path, windows_1252: bool, check_flight: bool) -> Result<(), String> {
     use openfsx::{
         aircraft::{Aircraft, KNOT},
@@ -193,8 +288,19 @@ fn inspect(root: &Path, windows_1252: bool) -> Result<(), String> {
 fn main() -> ExitCode {
     let args: Vec<_> = env::args_os().skip(1).collect();
     if (args.len() == 2 || (args.len() == 3 && args[2] == "--windows-1252"))
-        && (args[0] == "inspect-aircraft" || args[0] == "flight-check")
+        && (args[0] == "inspect-aircraft"
+            || args[0] == "flight-check"
+            || args[0] == "takeoff-check")
     {
+        if args[0] == "takeoff-check" {
+            return match takeoff_report(Path::new(&args[1]), args.len() == 3) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         return match aircraft_report(
             Path::new(&args[1]),
             args.len() == 3,
@@ -233,7 +339,7 @@ fn main() -> ExitCode {
     if !(args.len() == 2 || (args.len() == 3 && args[2] == "--windows-1252"))
         || args[0] != "inspect"
     {
-        eprintln!("Usage:\n  openfsx inspect <FSX folder> [--windows-1252]\n  openfsx inspect-model <model.mdl>\n  openfsx inspect-aircraft <aircraft folder> [--windows-1252]\n  openfsx flight-check <aircraft folder> [--windows-1252]\nFor the experimental model viewer, build openfsx-viewer with --features viewer.");
+        eprintln!("Usage:\n  openfsx inspect <FSX folder> [--windows-1252]\n  openfsx inspect-model <model.mdl>\n  openfsx inspect-aircraft <aircraft folder> [--windows-1252]\n  openfsx flight-check <aircraft folder> [--windows-1252]\n  openfsx takeoff-check <aircraft folder> [--windows-1252]\nFor the experimental model viewer, build openfsx-viewer with --features viewer.");
         return ExitCode::from(2);
     }
     match inspect(Path::new(&args[1]), args.len() == 3) {

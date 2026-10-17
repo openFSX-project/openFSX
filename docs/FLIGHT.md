@@ -1,8 +1,10 @@
-# Airborne flight prototype
+# Flight prototype
 
 openFSX now has an initial keyboard-controlled airborne mode for the local stock C172. It loads the aircraft's CFG and legacy AIR data, simulates six degrees of freedom, and renders the installed MDLX/DDS content independently of fsx.exe.
 
-This is an experimental flight-dynamics subset. It does not establish FSX behavior parity, a complete aircraft system model, takeoff or landing support.
+This is an experimental flight-dynamics subset with an optional fixed-wheel
+runway start. Ground roll and departure are demonstrated; FSX behavior parity,
+a complete aircraft system model and validated landing behavior are absent.
 
 ## Start a flight
 
@@ -16,6 +18,20 @@ In flight mode the positional path is an aircraft folder, not an MDL file. The s
 
 The flight starts airborne at 90 knots true airspeed and 300 metres above a local flat plane. Initial throttle and elevator trim are solved for level flight once. There is no autopilot keeping it level after pilot input.
 
+Add --ground for a runway start:
+
+```powershell
+cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --ground --windows-1252 --lod 150
+```
+
+This settles the suspension with power off, positions the aircraft near the
+south end of the original test runway, and applies the parking brake. B releases
+the brake; F4 selects full power and F1 idle. Rudder also steers the nosewheel.
+Use pitch input and trim to control departure; sustained full power with the
+initial trim can produce a large nose-up transient and loss of speed. Initial
+runway trim comes from a 65 kt / 300 m level-trim solve; it is not a C172 POH
+takeoff-trim specification. R resets to the selected ground or airborne start.
+
 ## Controls
 
 | Key | Action |
@@ -24,6 +40,9 @@ The flight starts airborne at 90 knots true airspeed and 300 metres above a loca
 | Left / Right | Bank left / right |
 | Q / E | Rudder left / right |
 | Page Up / Page Down | Increase / decrease throttle |
+| F1 / F4 | Idle / full throttle |
+| B | Toggle parking brake |
+| Space | Hold wheel brakes |
 | Home / End | Nose-up / nose-down elevator trim |
 | P | Pause / resume |
 | R | Reset the initial airborne state |
@@ -39,8 +58,10 @@ as a directional command. Letter bindings use physical key positions.
 
 The window title and an original on-screen overlay report live flight state.
 The camera follows the aircraft. The runway and grid are original test geometry,
-not FSX scenery. First ground contact stops the simulation until reset: there
-is no landing-gear suspension, taxiing, bounce or damage model yet.
+not FSX scenery. Wheel contact continues the rigid-body simulation, including
+compression, braking and liftoff. Scrape points, damage and validated landing
+handling are not implemented. CG penetration or an invalid numeric state
+terminates the run with a diagnostic.
 
 ## On-screen flight panel
 
@@ -49,8 +70,9 @@ is no landing-gear suspension, taxiing, bounce or damage model yet.
 - V/S is vertical speed in feet per minute, positive upwards.
 - HDG is heading in degrees clockwise from the local test world's north. No magnetic model or geographic navigation is implemented.
 - THR and TRIM are normalized throttle and elevator-trim commands in percent.
+- BRK reports the wheel-brake command in percent; it includes parking brake or held Space.
 - The attitude display uses body roll and pitch in degrees. Pitch marks are spaced by 10 degrees; right bank rotates the horizon counterclockwise, and pitch-up moves it below the fixed aircraft symbol.
-- AIRBORNE, PAUSED, POST-PEAK LIFT and GROUND status come from the simulation. The post-peak message is a curve-region diagnostic, not a validated stall warning system.
+- AIRBORNE, PAUSED, POST-PEAK LIFT and ON WHEELS status come from the simulation. The post-peak message is a curve-region diagnostic, not a validated stall warning system.
 
 The panel scales with the window and is rendered by the same GPU path in
 offscreen captures. Its original geometry and pixel letterforms require no
@@ -63,6 +85,7 @@ per rendered frame; the window title updates four times per second.
 ```powershell
 cargo run -- inspect-aircraft "./FSX/SimObjects/Airplanes/C172" --windows-1252
 cargo run -- flight-check "./FSX/SimObjects/Airplanes/C172" --windows-1252
+cargo run -- takeoff-check "./FSX/SimObjects/Airplanes/C172" --windows-1252
 cargo test --features viewer --locked
 ```
 
@@ -78,7 +101,7 @@ The snapshot advances the trimmed state at 120 Hz before rendering. Duration is 
 
 ## Model and units
 
-State uses metres, seconds, kilograms and radians. World axes are north/east/down; body axes are forward/right/down. Orientation is a normalized quaternion. A fourth-order Runge-Kutta integrator advances at 1/120 second. Desktop scheduling accumulates frame time and caps any one frame at 0.25 seconds; long stalls do not trigger unbounded catch-up.
+State uses metres, seconds, kilograms and radians. World axes are north/east/down; body axes are forward/right/down. Orientation is a normalized quaternion. A fourth-order Runge-Kutta integrator uses a 1/120-second outer step, with smaller contact steps near the ground. Desktop scheduling accumulates frame time and caps any one frame at 0.25 seconds; long stalls do not trigger unbounded catch-up.
 
 CFG supplies maximum gross mass, empty mass and inertias, loading stations,
 tank positions and capacities, wing geometry, engine position/power, control
@@ -101,7 +124,56 @@ referenced to the empty CG. The aerodynamic wrench is translated to the loaded
 CG; propeller thrust acts at Engine.0. Initial pitch trim uses those same moment
 equations. Laterally unbalanced loading/engine placement is rejected by the
 initial level-trim solver, which does not yet solve aileron/rudder trim.
-The nominal CFG ground-contact height remains a flat-ground approximation.
+CFG static height/pitch initialize ground settling; they do not constrain the
+aircraft once integration starts.
+
+## Fixed-wheel ground subset
+
+Only three fixed wheels are supported. Wheel positions, static compression,
+travel ratio, damping ratio, brake mapping and steering angle are read from
+contact_points. Non-wheel contacts are omitted and counted; retracting gear,
+invalid compression/damping and other wheel counts are rejected. Impact damage
+and wheel-extension airspeed fields are not implemented. Contact locations are treated as
+uncompressed tire contact points, without adding wheel radius again.
+
+Empty-weight support fractions balance vertical load and roll/pitch moments
+over the wheel triangle. Spring stiffness comes from that support load and
+configured static compression; damping uses the configured ratio. Normal force
+cannot pull a tire onto the plane. Travel beyond the configured stroke uses an
+explicit stiffer stop. Tire forces use regularized friction: 0.02 rolling,
+up to 0.8 braking/lateral, with a combined friction limit. These coefficients
+and the stop are openFSX choices, not decoded FSX surface/material behavior.
+No wheel angular dynamics, anti-skid, distributed tire patch, scrape response,
+ground effect, runway slope or weather model is implemented.
+
+The outer control update remains 120 Hz; within 10 m of the test plane, RK4
+subdivides integration to at most 1/480 second for contact stability. Runway
+initialization settles for five simulated seconds with idle power and brakes,
+then resets the public scenario clock. There is no hidden position constraint
+or controller during the subsequent run.
+
+takeoff-check verifies 20 seconds of power-off parking, braking from 10 m/s,
+and a departure sequence: full power, brake release, normalized pull 0.12 for
+two seconds when speed first reaches 55 kt, then neutral elevator. The gate
+requires height above 30 m within 60 seconds. The 55 kt trigger is a test input,
+not an established rotation-speed recommendation. On the local C172:
+
+| Check | Observed result |
+| --- | --- |
+| Settled ground start | CG height 1.2116 m; pitch 1.655 degrees |
+| 20 s idle parking | North drift -0.0003 m; speed below displayed precision |
+| Braking from 10 m/s | 14.45 m; final speed 0.0005 m/s after 10 s |
+| First airborne clearance above 3 m | 18.65 s; 480.91 m north travel; 82.07 kt |
+| Departure height gate | 30.07 m after 22.02 s; 75.74 kt; transient climb 11.97 m/s |
+
+Clearance above 3 m is not the instant of first wheel separation. These are
+internal scenario results, not validated C172 takeoff performance. The large
+transient climb and speed exchange require recorded reference comparison.
+In the native window, F4 and B changed the live power/brake readouts and the
+aircraft departed the runway; one observed frame showed about 81 kt and 32 ft
+with AIRBORNE status. P paused and R restored the braked runway start. A longer
+unchanged full-power run developed high pitch and loss of speed; sustained
+departure control and landing behavior remain unverified.
 
 AIR records 0x0404 and 0x0473 supply piecewise-linear lift and pitch-moment curves versus body angle of attack. Selected coefficients from the 250-byte 0x1101 record supply parasite/gear drag, control derivatives, damping, sideslip and cross-axis terms. Integer coefficients use their documented 1/2048 scale; double coefficients are not rescaled. Legacy pitch/yaw and control signs are converted to the right-handed body convention. Modern override records 0x1539 through 0x1547 are rejected rather than silently ignored.
 
@@ -147,7 +219,7 @@ graphics backends and platforms remain unverified.
 
 ## Remaining work
 
-Recorded reference flights and quantitative comparison, fuel consumption and configurable loading, engine/propeller tables, ground handling, control-surface animation, cockpit instruments, audio and controller hardware. MDLX skinning/visibility and generated registration decals remain viewer limitations. No BGL terrain, geographic navigation or add-on API compatibility is implied by this local flight test.
+Recorded reference flights and quantitative comparison, fuel consumption and configurable loading, engine/propeller tables, broader ground handling and landing validation, control-surface animation, cockpit instruments, audio and controller hardware. MDLX skinning/visibility and generated registration decals remain viewer limitations. No BGL terrain, geographic navigation or add-on API compatibility is implied by this local flight test.
 
 AIR field research was checked against the AirEd definitions linked from [Herve Sors' aircraft dynamics resources](https://www.aero.sors.fr/fsairfile.html). The reference archive was read locally and is excluded from Git. No third-party implementation or game resource is redistributed.
 

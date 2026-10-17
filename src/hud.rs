@@ -22,6 +22,7 @@ pub struct Readout {
     pub pitch: f64,
     pub throttle: f64,
     pub trim: f64,
+    pub brake: f64,
     pub status: Status,
 }
 impl Readout {
@@ -35,10 +36,11 @@ impl Readout {
             pitch: t.attitude[1].to_degrees(),
             throttle: c.throttle * 100.,
             trim: c.trim * 100.,
-            status: if t.ground_contact {
-                Status::Ground
-            } else if paused {
+            brake: c.brake * 100.,
+            status: if paused {
                 Status::Paused
+            } else if t.ground_contact {
+                Status::Ground
             } else if t.stalled {
                 Status::HighAlpha
             } else {
@@ -54,6 +56,7 @@ impl Readout {
             result.pitch,
             result.throttle,
             result.trim,
+            result.brake,
         ]
         .iter()
         .any(|v| !v.is_finite())
@@ -62,7 +65,7 @@ impl Readout {
         }
         Ok(result)
     }
-    pub fn rows(&self) -> [String; 7] {
+    pub fn rows(&self) -> [String; 8] {
         [
             format!("TAS  {:5.1} KT", self.knots),
             format!("ALT  {:5.0} FT", self.feet),
@@ -70,11 +73,12 @@ impl Readout {
             format!("HDG {:03.0} TRUE", self.heading.round().rem_euclid(360.)),
             format!("THR  {:5.0} %", self.throttle),
             format!("TRIM {:+5.0} %", self.trim),
+            format!("BRK  {:5.0} %", self.brake),
             match self.status {
                 Status::Airborne => "AIRBORNE",
                 Status::Paused => "PAUSED - P RESUME",
                 Status::HighAlpha => "POST-PEAK LIFT",
-                Status::Ground => "GROUND - R RESET",
+                Status::Ground => "ON WHEELS",
             }
             .into(),
         ]
@@ -213,7 +217,7 @@ pub fn vertices(readout: &Readout, width: u32, height: u32) -> Vec<Vertex> {
     c.rect(16., 16., 4., 252., BLUE);
     c.text(32., 32., "OPENFSX / FLIGHT", BLUE);
     for (i, row) in readout.rows().iter().enumerate() {
-        let color = if i == 6 && readout.status != Status::Airborne {
+        let color = if i == 7 && readout.status != Status::Airborne {
             GOLD
         } else {
             WHITE
@@ -275,11 +279,23 @@ pub fn vertices(readout: &Readout, width: u32, height: u32) -> Vec<Vertex> {
         &format!("PITCH{:+6.1}", readout.pitch),
         WHITE,
     );
-    c.rect(16., c.height - 48., c.width - 32., 32., PANEL);
+    c.rect(16., c.height - 94., c.width - 32., 78., PANEL);
     c.text(
         30.,
-        c.height - 39.,
-        "ARROWS: PITCH/BANK   Q/E: RUDDER   P: PAUSE   R: RESET",
+        c.height - 85.,
+        "ARROWS: PITCH/BANK   Q/E: RUDDER   PGUP/PGDN: POWER",
+        WHITE,
+    );
+    c.text(
+        30.,
+        c.height - 61.,
+        "F1: IDLE   F4: FULL   B: PARK BRAKE   SPACE: BRAKES",
+        WHITE,
+    );
+    c.text(
+        30.,
+        c.height - 37.,
+        "HOME/END: TRIM   P: PAUSE   R: RESET   ESC: EXIT",
         WHITE,
     );
     c.vertices
@@ -336,7 +352,7 @@ mod tests {
         t.ground_contact = true;
         assert_eq!(
             Readout::new(t, controls, true).unwrap().status,
-            Status::Ground
+            Status::Paused
         );
         t.altitude = f64::NAN;
         assert!(Readout::new(t, controls, false).is_err());

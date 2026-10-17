@@ -14,7 +14,8 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | Texture lookup | Partial | Selected folder and ordered texture.cfg fallback graph; ASCII case-insensitive file lookup |
 | BMP / advanced materials | Not implemented | No BMP, bump, specular, reflection or emissive maps |
 | Flight dynamics / AIR | Initial airborne subset | Legacy 1101/0404/0473; modern overrides explicitly rejected; approximate engine |
-| Keyboard flight mode | Experimental | C172 starts at 90 kt / 300 m; flat ground-contact stop, no takeoff/landing |
+| Keyboard flight mode | Experimental | Airborne C172 start or fixed-wheel runway start; power, brakes, steering and departure checked |
+| Wheel contact | Initial subset | Three fixed wheels, flat-plane springs/dampers and regularized friction; non-wheel contacts omitted, no landing-performance validation |
 | Flight overlay | Implemented for the prototype | Live TAS, local height/heading, vertical speed, commands, attitude and status; independent of FSX gauges |
 | BGL / scenery | Not implemented | No airport or terrain runtime |
 | XML gauges | Not implemented | No expression engine |
@@ -22,6 +23,12 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | Audio, AI, multiplayer | Not implemented | Future subsystems |
 
 ## Local evidence
+
+The C172 ground path loads three wheel contacts and reports six omitted
+non-wheel contacts. Parking and braking scenarios pass, and explicit fixed
+inputs reach height above 30 m from the runway in 22.02 s. Native F4/B input
+also produced departure and visible AIRBORNE telemetry. This establishes a
+ground-to-air transition, not FSX takeoff fidelity or validated landing behavior.
 
 On 17 October 2026, the CFG inspector found **117 aircraft variants with no read errors** in the local FSX folder using Windows-1252. Variants are CFG sections, not unique aircraft models.
 
