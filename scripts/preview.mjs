@@ -10,6 +10,8 @@ const files = new Map([
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/docs.js', ['docs.js', 'text/javascript; charset=utf-8']],
   ['/favicon.svg', ['favicon.svg', 'image/svg+xml']],
+  ...['openfsx-light.svg', 'openfsx-dark.svg', 'openfsx-mono.svg', 'openfsx-icon.svg'].map(name => [`/assets/brand/${name}`, [`assets/brand/${name}`, 'image/svg+xml']]),
+  ...['openfsx-avatar.png', 'openfsx-preview.png'].map(name => [`/assets/brand/${name}`, [`assets/brand/${name}`, 'image/png']]),
 ]);
 http.createServer(async (req, res) => {
   try {

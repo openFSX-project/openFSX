@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 528 128" role="img" aria-labelledby="title" style="color:#182f4c"><title id="title">openFSX</title>
+<path d="M100 99a50 50 0 1 1 0-70" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round"/>
+<path d="m58 61 36-41 11-1v11L75 67l8 34-9 9-16-29-16 13-9-3 12-21-23-15 8-8z" fill="currentColor"/>
+<path d="m94 20 11-1v11L75 67l-8-8z" fill="currentColor"/><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+<path d="M167 50a17 19 0 1 0 0 38 17 19 0 1 0 0-38z"/>
+<path d="M201 106V50m0 19a17 19 0 1 1 34 0 17 19 0 1 1-34 0"/>
+<path d="M252 69h34c0-26-34-26-34 0 0 19 20 24 32 12"/>
+<path d="M303 88V50m0 17c0-24 32-24 32 0v21"/>
+</g>
+<g fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="square" stroke-linejoin="miter">
+<path d="M362 88V34h32m-32 25h27"/>
+<path d="M445 39c-8-8-34-9-34 6 0 19 36 11 36 30 0 17-28 17-38 8"/>
+</g>
+<path d="m465 30 46 62h-15l-46-62z" fill="currentColor"/>
+<path d="m497 30-47 62h15l47-62z" fill="currentColor"/>
+<path d="m497 30-17 23h15l17-23z" fill="currentColor"/>
+</svg>

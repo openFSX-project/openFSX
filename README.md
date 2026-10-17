@@ -1,8 +1,13 @@
 # openFSX
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/assets/brand/openfsx-dark.svg">
+  <img src="site/assets/brand/openfsx-light.svg" alt="openFSX" width="480">
+</picture>
+
 An independent, experimental runtime for content from Microsoft Flight Simulator X, inspired by the approach of [openOMSI](https://github.com/openOMSI-org/openOMSI).
 
-**Research prototype — not a playable flight simulator.** Current work includes an aircraft catalog inspector, a bounds-checked MDLX geometry reader and an experimental native viewer with diffuse DDS textures. Flight dynamics, scenery loading, gauges and add-on APIs are not implemented.
+**Research prototype with an initial airborne test mode.** Current work includes content inspectors, a textured MDLX viewer and keyboard-controlled flight using a limited CFG/AIR dynamics subset. It is not a complete FSX replacement: ground handling, scenery loading, gauges and add-on APIs remain unimplemented.
 
 [Repository](https://github.com/openFSX-project/openFSX) · [Website](https://openfsx-project.github.io/openFSX/)
 
@@ -25,13 +30,22 @@ cargo run -- inspect-model "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.md
 
 # Open the experimental native viewer.
 cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1"
+
+# Start an airborne C172 test with keyboard controls.
+cargo run --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --variant 0 --windows-1252 --lod 150
 ```
 
 Drag to orbit, scroll to zoom, use arrow keys to rotate, press **R** to reset and **Esc** to close. The viewer displays bind-pose geometry with diffuse DDS textures and approximate alpha blending. DXT1/3/5 and masked 32-bit RGB DDS top mips are decoded; texture.cfg fallback directories are searched. Missing textures fall back to diffuse color and are reported. Visibility evaluation, animation playback and skin deformation remain absent. See [the viewer guide](docs/VIEWER.md).
 
 The CFG inspector reads `title` values from `[fltsim.N]` under `SimObjects/Airplanes`. `--windows-1252` explicitly selects that code page for every file; omit it for ASCII/UTF-8 installations. Encodings are not guessed. The presence of `fsx.exe` checks directory structure, not license ownership. Neither tool launches FSX or modifies its installation.
 
+Flight mode starts at 90 kt and 300 m with solved initial trim. Use **Down/Up** to pull/push, **Left/Right** to bank, **Q/E** for rudder, **Page Up/Down** for throttle, **Home/End** for trim, **P** to pause and **R** to reset. Window-title telemetry reports speed, height and attitude. The ground is original test geometry. Read the [flight guide](docs/FLIGHT.md) for the actual data subset, approximation choices, controls and observed results. Flight behavior has not been validated against recorded FSX trajectories.
+
 ## Website and GitHub Pages
+
+The original [logo and brand assets](site/assets/brand/README.md) include light,
+dark and monochrome SVG wordmarks and a square GitHub avatar. The artwork and
+its generator have a separate [MIT license](site/assets/brand/LICENSE).
 
 The English website lives in **`site/`**. Its documentation-oriented layout follows the example of [openomsi.org](https://openomsi.org), with independent branding and content. Relative asset URLs and hash routes support the GitHub Pages `/openFSX/` path.
 
@@ -48,6 +62,7 @@ To publish: push to `main` and select **Settings → Pages → Build and deploym
 
 ```powershell
 cargo test --locked
+cargo test --locked --features viewer
 cargo fmt --check
 cargo build --locked --features viewer --bin openfsx-viewer
 node scripts/build-site.mjs --check
@@ -56,7 +71,7 @@ node scripts/build-site.mjs --check
 Tests use small, original synthetic data. Real installation checks are local and optional; game data is not redistributed with CI. Read [architecture](docs/ARCHITECTURE.md), [compatibility](docs/COMPATIBILITY.md), [format notes](docs/FORMATS.md) and [contribution guidance](CONTRIBUTING.md).
 
 ```text
-src/                  Content tools, MDLX reader, math and native viewer
+src/                  CFG/AIR/MDLX/DDS readers, dynamics and native rendering
 docs/                 English documentation, also published on the site
 site/                 GitHub Pages website
 scripts/              Documentation generation and local preview

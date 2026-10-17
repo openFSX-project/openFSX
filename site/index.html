@@ -25,6 +25,7 @@
   <a href="#/" data-route="/"><span aria-hidden="true">⌂</span>Overview</a>
   <a href="#/download" data-route="/download"><span aria-hidden="true">↓</span>Get started</a>
   <p class="nav-label">Documentation</p>
+  <a href="#/docs/FLIGHT" data-route="/docs/FLIGHT"><span aria-hidden="true">↗</span>Flight prototype</a>
   <a href="#/docs/VIEWER" data-route="/docs/VIEWER"><span aria-hidden="true">◇</span>Model viewer</a>
   <a href="#/docs/ARCHITECTURE" data-route="/docs/ARCHITECTURE"><span aria-hidden="true">▦</span>Architecture</a>
   <a href="#/docs/COMPATIBILITY" data-route="/docs/COMPATIBILITY"><span aria-hidden="true">✓</span>Compatibility</a>
@@ -41,37 +42,39 @@
   <section class="route" id="overview" data-page="/">
     <div class="hero">
       <span class="pill">A NEW ENGINE FOR A FAMILIAR WORLD</span>
-      <h1>open<strong>FSX</strong><span class="flight-line" aria-hidden="true">↗</span></h1>
+      <h1 class="hero-logo" aria-label="openFSX"><img class="logo-light" src="assets/brand/openfsx-light.svg" width="528" height="128" alt=""><img class="logo-dark" src="assets/brand/openfsx-dark.svg" width="528" height="128" alt=""></h1>
       <p>A new beginning for Flight Simulator X.<br>An independent runtime, built from scratch in Rust.</p>
       <div class="hero-actions"><a class="button" href="#/download">Get started <span aria-hidden="true">→</span></a><a class="button outlined" href="#/docs/ARCHITECTURE">Documentation</a><a class="button text-button" href="https://github.com/openFSX-project/openFSX">Source code ↗</a></div>
-      <div class="hero-status"><span class="status-dot"></span>Research prototype · No playable simulator yet</div>
+      <div class="hero-status"><span class="status-dot"></span>Research prototype · Initial airborne C172 test mode</div>
     </div>
     <div class="content">
       <aside class="notice"><span class="notice-icon" aria-hidden="true">i</span><div><h2>Bring your own FSX installation</h2><p>openFSX includes no original game resources. The content tools read your local installation without launching or modifying FSX. Aircraft, textures, scenery and SDK binaries stay out of the repository.</p></div></aside>
       <h2 class="section-title">What is openFSX?</h2>
       <p class="lead">A project to explore a modern engine for the world of <strong>Microsoft Flight Simulator X</strong>, inspired by <a href="https://github.com/openOMSI-org/openOMSI">openOMSI</a>. The aim is to read existing content through an independently written runtime and verify compatibility one subsystem at a time.</p>
-      <p class="muted">Today, that means inspecting aircraft definitions and previewing model geometry with diffuse DDS textures. Flight dynamics, scenery and add-on APIs remain ahead.</p>
+      <p class="muted">Today, that means inspecting content, viewing textured models and testing keyboard-controlled C172 flight with a limited AIR/CFG dynamics subset. Ground handling, scenery and add-on APIs remain ahead.</p>
       <div class="feature-grid">
         <article class="card"><span class="feature-icon" aria-hidden="true">≡</span><span class="label">AVAILABLE</span><h3>Content inspector</h3><p>Read aircraft variants from aircraft.cfg. Explicit legacy encoding support and read-only access to your installation.</p><a href="#/download">Run the inspector →</a></article>
         <article class="card"><span class="feature-icon" aria-hidden="true">◇</span><span class="label">EXPERIMENTAL</span><h3>Native model viewer</h3><p>MDLX geometry, diffuse DDS textures, livery fallback lookup and selectable LODs, rendered through wgpu.</p><a href="#/docs/VIEWER">Explore the viewer →</a></article>
-        <article class="card"><span class="feature-icon" aria-hidden="true">✓</span><span class="label">DOCUMENTED</span><h3>Evidence first</h3><p>Explicit format coverage, original synthetic fixtures and reported omissions. Compatibility claims follow working code.</p><a href="#/docs/COMPATIBILITY">Check compatibility →</a></article>
+        <article class="card"><span class="feature-icon" aria-hidden="true">↗</span><span class="label">EXPERIMENTAL</span><h3>Airborne C172 test</h3><p>Keyboard controls, six-degree-of-freedom dynamics and a chase camera above original flat-ground test geometry.</p><a href="#/docs/FLIGHT">Controls and evidence →</a></article>
       </div>
       <h2 class="section-title">The flight plan</h2>
-      <div class="milestones"><div><b>01</b><span>Content inventory<small>Partial</small></span></div><div><b>02</b><span>Aircraft viewer<small>In progress</small></span></div><div><b>03</b><span>First flight<small>Planned</small></span></div><div><b>04</b><span>Scenery &amp; systems<small>Planned</small></span></div></div>
-      <p>The first C172 livery now renders with available diffuse textures. Next: aircraft controls and a flight model for a defined test aircraft. Visual parity and full add-on compatibility require much more work, especially for native DLL and GAU modules.</p>
+      <div class="milestones"><div><b>01</b><span>Content inventory<small>Partial</small></span></div><div><b>02</b><span>Aircraft viewer<small>Experimental</small></span></div><div><b>03</b><span>First flight<small>Airborne prototype</small></span></div><div><b>04</b><span>Scenery &amp; systems<small>Planned</small></span></div></div>
+      <p>The first C172 livery renders with diffuse textures and an initial airborne dynamics subset. Repeatable scenarios check trim, control signs, climb response and the post-peak lift region. Recorded reference-flight comparison and full add-on compatibility remain future work.</p>
       <a class="inline-link" href="#/docs/ARCHITECTURE">Read the architecture and acceptance criteria →</a>
       <div class="contribute-banner"><div><h2>Help shape the next milestone.</h2><p>Format research, Rust, graphics and reproducible testing are good places to start.</p></div><a class="button outlined" href="#/docs/CONTRIBUTING">Contributing →</a></div>
     </div>
   </section>
   <section class="route content" id="download" data-page="/download" hidden>
     <p class="breadcrumb">openFSX / Get started</p><h1>Get started</h1><p class="lead">Build the research tools from source.</p>
-    <aside class="notice"><span class="notice-icon" aria-hidden="true">i</span><div><h2>No packaged simulator release yet</h2><p>The current tools inspect content and preview diffuse textured geometry. They cannot fly an aircraft. Build from source with stable Rust and the Windows MSVC C++ build tools.</p></div></aside>
+    <aside class="notice"><span class="notice-icon" aria-hidden="true">i</span><div><h2>No packaged simulator release yet</h2><p>Build the content tools, textured viewer and initial airborne flight mode from source with stable Rust and the Windows MSVC C++ build tools. Flight behavior is not validated against recorded FSX trajectories.</p></div></aside>
     <h2>1. Get the source</h2><pre><code>git clone https://github.com/openFSX-project/openFSX.git
 cd openFSX</code></pre>
     <h2>2. Inspect your installation</h2><p>Replace the path with your own FSX folder. Use Windows-1252 only for files in that code page; omit the flag for ASCII/UTF-8.</p><pre><code>cargo run -- inspect "D:/Games/FSX" --windows-1252</code></pre>
     <h2>3. Open a model</h2><p>The native viewer requires current Vulkan or DirectX 12 drivers. This example selects the Blue/Gold C172 livery from your own installation.</p><pre><code>cargo run --features viewer --bin openfsx-viewer -- "D:/Games/FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "D:/Games/FSX/SimObjects/Airplanes/C172/texture.1"</code></pre>
     <p>Drag to orbit, scroll to zoom, use arrow keys to rotate, press <kbd>R</kbd> to reset and <kbd>Esc</kbd> to close.</p>
     <p><a href="#/docs/VIEWER">Viewer controls and limitations →</a></p>
+    <h2>4. Try the airborne prototype</h2><p>This mode takes an aircraft folder and resolves its model, livery and legacy AIR data. It starts at 90 kt and 300 m above a flat test surface.</p><pre><code>cargo run --features viewer --bin openfsx-viewer -- "D:/Games/FSX/SimObjects/Airplanes/C172" --fly --variant 0 --windows-1252 --lod 150</code></pre>
+    <p>Down/Up: pull/push · Left/Right: bank · Q/E: rudder · Page Up/Down: throttle · P: pause · R: reset. See the <a href="#/docs/FLIGHT">flight guide</a> for trim controls, tests and limitations.</p>
     <h2>Verify a change</h2><pre><code>cargo test --locked
 cargo fmt --check
 cargo build --locked --features viewer --bin openfsx-viewer

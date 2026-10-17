@@ -1,1 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#1976d2"/><path d="m12 37 40-17-17 32-3-15z" fill="#fff"/><path d="m32 37 20-17" stroke="#1976d2" stroke-width="2"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title" style="color:#fff"><title id="title">openFSX</title>
+<rect width="128" height="128" rx="28" fill="#142d4d"/><path d="M100 99a50 50 0 1 1 0-70" fill="none" stroke="#f1f7ff" stroke-width="10" stroke-linecap="round"/>
+<path d="m58 61 36-41 11-1v11L75 67l8 34-9 9-16-29-16 13-9-3 12-21-23-15 8-8z" fill="#f1f7ff"/>
+<path d="m94 20 11-1v11L75 67l-8-8z" fill="#39c5ed"/>
+</svg>
