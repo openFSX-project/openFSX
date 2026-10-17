@@ -767,7 +767,11 @@ name = "fsx-ui"
 version = "0.1.0"
 dependencies = [
  "fsx-cfg",
+ "fsx-model",
+ "fsx-render",
+ "fsx-vehicle",
  "serde_json",
+ "windows-sys 0.59.0",
  "winit",
  "wry",
 ]

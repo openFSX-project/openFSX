@@ -20,7 +20,7 @@ There are no placeholder crates for unimplemented scenery, gauges or APIs.
 | fsx-vehicle | Aircraft CFG/AIR data, static loading and contact definitions | fsx-cfg, fsx-geometry |
 | fsx-sim | 6DOF integration, aerodynamics and wheel contact forces | fsx-vehicle, fsx-geometry |
 | fsx-render | wgpu resources, materials, draw passes, debugging overlay and readback | model, texture, geometry, vehicle, sim |
-| fsx-ui | Windows WebView2 menu host and bounded installation asset access | fsx-cfg |
+| fsx-ui | Windows WebView2 menu host, native 3D preview and bounded installation asset access | fsx-cfg, fsx-model, fsx-vehicle, fsx-render |
 | fsx-app | Native event loop, keyboard flight adapter and view orchestration | content, sim, render, UI |
 | tools/fsx-check | Headless openfsx CLI and repeatable local content/flight checks | cfg, model, vehicle, sim |
 

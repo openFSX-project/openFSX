@@ -12,10 +12,11 @@ use std::{
 };
 use winit::{
     application::ApplicationHandler,
-    event::WindowEvent,
+    event::{StartCause, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     window::Window,
 };
+mod preview;
 use wry::{
     http::{Request, Response},
     WebView, WebViewBuilder,
@@ -141,17 +142,22 @@ fn asset(
 }
 #[derive(Debug)]
 enum Action {
+    Preview(usize),
+    PreviewVisible(bool),
     Fly(usize),
     Exit,
     Minimize,
     Drag,
 }
 struct Shell {
+    preview: Option<preview::Preview>,
+    preview_visible: bool,
+    menu_visible: bool,
     root: PathBuf,
     catalog: Arc<Vec<Entry>>,
     proxy: EventLoopProxy<Action>,
-    window: Option<Window>,
     webview: Option<WebView>,
+    window: Option<Arc<Window>>,
     child: Option<Child>,
     error: Option<String>,
 }
@@ -166,20 +172,32 @@ impl Shell {
     }
 }
 impl ApplicationHandler<Action> for Shell {
+    fn new_events(&mut self, _: &ActiveEventLoop, cause: StartCause) {
+        if matches!(cause, StartCause::ResumeTimeReached { .. })
+            && self.menu_visible
+            && self.preview_visible
+        {
+            if let Some(preview) = &self.preview {
+                preview.window.request_redraw();
+            }
+        }
+    }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
         }
         let result = (|| {
-            let window = event_loop
-                .create_window(
-                    Window::default_attributes()
-                        .with_title("openFSX")
-                        .with_decorations(false)
-                        .with_resizable(false)
-                        .with_inner_size(winit::dpi::LogicalSize::new(1024., 738.)),
-                )
-                .map_err(|e| e.to_string())?;
+            let window = Arc::new(
+                event_loop
+                    .create_window(
+                        Window::default_attributes()
+                            .with_title("openFSX")
+                            .with_decorations(false)
+                            .with_resizable(false)
+                            .with_inner_size(winit::dpi::LogicalSize::new(1024., 738.)),
+                    )
+                    .map_err(|e| e.to_string())?,
+            );
             let root = self.root.clone();
             let catalog = self.catalog.clone();
             let proxy = self.proxy.clone();
@@ -199,6 +217,12 @@ impl ApplicationHandler<Action> for Shell {
                         "exit" => Some(Action::Exit),
                         "minimize" => Some(Action::Minimize),
                         "drag" => Some(Action::Drag),
+                        "preview-visible:0" => Some(Action::PreviewVisible(false)),
+                        "preview-visible:1" => Some(Action::PreviewVisible(true)),
+                        _ if message.starts_with("preview:") => message
+                            .strip_prefix("preview:")
+                            .and_then(|s| s.parse().ok())
+                            .map(Action::Preview),
                         _ => message
                             .strip_prefix("fly:")
                             .and_then(|s| s.parse().ok())
@@ -208,9 +232,10 @@ impl ApplicationHandler<Action> for Shell {
                         let _ = proxy.send_event(action);
                     }
                 })
-                .build(&window)
+                .build(window.as_ref())
                 .map_err(|e| e.to_string())?;
             self.webview = Some(webview);
+            self.preview = Some(preview::Preview::new(window.clone(), event_loop)?);
             self.window = Some(window);
             Ok::<_, String>(())
         })();
@@ -222,15 +247,64 @@ impl ApplicationHandler<Action> for Shell {
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        _: winit::window::WindowId,
+        id: winit::window::WindowId,
         event: WindowEvent,
     ) {
+        if let Some(preview) = &mut self.preview {
+            if id == preview.window.id() {
+                if let Err(error) = preview.event(&event) {
+                    preview.visible(false);
+                    self.show_error(&format!("Aircraft preview failed: {error}"));
+                }
+                return;
+            }
+        }
+        match &event {
+            WindowEvent::Resized(size) => {
+                self.menu_visible = size.width > 0 && size.height > 0 && self.child.is_none();
+                if let (Some(preview), Some(window)) = (&mut self.preview, &self.window) {
+                    preview.layout(window);
+                }
+            }
+            WindowEvent::Occluded(occluded) => {
+                self.menu_visible = !occluded && self.child.is_none()
+            }
+            _ => {}
+        }
         if matches!(event, WindowEvent::CloseRequested) && self.child.is_none() {
             event_loop.exit();
         }
     }
     fn user_event(&mut self, event_loop: &ActiveEventLoop, action: Action) {
         match action {
+            Action::Preview(index) => {
+                let Some(entry) = self.catalog.get(index) else {
+                    return;
+                };
+                let Some(preview) = &mut self.preview else {
+                    return;
+                };
+                let result = preview.load(&self.root, &entry.folder, entry.variant);
+                let message = match result {
+                    Ok(()) => {
+                        preview.visible(self.preview_visible && self.menu_visible);
+                        String::new()
+                    }
+                    Err(error) => format!("3D preview unavailable: {error}"),
+                };
+                if let Some(webview) = &self.webview {
+                    let _ = webview.evaluate_script(&format!(
+                        "window.previewStatus({})",
+                        serde_json::to_string(&message).unwrap()
+                    ));
+                }
+            }
+            Action::PreviewVisible(visible) => {
+                self.preview_visible = visible;
+                if let Some(preview) = &mut self.preview {
+                    preview.visible(visible && self.menu_visible);
+                }
+            }
             Action::Exit => {
                 if self.child.is_none() {
                     event_loop.exit();
@@ -275,6 +349,10 @@ impl ApplicationHandler<Action> for Shell {
                 match result {
                     Ok(child) => {
                         self.child = Some(child);
+                        self.menu_visible = false;
+                        if let Some(preview) = &mut self.preview {
+                            preview.visible(false);
+                        }
                         if let Some(w) = &self.window {
                             w.set_visible(false);
                         }
@@ -292,6 +370,10 @@ impl ApplicationHandler<Action> for Shell {
                 w.set_visible(true);
                 w.focus_window();
             }
+            self.menu_visible = true;
+            if let Some(preview) = &mut self.preview {
+                preview.visible(self.preview_visible);
+            }
             if !status.success() {
                 let mut message = String::new();
                 if let Some(stderr) = child.stderr.take() {
@@ -302,6 +384,11 @@ impl ApplicationHandler<Action> for Shell {
         }
         event_loop.set_control_flow(if self.child.is_some() {
             ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(250))
+        } else if self.menu_visible
+            && self.preview_visible
+            && self.preview.as_ref().is_some_and(|p| p.ready())
+        {
+            ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(33))
         } else {
             ControlFlow::Wait
         });
@@ -317,6 +404,9 @@ pub fn run(folder: &Path) -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
     let mut shell = Shell {
+        preview: None,
+        preview_visible: true,
+        menu_visible: true,
         root,
         catalog,
         proxy: event_loop.create_proxy(),

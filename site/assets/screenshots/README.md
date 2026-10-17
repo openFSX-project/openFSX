@@ -34,10 +34,11 @@ with Microsoft or Dovetail Games, or full FSX compatibility.
 ## Free Flight menu capture
 
 `free-flight-menu.png` is a direct 1024 x 738 native Windows window capture of
-`openfsx-viewer ./FSX --menu`, taken on 17 October 2026. It shows the independent
-WebView2 menu host, installed FSX UI bitmap artwork and a static aircraft
-thumbnail. It is not a live aircraft render or a screenshot of the original FSX
-process. Aircraft selection, launching C172 and returning from flight were
+`openfsx-viewer ./FSX --menu`, taken on 18 October 2026. It shows the independent
+WebView2 menu host, installed FSX UI bitmap artwork and the live C172 MDLX/DDS
+preview rendered by a native child surface. It is a direct composed-window
+capture, exported by the capture tool as JPEG and re-encoded as PNG without
+cropping or visual changes, not a screenshot of the original FSX process. Aircraft selection, launching C172 and returning from flight were
 checked. Other menu sections are incomplete; pixel parity is not verified.
 The installed artwork retains its respective owners' rights. No raw bitmap or
 thumbnail asset is redistributed; the selected window screenshot is published

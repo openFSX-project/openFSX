@@ -75,7 +75,7 @@ and restores the menu. Native C172 launch and return were checked on Windows.
 
 Location, weather, time/season, fuel/payload editing, flight plans, saved flights,
 failures and other sidebar sections remain unimplemented. The aircraft image is
-an installed thumbnail, not a live model preview. Only windowed launch is
+a live native MDLX/DDS preview. It slowly rotates; drag with the left mouse button to change the view and use the wheel to zoom. Selection reloads the exterior model and livery without requiring a supported AIR flight model. The renderer hides behind menu dialogs and while flight runs. A failed model load clears the previous aircraft and reports an error. Only windowed launch is
 supported. The menu catalog currently explicitly decodes CFG files as
 Windows-1252. Flight telemetry is hidden by default; use **--debug-hud** when
 launching flight directly to enable the independent debugging overlay.
@@ -177,6 +177,7 @@ It does not establish physical calibration or FSX animation parity.
 
 On 18 October 2026, the original FSX displayed a Remote Desktop restriction
 and exited in the local test session. No live reference samples were obtained.
-Reference capture still needs a supported local Windows session with a loaded
-FSX flight. This limitation belongs to the observed original-game startup;
+A subsequent local launch reached the main menu and SimConnect_Open succeeded,
+but the menu-only check returned no aircraft samples. Reference capture still
+needs a loaded FSX flight. This limitation belongs to the observed original-game startup;
 the offline openFSX pipeline above does not launch it.

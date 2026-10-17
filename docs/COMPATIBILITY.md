@@ -6,7 +6,7 @@ This page records observed behavior, not a promise that existing add-ons will wo
 
 | Area | Current support | Limits |
 | --- | --- | --- |
-| FSX-style menu | Initial Windows host | Local UI skin, aircraft catalog, launch and return; independent layout, no pixel-parity verification; other sections unimplemented |
+| FSX-style menu | Initial Windows host | Local UI skin, aircraft catalog, live native MDLX/DDS preview, launch and return; independent layout, no pixel-parity verification; other sections unimplemented |
 | Installation | Directory structure check | fsx.exe and standard Airplanes folder |
 | aircraft.cfg | Partial | Variant references, geometry, station payload, full usable Avgas loading, loaded CG/inertia tensor and engine/control parameters; explicit encoding |
 | MDLX | Partial | Packed chunks, VERT, INDE, PART, LOD, static TRAN/AMAP/SCEN |
@@ -30,7 +30,7 @@ This page records observed behavior, not a promise that existing add-ons will wo
 
 ## Local evidence
 
-The native Windows menu loaded the local C172 catalog and thumbnail. Aircraft chooser opening, FLY NOW launching the C172 runway renderer and Esc restoring the menu were checked. This establishes the launch path only; it does not establish FSX menu or simulation parity.
+The native Windows menu loaded the local aircraft catalog and live C172 exterior preview. On 18 October 2026, native capture and input verified camera movement, zoom, hiding the preview for the aircraft picker and replacing C172 with the selected A321 model (29,888 LOD-400 triangles). Visual resource loading does not require the single-piston flight model; this does not establish A321 flight support. Skinned parts, registration decals and automatic model animation remain incomplete. Aircraft chooser opening, FLY NOW launching the C172 runway renderer and Esc restoring the menu were checked. This establishes the launch path only; it does not establish FSX menu or simulation parity.
 
 The C172 ground path loads three wheel contacts and reports six omitted
 non-wheel contacts. Parking and braking scenarios pass, and explicit fixed

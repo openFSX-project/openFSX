@@ -53,7 +53,7 @@ With --ground, **B** toggles the parking brake, **F4/F1** select full/idle power
 and **Space** holds wheel brakes. The same simulation continues through wheel
 contact and liftoff. Run `cargo run -- takeoff-check "./FSX/SimObjects/Airplanes/C172" --windows-1252` for the documented parking, braking and departure checks.
 
-The Windows **--menu** host reads the installed UI bitmap skin and aircraft thumbnails at runtime. Aircraft selection and **FLY NOW!** launch the experimental runway renderer; **Esc** returns to the menu. The catalog currently uses Windows-1252 explicitly. Other sections display their implementation status. This is an initial independent layout, not pixel-verified FSX parity. See [the viewer guide](docs/VIEWER.md).
+The Windows **--menu** host reads the installed UI bitmap skin and aircraft resources at runtime. Its embedded native 3D preview uses the same MDLX/DDS renderer as flight: the selected model slowly rotates, dragging changes the view and the wheel zooms. Aircraft-picker tiles still use installed thumbnails. Aircraft selection and **FLY NOW!** launch the experimental runway renderer; **Esc** returns to the menu. The catalog currently uses Windows-1252 explicitly. Other sections display their implementation status. This is an initial independent layout, not pixel-verified FSX parity. See [the viewer guide](docs/VIEWER.md).
 
 ## Website and GitHub Pages
 

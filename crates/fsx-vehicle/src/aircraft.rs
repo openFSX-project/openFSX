@@ -50,6 +50,13 @@ pub struct Aircraft {
     pub air_path: PathBuf,
     pub parameters: Parameters,
 }
+/// Visual resources can be loaded without requiring a supported flight model.
+#[derive(Debug)]
+pub struct VisualAircraft {
+    pub title: String,
+    pub model: PathBuf,
+    pub texture: PathBuf,
+}
 fn component(value: &str) -> Result<&str, String> {
     if value.contains(['/', '\\', ':', '\0']) || value == "." || value == ".." {
         Err("Aircraft variant references must be file-name components".into())
@@ -70,22 +77,22 @@ fn read_config(path: &Path, windows_1252: bool) -> Result<Config, String> {
         windows_1252,
     )?)
 }
-impl Aircraft {
+impl VisualAircraft {
     pub fn load(folder: &Path, variant: u32, windows_1252: bool) -> Result<Self, String> {
         let config = read_config(&folder.join("aircraft.cfg"), windows_1252)?;
+        Self::from_config(folder, variant, windows_1252, &config)
+    }
+    fn from_config(
+        folder: &Path,
+        variant: u32,
+        windows_1252: bool,
+        config: &Config,
+    ) -> Result<Self, String> {
         let section = format!("fltsim.{variant}");
         let title = config
             .get(&section, "title")
             .ok_or("Selected aircraft variant has no title")?
             .to_owned();
-        let sim = component(
-            config
-                .get(&section, "sim")
-                .ok_or("Selected variant has no sim AIR reference")?,
-        )?;
-        if sim.is_empty() {
-            return Err("Empty AIR reference".into());
-        }
         let model = component(config.get(&section, "model").unwrap_or(""))?;
         let texture = component(config.get(&section, "texture").unwrap_or(""))?;
         let model_dir = folder.join(if model.is_empty() {
@@ -107,9 +114,6 @@ impl Aircraft {
         } else {
             format!("{name}.mdl")
         });
-        let air_path = folder.join(format!("{sim}.air"));
-        let air = AirFile::load(&air_path)?;
-        let parameters = Parameters::from_config(&config, air.dynamics()?)?;
         Ok(Self {
             title,
             model,
@@ -118,8 +122,30 @@ impl Aircraft {
             } else {
                 format!("texture.{texture}")
             }),
+        })
+    }
+}
+impl Aircraft {
+    pub fn load(folder: &Path, variant: u32, windows_1252: bool) -> Result<Self, String> {
+        let config = read_config(&folder.join("aircraft.cfg"), windows_1252)?;
+        let visual = VisualAircraft::from_config(folder, variant, windows_1252, &config)?;
+        let section = format!("fltsim.{variant}");
+        let sim = component(
+            config
+                .get(&section, "sim")
+                .ok_or("Selected variant has no sim AIR reference")?,
+        )?;
+        if sim.is_empty() {
+            return Err("Empty AIR reference".into());
+        }
+        let air_path = folder.join(format!("{sim}.air"));
+        let air = AirFile::load(&air_path)?;
+        Ok(Self {
+            title: visual.title,
+            model: visual.model,
+            texture: visual.texture,
             air_path,
-            parameters,
+            parameters: Parameters::from_config(&config, air.dynamics()?)?,
         })
     }
 }
@@ -283,5 +309,29 @@ mod tests {
         assert!(component("../model").is_err());
         assert!(component("C:\\x").is_err());
         assert_eq!(component("g1000").unwrap(), "g1000");
+    }
+    #[test]
+    fn visual_resources_do_not_require_an_air_file_or_piston_engine() {
+        let folder = std::env::temp_dir().join(format!(
+            "openfsx-visual-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(folder.join("model.jet")).unwrap();
+        fs::write(folder.join("aircraft.cfg"), b"[fltsim.3]\ntitle=Original synthetic jet\nmodel=jet\ntexture=blue\n[GeneralEngineData]\nengine_type=1\n").unwrap();
+        fs::write(
+            folder.join("model.jet/model.cfg"),
+            b"[models]\nnormal=synthetic\n",
+        )
+        .unwrap();
+        let visual = VisualAircraft::load(&folder, 3, false).unwrap();
+        assert_eq!(visual.title, "Original synthetic jet");
+        assert_eq!(visual.model, folder.join("model.jet/synthetic.mdl"));
+        assert_eq!(visual.texture, folder.join("texture.blue"));
+        assert!(Aircraft::load(&folder, 3, false).is_err());
+        fs::remove_dir_all(folder).unwrap();
     }
 }

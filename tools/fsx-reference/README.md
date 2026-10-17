@@ -63,6 +63,7 @@ one sample with `--reference-pose` and report the resolved animation groups;
 see the viewer documentation for commands and limits.
 
 The original FSX refused to run in the observed Remote Desktop session on
-18 October 2026. A local Windows session with a loaded FSX flight is still
-needed to establish live acquisition. No data or calibration result is inferred
+18 October 2026. A later local launch reached the menu and SimConnect_Open succeeded, but no
+aircraft samples were returned before a flight was loaded. A loaded local FSX
+flight is still needed to establish live acquisition. No data or calibration result is inferred
 from the synthetic fixture or a failed connection.
