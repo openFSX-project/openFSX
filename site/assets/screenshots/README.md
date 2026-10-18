@@ -1,10 +1,11 @@
 # Engine screenshots
 
-All GPU-rendered PNGs were rerendered on 18 October 2026 after correcting
+The original GPU captures were rerendered on 18 October 2026 after correcting
 the projection to native left-handed Direct3D/MDLX coordinates. No ready-made
 image was mirrored or composited. Pixel bounds below describe the refreshed
 captures; initial capture dates identify the original check. The composed
 Free Flight menu window remains a historical capture made before this fix.
+Subsequent GPU checks use the corrected projection.
 
 The three C172 PNG images were first captured on 17 October 2026 and refreshed
 on 18 October 2026 by the openFSX renderer,
@@ -237,4 +238,29 @@ remain under ignored target; only this selected engine screenshot is published.
 ```powershell
 cargo run --locked -p fsx-render --example panel-artwork-check -- ./FSX target/panel-artwork-02 1033
 node scripts/ppm-to-png.mjs target/panel-artwork-02/c172-panel-static-artwork.ppm target/panel-artwork-02/c172-panel-static-artwork.png
+```
+
+## Native needle result inspection
+
+c172-native-needle-75.png and c172-native-needle-200.png were rendered on
+19 October 2026 by the native-needle-check example. The same fixed camera,
+geometry, original root artwork and GPU device are used for three inspection
+states. Eighteen recorded results from the isolated native x86 update probe
+drive six original bitmap needles through authored POS/OFS pivots and tables.
+The three selected altimeter functions use an explicit direct-degree mode.
+
+The published states use raw airspeed inputs 75/200, tachometer inputs
+1800/2700, vertical-speed inputs 0/256 and altimeter inputs 500/1000. These
+are explicit inspection values, not a flight recording. There are 831 changed
+pixels within (394,234)..(582,411). Needle lag, other instrument layers, digital
+values, full panel services, flight integration and original-FSX parity remain
+unimplemented or unverified. Default flight-mode instruments remain blank.
+
+Only these selected GPU screenshots are published; input records, original
+bitmap resources and render intermediates remain local.
+
+```powershell
+./scripts/build-gauge-host.ps1
+./scripts/check-native-gauges.ps1 -FsxRoot ./FSX -Output target/needle-inputs.ndjson
+cargo run --locked -p fsx-app --features viewer --example native-needle-check -- ./FSX target/needle-inspection target/needle-inputs.ndjson
 ```

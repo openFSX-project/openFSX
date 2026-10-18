@@ -42,6 +42,33 @@ geometry and GPU device. This is unlit source-artwork composition followed by
 the viewer's approximate material lighting, not operational instruments or
 verified FSX panel rasterization. Raw panel atlases stay under ignored target.
 
+## Native needle result inspection
+
+The separate native-needle-check example consumes the explicit output of the
+x86 update probe. It draws six original bitmap needles using native callback
+results, authored POS/OFS pivots and nonlinearity tables. The three selected
+altimeter callbacks are explicitly interpreted as degrees when no table exists;
+the example does not generalize that interpretation to other table-free gauges.
+
+```powershell
+./scripts/build-gauge-host.ps1
+./scripts/check-native-gauges.ps1 -FsxRoot ./FSX -Output target/needle-inputs.ndjson
+cargo run --locked -p fsx-app --features viewer --example native-needle-check -- ./FSX target/needle-inspection target/needle-inputs.ndjson
+```
+
+Use new output paths. The check renders three 960x720 snapshots on one GPU
+device, with a fixed camera and 28 static root images. It preserves the authored
+next-list order for overlapping needles and reads exact language 1033 resources.
+Six bindings are included: airspeed, tachometer, vertical speed and three
+altimeter needles. The input states are explicit raw probe values, not a flight
+recording. Schema, context, module lifecycle, resource/token IDs, header versions,
+finite values and sample counts are checked before use.
+
+This path does not execute DLLs from Rust, run temporal needle lag, supply
+pressure/air-data/calibration behavior or integrate instruments into --fly.
+Other moving/static layers, digital values, masks and panel interaction remain
+omitted. Original-FSX visual/behavioral parity has not been measured.
+
 ## Controls
 
 | Input | Action |

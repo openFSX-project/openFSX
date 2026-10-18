@@ -15,6 +15,7 @@ const MAX_GAUGES: usize = 512;
 const MAX_ELEMENTS: usize = 2048;
 const MAX_TOTAL_ELEMENTS: usize = 65536;
 const MAX_RESOURCES: usize = 8192;
+const MAX_NEEDLE_POINTS: usize = 65536;
 
 fn bytes(b: &[u8], offset: usize, size: usize) -> Result<&[u8]> {
     let end = offset.checked_add(size).ok_or("PE offset overflow")?;
@@ -25,6 +26,13 @@ fn u16_at(b: &[u8], offset: usize) -> Result<u16> {
 }
 fn u32_at(b: &[u8], offset: usize) -> Result<u32> {
     Ok(u32::from_le_bytes(bytes(b, offset, 4)?.try_into().unwrap()))
+}
+fn f64_at(b: &[u8], offset: usize) -> Result<f64> {
+    let value = f64::from_le_bytes(bytes(b, offset, 8)?.try_into().unwrap());
+    if !value.is_finite() {
+        return Err("Non-finite gauge numeric field".into());
+    }
+    Ok(value)
 }
 fn plus(a: u32, b: u32) -> Result<u32> {
     a.checked_add(b).ok_or_else(|| "PE address overflow".into())
@@ -221,9 +229,136 @@ pub struct Element {
     pub kind: u32,
     pub resource_id: i32,
     pub position: [i32; 2],
+    /// Authored needle-bitmap pivot (OFS); distinct from runtime reference fields.
+    pub offset: [i32; 2],
     pub image_flags: u32,
-    /// Child element RVAs in the authored list order.
+    /// Successor RVAs in the authored next-list order, not spatial transform parenting.
     pub children: Vec<u32>,
+    pub needle: Option<Needle>,
+}
+#[derive(Debug, Clone)]
+pub struct NeedlePoint {
+    pub position: [i32; 2],
+    pub value: f64,
+}
+#[derive(Debug, Clone)]
+pub struct Needle {
+    pub token: u32,
+    pub update_callback_rva: Option<u32>,
+    pub max_degrees_per_tick: i32,
+    pub curve: Vec<NeedlePoint>,
+}
+impl Needle {
+    /// Stateless table interpolation for explicit inspection values. No timing/lag.
+    /// Screen coordinates use +X right, +Y down; angles increase clockwise.
+    pub fn reading_angle(&self, pivot: [i32; 2], reading: f64) -> Result<f64> {
+        if !reading.is_finite()
+            || reading.abs() > 1e12
+            || self.curve.len() < 2
+            || self.curve.len() > 512
+        {
+            return Err("Needle reading needs a finite value and 2..512 table points".into());
+        }
+        let increasing = self.curve[1].value > self.curve[0].value;
+        let mut mapped = Vec::new();
+        for (i, point) in self.curve.iter().enumerate() {
+            if !point.value.is_finite()
+                || point.value.abs() > 1e12
+                || (i > 0
+                    && if increasing {
+                        point.value <= self.curve[i - 1].value
+                    } else {
+                        point.value >= self.curve[i - 1].value
+                    })
+            {
+                return Err("Needle table values must be finite and strictly monotonic".into());
+            }
+            let dx = point.position[0] as f64 - pivot[0] as f64;
+            let dy = point.position[1] as f64 - pivot[1] as f64;
+            if dx == 0. && dy == 0. {
+                return Err("Needle table point coincides with its pivot".into());
+            }
+            let mut angle = dy.atan2(dx);
+            if let Some((_, previous)) = mapped.last() {
+                // Authored points are ordered clockwise, including across +/-pi.
+                while angle <= *previous {
+                    angle += std::f64::consts::TAU;
+                }
+            }
+            mapped.push((point.value, angle));
+        }
+        let first = mapped[0];
+        let last = mapped[mapped.len() - 1];
+        if if increasing {
+            reading <= first.0
+        } else {
+            reading >= first.0
+        } {
+            return Ok(first.1);
+        }
+        if if increasing {
+            reading >= last.0
+        } else {
+            reading <= last.0
+        } {
+            return Ok(last.1);
+        }
+        for pair in mapped.windows(2) {
+            if if increasing {
+                reading <= pair[1].0
+            } else {
+                reading >= pair[1].0
+            } {
+                let t = (reading - pair[0].0) / (pair[1].0 - pair[0].0);
+                return Ok(pair[0].1 + t * (pair[1].1 - pair[0].1));
+            }
+        }
+        Err("Needle reading has no table interval".into())
+    }
+}
+
+fn needle(pe: &Pe<'_>, rva: u32) -> Result<Needle> {
+    let b = pe.slice(rva, 236)?;
+    let count = u32_at(b, 116)? as usize;
+    if count > 512 {
+        return Err("Native needle table exceeds 512 points".into());
+    }
+    let pointer = u32_at(b, 112)?;
+    if (pointer == 0) != (count == 0) {
+        return Err("Inconsistent native needle table pointer/count".into());
+    }
+    let mut curve = Vec::new();
+    if count != 0 {
+        let table = pe.slice(pe.pointer_rva(pointer)?, count * 24)?;
+        for i in 0..count {
+            let position = [
+                u32_at(table, i * 24)? as i32,
+                u32_at(table, i * 24 + 4)? as i32,
+            ];
+            if position.iter().any(|v| v.unsigned_abs() > 65536) {
+                return Err("Native needle table coordinate exceeds bounds".into());
+            }
+            let value = f64_at(table, i * 24 + 8)?;
+            if value.abs() > 1e12 {
+                return Err("Native needle table value exceeds numeric bounds".into());
+            }
+            curve.push(NeedlePoint { position, value });
+        }
+    }
+    let callback = u32_at(b, 224)?;
+    let update_callback_rva = if callback == 0 {
+        None
+    } else {
+        let rva = pe.pointer_rva(callback)?;
+        pe.slice(rva, 1)?;
+        Some(rva)
+    };
+    Ok(Needle {
+        token: u32_at(b, 60)?,
+        update_callback_rva,
+        max_degrees_per_tick: u32_at(b, 120)? as i32,
+        curve,
+    })
 }
 #[derive(Debug, Clone)]
 pub struct Gauge {
@@ -296,8 +431,14 @@ fn elements(pe: &Pe<'_>, roots: &[u32]) -> Result<Vec<Element>> {
             kind: u32_at(b, 0)?,
             resource_id: u32_at(b, 4)? as i32,
             position: [u32_at(b, 8)? as i32, u32_at(b, 12)? as i32],
+            offset: [u32_at(b, 24)? as i32, u32_at(b, 28)? as i32],
             image_flags: u32_at(b, 48)?,
             children,
+            needle: if u32_at(b, 0)? == 1 {
+                Some(needle(pe, rva)?)
+            } else {
+                None
+            },
         });
     }
     Ok(output)
@@ -389,6 +530,7 @@ impl GaugeLibrary {
         let headers = pointer_list(&pe, plus(linkage, 24)?, MAX_GAUGES)?;
         let mut gauges = Vec::new();
         let mut total_elements = 0;
+        let mut total_needle_points = 0;
         for rva in headers {
             let header = pe.slice(rva, 52)?;
             let version = u32_at(header, 0)?;
@@ -418,6 +560,14 @@ impl GaugeLibrary {
             };
             let elements = elements(&pe, &roots).map_err(|e| format!("Gauge {name}: {e}"))?;
             total_elements += elements.len();
+            total_needle_points += elements
+                .iter()
+                .filter_map(|e| e.needle.as_ref())
+                .map(|n| n.curve.len())
+                .sum::<usize>();
+            if total_needle_points > MAX_NEEDLE_POINTS {
+                return Err("Library exceeds 65536 native needle table points".into());
+            }
             if total_elements > MAX_TOTAL_ELEMENTS {
                 return Err("Library exceeds total element budget".into());
             }
@@ -489,6 +639,95 @@ impl GaugeLibrary {
 mod tests {
     use super::*;
     const BASE: u32 = 0x400000;
+    #[test]
+    fn native_needle_fields_and_table_pointer_bounds() {
+        let mut b = fixture();
+        for (r, v) in [
+            (0x1508, 0),
+            (0x150c, 0),
+            (0x1518, 2),
+            (0x151c, 3),
+            (0x153c, 61),
+            (0x1570, BASE + 0x1600),
+            (0x1574, 2),
+            (0x1578, 12),
+            (0x15e0, BASE + 0x1800),
+            (0x1600, 10),
+            (0x1604, 0),
+            (0x1618, 0),
+            (0x161c, 10),
+        ] {
+            rword(&mut b, r, v);
+        }
+        b[at(0x1620)..at(0x1620) + 8].copy_from_slice(&100f64.to_le_bytes());
+        let lib = GaugeLibrary::parse(b.clone(), false).unwrap();
+        let e = &lib.gauges[0].elements[1];
+        let n = e.needle.as_ref().unwrap();
+        assert_eq!(e.offset, [2, 3]);
+        assert_eq!(n.token, 61);
+        assert_eq!(n.max_degrees_per_tick, 12);
+        assert_eq!(n.update_callback_rva, Some(0x1800));
+        assert!(
+            (n.reading_angle(e.position, 50.).unwrap() - std::f64::consts::FRAC_PI_4).abs() < 1e-12
+        );
+        for (r, v) in [
+            (0x1574, 513),
+            (0x1570, 0),
+            (0x15e0, u32::MAX),
+            (0x1600, 65537),
+        ] {
+            let mut bad = b.clone();
+            rword(&mut bad, r, v);
+            assert!(GaugeLibrary::parse(bad, false).is_err());
+        }
+        b[at(0x1608)..at(0x1608) + 8].copy_from_slice(&f64::NAN.to_le_bytes());
+        assert!(GaugeLibrary::parse(b, false).is_err());
+    }
+    #[test]
+    fn needle_interpolation_wraps_clockwise_and_supports_decreasing_values() {
+        let mut n = Needle {
+            token: 0,
+            update_callback_rva: None,
+            max_degrees_per_tick: 0,
+            curve: vec![
+                NeedlePoint {
+                    position: [-10, 2],
+                    value: 0.,
+                },
+                NeedlePoint {
+                    position: [-10, -2],
+                    value: 100.,
+                },
+            ],
+        };
+        assert!((n.reading_angle([0, 0], 50.).unwrap() - std::f64::consts::PI).abs() < 1e-12);
+        n.curve = vec![
+            NeedlePoint {
+                position: [10, 0],
+                value: 100.,
+            },
+            NeedlePoint {
+                position: [0, 10],
+                value: 0.,
+            },
+        ];
+        assert!(
+            (n.reading_angle([0, 0], 75.).unwrap() - std::f64::consts::FRAC_PI_4 / 2.).abs()
+                < 1e-12
+        );
+        assert_eq!(n.reading_angle([0, 0], 101.).unwrap(), 0.);
+        assert!(
+            (n.reading_angle([0, 0], -1.).unwrap() - std::f64::consts::FRAC_PI_2).abs() < 1e-12
+        );
+        assert!(n.reading_angle([0, 0], f64::NAN).is_err());
+        n.curve[1].value = 100.;
+        assert!(n.reading_angle([0, 0], 50.).is_err());
+        n.curve[1].value = 0.;
+        n.curve[0].position = [0, 0];
+        assert!(n.reading_angle([0, 0], 50.).is_err());
+        n.curve.clear();
+        assert!(n.reading_angle([0, 0], 50.).is_err());
+    }
     fn put16(b: &mut [u8], p: usize, v: u16) {
         b[p..p + 2].copy_from_slice(&v.to_le_bytes());
     }

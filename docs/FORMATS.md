@@ -244,6 +244,39 @@ cargo run --locked -p fsx-check --example native-panel-check -- "./FSX"
 The example uses the explicit installation's stock C172 and Gauges folder. It is
 not a general add-on module search-order implementation.
 
+## Native needle metadata and inspection transforms
+
+The content reader records each needle's source token, callback RVA, encoded
+max-degrees-per-tick field and nonlinearity table. POS in the common element
+header is the pivot in the gauge background; OFS is the pivot inside the needle
+bitmap. Runtime reference fields are separate and are not substituted for OFS.
+Next-list links establish drawing order, not a hierarchy of spatial transforms.
+
+Tables contain 24-byte entries with signed X/Y points and an f64 value; the
+runtime degree-cache member is ignored. Limits are 512 points per table, 65536
+points per library, coordinates within +/-65536 and finite table values within
+1e12 in magnitude. Invalid pointers, inconsistent pointer/count pairs and
+unsupported extents fail explicitly. Reading-to-angle inspection requires at
+least two strictly increasing or decreasing values, unwraps the authored
+clockwise point order across +/-pi, interpolates angles and clamps outside the
+table's endpoint values. Angles use screen coordinates (+Y down).
+
+The renderer rotates the original bitmap about OFS, places it about POS and
+scales it into the explicit CFG rectangle using the background image extent.
+Clipping preserves the transform; nearest-neighbor sampling and RGB-black
+keying match the other artwork inspection path. Hidden-tree predecessors and
+unsupported masks/alpha/transform flags are rejected. A fresh root preview is
+composed for each state; repeated paints are not an erase/update lifecycle.
+
+The [gauge API reference](https://www.prepar3d.com/SDKv6/sdk/panels_and_user_interface/gauges/references/gauges_api_overview.html)
+describes needle pivots, next-list order and clockwise nonlinearity points.
+The implementation is an inspection subset: table clamping, sampling, temporal
+lag, failures and the full FSX panel rasterization contract remain unverified.
+Table-free result interpretation must be explicit; it is not inferred for
+arbitrary callbacks. The checked example opts into degrees only for the three
+Cessna altimeter functions. Other native layers and live token binding remain
+unimplemented, and no original artwork or SDK implementation is bundled.
+
 ## Isolated native update-call protocol
 
 The separate tools/fsx-gauge-host process can execute a selected installed
