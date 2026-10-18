@@ -43,7 +43,7 @@ cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects
 cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --ground --windows-1252 --lod 150
 ```
 
-Drag to orbit, scroll to zoom, use arrow keys to rotate, press **R** to reset and **Esc** to close. The viewer displays bind-pose geometry with diffuse DDS textures and approximate alpha blending. DXT1/3/5 and masked 32-bit RGB DDS top mips are decoded; texture.cfg fallback directories are searched. Missing textures fall back to diffuse color and are reported. A read-only RPN subset evaluates model visibility and supported XAPC animation expressions; explicit variable inspection also supports XAPS scale/bias bindings. Flight now drives native center-wheel steering from the physical contact model, with simulation-clock Lag limits for supported bindings. Control-surface percent mappings, RPM, Standard autoplay and skin deformation remain incomplete. Use **--animation N --frame N** to inspect authored rotation/translation keys; **[ / ]** scrub the selected clip. The inspector lists file-local animation IDs. See [the viewer guide](docs/VIEWER.md).
+Drag to orbit, scroll to zoom, use arrow keys to rotate, press **R** to reset and **Esc** to close. The viewer displays bind-pose geometry with diffuse DDS textures and approximate alpha blending. DXT1/3/5 and masked 32-bit RGB DDS top mips are decoded; texture.cfg fallback directories are searched. Missing textures fall back to diffuse color and are reported. Bounded RPN evaluates model visibility and XAPC animation expressions; static inspection stays read-only, while temporal animation can use instance-local numeric values and scratch registers. Explicit variable inspection also supports XAPS scale/bias bindings. Flight now drives center steering and the native throttle expression, with simulation-clock Lag limits for supported bindings. Control-surface percent mappings, RPM, Standard autoplay and skin deformation remain incomplete. Use **--animation N --frame N** to inspect authored rotation/translation keys; **[ / ]** scrub the selected clip. The inspector lists file-local animation IDs. See [the viewer guide](docs/VIEWER.md).
 
 The CFG inspector reads `title` values from `[fltsim.N]` under `SimObjects/Airplanes`. `--windows-1252` explicitly selects that code page for every file; omit it for ASCII/UTF-8 installations. Encodings are not guessed. The presence of `fsx.exe` checks directory structure, not license ownership. Neither tool launches FSX or modifies its installation.
 
@@ -95,7 +95,7 @@ Cargo.toml            Virtual Cargo workspace and shared dependencies
 crates/
   fsx-cfg/            CFG reader and code pages
   fsx-geometry/       Matrices and rigid orientation
-  fsx-script/         Bounded read-only numeric RPN
+  fsx-script/         Bounded numeric RPN and model-local data
   fsx-model/          MDLX, scene graph, keys and visibility
   fsx-texture/        DDS and livery lookup
   fsx-vehicle/        Aircraft/AIR data, mass and contact definitions

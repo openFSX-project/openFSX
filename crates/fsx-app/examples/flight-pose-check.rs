@@ -13,48 +13,75 @@ use winit::keyboard::KeyCode;
 
 fn run() -> Result<(), String> {
     let mut args = std::env::args_os().skip(1);
-    let root = PathBuf::from(
-        args.next()
-            .ok_or("Usage: flight-pose-check <FSX installation> <new output directory>")?,
-    );
+    let root = PathBuf::from(args.next().ok_or(
+        "Usage: flight-pose-check <FSX installation> <new output directory> [--interior]",
+    )?);
     let output = PathBuf::from(args.next().ok_or("Expected new output directory")?);
+    let interior = match args.next() {
+        None => false,
+        Some(flag) if flag == "--interior" => true,
+        _ => return Err("Unexpected argument".into()),
+    };
     if args.next().is_some() {
         return Err("Unexpected argument".into());
     }
     let aircraft = Aircraft::load(&root.join("SimObjects/Airplanes/C172"), 0, true)?;
-    let model = Model::load(&aircraft.model)?;
-    let base = model.geometry(Some(150))?;
+    let model_path = if interior {
+        root.join("SimObjects/Airplanes/C172/model/cessna172sp_interior.mdl")
+    } else {
+        aircraft.model.clone()
+    };
+    let model = Model::load(&model_path)?;
+    let base = model.geometry(if interior { None } else { Some(150) })?;
+    let lod = base.lod;
     let appearance = Appearance::load(&model, &base, Some(&aircraft.texture))?;
     let mut orbit = Orbit::new(&base);
     orbit.distance = (orbit.distance / 1.6).clamp(orbit.radius * 1.1, orbit.radius * 30.);
+    if interior {
+        // Local stock-C172 validation camera. Eye derived from its observed
+        // CFG datum/eyepoint; aim is chosen to inspect the throttle, not to
+        // claim FSX default-view parity or a general cockpit camera system.
+        let eye = [-0.25908f32, 0.57912, -0.10668];
+        orbit.center = [0., -0.1, 0.5];
+        let delta = std::array::from_fn::<_, 3, _>(|i| eye[i] - orbit.center[i]);
+        orbit.radius = 0.6;
+        orbit.distance = delta.iter().map(|v| v * v).sum::<f32>().sqrt();
+        orbit.yaw = delta[0].atan2(delta[2]);
+        orbit.pitch = (delta[1] / orbit.distance).asin();
+        orbit.far = 50.;
+    }
     std::fs::create_dir(&output).map_err(|e| e.to_string())?;
     for (name, key) in [
         ("center", None),
         ("right", Some(KeyCode::KeyE)),
         ("left", Some(KeyCode::KeyQ)),
+        ("full-power", Some(KeyCode::F4)),
     ] {
+        if interior && matches!(key, Some(KeyCode::KeyQ | KeyCode::KeyE)) {
+            continue;
+        }
         let mut flight = desktop_flight::FlightSession::on_ground(aircraft.parameters.clone())?;
         let mut pose = flight_pose::FlightPose::new(&model);
         let mut geometry = pose
-            .update(&model, 150, &flight.simulation)?
+            .update(&model, lod, &flight.simulation)?
             .ok_or("Initial pose not produced")?;
         let initial = pose.frames().to_vec();
         if let Some(key) = key {
             flight.key(key, true);
         }
         flight.advance(fsx_sim::flight::STEP)?;
-        if let Some(next) = pose.update(&model, 150, &flight.simulation)? {
+        if let Some(next) = pose.update(&model, lod, &flight.simulation)? {
             geometry = next;
         }
         if key.is_some() && pose.frames() == initial {
-            return Err("Steering input did not change native animation frames".into());
+            return Err("Control input did not change native animation frames".into());
         }
         let frames = pose.frames().to_vec();
         let time = flight.simulation.time;
         flight.paused = true;
         flight.advance(1.)?;
         if flight.simulation.time != time
-            || pose.update(&model, 150, &flight.simulation)?.is_some()
+            || pose.update(&model, lod, &flight.simulation)?.is_some()
             || pose.frames() != frames
         {
             return Err("Paused simulation advanced visual state".into());
@@ -70,17 +97,34 @@ fn run() -> Result<(), String> {
                 .filter_map(|(i, v)| v.map(|v| (i, v)))
                 .collect::<Vec<_>>()
         );
+        println!(
+            "{name}: throttle {}, model-local position {:?}",
+            flight.simulation.controls.throttle,
+            pose.local_value("Engine1ThrottlePosition", "percent")
+                .ok_or("Stock C172 throttle did not publish its model-local position")?
+        );
         let gpu = block_on(Gpu::new(None, &geometry, &appearance, false, 960, 720))?;
-        gpu.snapshot(
-            &orbit,
-            &output.join(format!("c172-flight-steer-{name}.ppm")),
-        )?;
+        let prefix = if interior {
+            "c172-cockpit-throttle"
+        } else {
+            "c172-flight-steer"
+        };
+        gpu.snapshot(&orbit, &output.join(format!("{prefix}-{name}.ppm")))?;
+        let toggle = if flight.simulation.controls.throttle < 0.5 {
+            KeyCode::F4
+        } else {
+            KeyCode::F1
+        };
+        flight.key(toggle, true);
+        if pose.update(&model, lod, &flight.simulation)?.is_some() || pose.frames() != frames {
+            return Err("Paused input mutated model animation state".into());
+        }
         flight.reset()?;
-        if pose.update(&model, 150, &flight.simulation)?.is_none() || pose.frames() != initial {
+        if pose.update(&model, lod, &flight.simulation)?.is_none() || pose.frames() != initial {
             return Err("Reset did not reinitialize visual state".into());
         }
     }
-    println!("PASS: physical steering -> native pose -> GPU; pause/reset verified. Fixed model-space camera isolates deformation from aircraft motion. No FSX parity claim.");
+    println!("PASS: controller -> simulation -> native pose -> GPU; pause/reset verified. Fixed model-space camera isolates deformation from aircraft motion. No FSX parity claim.");
     Ok(())
 }
 fn main() -> std::process::ExitCode {

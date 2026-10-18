@@ -100,7 +100,7 @@ uses normalized XYZW quaternions and shortest-arc spherical interpolation;
 translation is linear. Native key deltas compose after the static local node
 matrix, then inherit parent transforms. Draw topology, texture coordinates and
 material selection stay fixed while positions, face normals and draw centers
-update. No original animation implementation is executed.
+update. No original animation DLL or native implementation is loaded.
 
 `--view front|rear` and `--zoom N` set a reproducible initial orbit camera.
 These options and `--animation` are for model inspection, not flight mode.
@@ -110,7 +110,9 @@ to capture a chosen pose without opening a window.
 
 Manual clip/frame selection is separate from flight animation. Direct Sim
 bindings expose variable, units, scale, bias and optional lag. Supported XAPC
-expressions use the bounded read-only interpreter. Flight currently supplies
+expressions use the bounded interpreter. Static inspection remains read-only;
+temporal animation also supports model-local numeric data and scratch registers.
+Flight currently supplies
 physical center-wheel steering, throttle lever position and on-ground state;
 unknown values remain unavailable. Control-surface percent mappings, RPM,
 Standard autoplay timing/randomization and skin deformation still require work.
@@ -139,13 +141,47 @@ cargo run --locked -p fsx-app --features viewer --example flight-pose-check -- .
 
 The output directory must be new. The check drives the shared flight keyboard
 controller directly, advances physics, evaluates the native animation, saves
-center/right/left P6 renders, and verifies pause/reset. It sends no OS input.
+center/right/left/full-power P6 renders, and verifies pause/reset. It sends no OS input.
 Its fixed model-space camera isolates deformation from aircraft translation.
 The tested C172 CFG has 22 degrees maximum center steering: controller values
 0 and +/-0.5 produce angles 0 and +/-11 degrees, or +/-12.222222 grads.
 Its native XAPC selects frames 200, 6.111111 and 193.88889. The two turning
 captures differ at 498 pixels within (342,469)..(368,502). This verifies the
 independent physics-to-rendering path, not FSX steering fidelity.
+
+## Model-local throttle expression and cockpit check
+
+The C172 throttle XAPC uses L: variables, s0/l0 scratch storage and a local
+write. Temporal evaluation now resolves it from the independent throttle state:
+idle selects native frame 50 and full power selects frame 0, with the same value
+stored in Engine1ThrottlePosition (percent). The exterior resolves two of 28
+groups; an exterior LOD-150 check showed no visible throttle pixel difference
+from the external camera. That result alone does not prove visible movement.
+
+For a direct view of the control, use the same controller-to-GPU check with the
+installed stock C172 interior model:
+
+```powershell
+cargo run --locked -p fsx-app --features viewer --example flight-pose-check -- ./FSX target/cockpit-throttle-check --interior
+```
+
+This local validation option selects cessna172sp_interior.mdl, its LOD 100
+(24,842 triangles, 55 scene nodes, 42 animation groups), and a fixed camera aimed
+at the throttle. Its eye [-0.25908, 0.57912, -0.10668] metres is derived from the
+observed stock C172 CFG datum/eyepoint; target [0, -0.1, 0.5] is chosen for this
+inspection, not FSX default-camera parity. One of 42 groups resolves. Seven of
+nine diffuse maps load (18 MiB decoded); dynamic $C172S_1/$C172S_2 panel surfaces
+are unavailable, so gauges remain blank. Interior flight selection, live gauges,
+panel interaction and a general CFG camera loader are not implemented by this
+example.
+
+The verified idle/full-power renders differ at 1,908 pixels confined to the
+throttle region (512,166)..(562,222). Pose and local values follow model code;
+pause holds state even if a power key changes the pending control, and reset
+reinitializes the local context. Program writes commit only on valid results.
+Registers are temporary; local values are shared between this instance's clips,
+with matching units required. Other-aircraft/gauge sharing and original-FSX
+timing, scope and control-position comparison remain unverified.
 
 ## Reference calibration
 

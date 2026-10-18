@@ -340,7 +340,7 @@ fn main() -> ExitCode {
                                 .as_ref()
                                 .map(|c| {
                                     format!(
-                                        "XAPC (lag {:?}; read-only subset only): {}",
+                                        "XAPC (lag {:?}; bounded model context): {}",
                                         c.lag,
                                         c.source.trim()
                                     )

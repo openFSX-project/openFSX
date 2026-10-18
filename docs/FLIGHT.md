@@ -10,8 +10,10 @@ The visual model now follows the physical center-wheel steering angle through
 its own animation binding. Q/E therefore changes both contact-force direction
 and the nose-wheel pose. Supported XAPS/XAPC targets can use model Lag limits
 on the simulation clock; pause holds the pose and reset initializes it again.
-The current visual adapter also exposes throttle lever position and on-ground
-state. It does not invent RPM or control-surface percent mappings. C172 steering
+The current visual adapter also drives the C172 throttle expression using
+instance-local numeric data and scratch registers, and exposes the on-ground
+state. A local interior-model check verified throttle movement; this does not
+add cockpit flight selection or working gauges. It does not invent RPM or control-surface percent mappings. C172 steering
 was checked from the shared keyboard controller through physics to offscreen GPU
 output; original-FSX motion and timing comparisons remain unverified. See the
 [viewer guide](VIEWER.md) for the reproducible local-content check.

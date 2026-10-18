@@ -143,3 +143,31 @@ The PNG files are lossless P6 GPU readback conversions without compositing or
 AI. These two captures now replace the earlier explicit +/-40-grads pair in
 the gallery; that historical inspection pair remains available with its
 provenance above. Intermediate neutral and other captures stay under target.
+
+
+## Model-local throttle and native cockpit geometry
+
+`c172-cockpit-throttle-idle.png` and `c172-cockpit-throttle-full-power.png` are
+960 x 720 GPU readbacks from openFSX on 18 October 2026, using the installed
+stock cessna172sp_interior.mdl, LOD 100 (24,842 triangles, 55 scene nodes).
+The `flight-pose-check --interior` example calls the shared flight controller
+without OS input, advances independent ground physics by 1/120 second and
+resolves native XAPC clip 17 from throttle values 0 and 1. Its model-local
+Engine1ThrottlePosition is 50 and 0 respectively; other unavailable groups
+retain their defaults. Pause, paused input and reset were also verified.
+
+The fixed validation camera eye is [-0.25908,0.57912,-0.10668] metres, derived
+from the observed stock C172 CFG reference datum and eyepoint. Its target is
+[0,-0.1,0.5], chosen to inspect the control rather than reproduce the FSX
+starting view. One of 42 groups resolves. Seven of nine diffuse textures load
+(18 MiB decoded). Dynamic $C172S_1/$C172S_2 gauge surfaces are unavailable and
+are visibly blank; gauges, cockpit flight selection and panel interaction
+are not implemented by this check. FSX global local-variable scope, timing
+and exact control-position parity remain unverified.
+
+Only 1,908 RGB pixels differ, within throttle bounds (512,166)..(562,222) on
+the tested Vulkan backend. Exterior LOD-150 and an earlier obstructed-camera
+check had no visible difference and are not published as throttle evidence.
+The PNGs are lossless P6 readback conversions, without compositing or AI.
+Aircraft artwork retains its respective owners' rights. The source models,
+textures and dynamic panel data are not included in this repository.

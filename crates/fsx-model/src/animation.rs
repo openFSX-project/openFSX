@@ -1,6 +1,6 @@
-//! Bounds-checked MDLX keys and a bounded, read-only animation expression subset.
+//! Bounds-checked MDLX keys and bounded expressions with optional model-local data.
 use fsx_geometry::{Mat4, IDENTITY};
-use fsx_script::{EvalError, Program};
+use fsx_script::{EvalError, LocalState, Program};
 use std::collections::BTreeMap;
 
 type Result<T> = std::result::Result<T, String>;
@@ -26,12 +26,13 @@ pub fn plan_pose(
     clips: &[Clip],
     lookup: impl FnMut(&str, &str) -> Option<f32>,
 ) -> Result<PosePlan> {
-    resolve_pose(clips, lookup, false)
+    resolve_pose(clips, lookup, false, None)
 }
 fn resolve_pose(
     clips: &[Clip],
     mut lookup: impl FnMut(&str, &str) -> Option<f32>,
     temporal: bool,
+    mut locals: Option<&mut LocalState>,
 ) -> Result<PosePlan> {
     let mut frames = Vec::with_capacity(clips.len());
     let mut status = Vec::with_capacity(clips.len());
@@ -55,21 +56,7 @@ fn resolve_pose(
             if !temporal && code.lag.is_some_and(|lag| lag > 0.) {
                 BindingStatus::StatefulLag
             } else {
-                match &code.program {
-                    Err(reason) => BindingStatus::UnsupportedCode(reason.clone()),
-                    Ok(program) => {
-                        match program.evaluate(|name, units| lookup(name, units).map(f64::from)) {
-                            Ok(value) if value.is_finite() && value.abs() <= f32::MAX as f64 => {
-                                BindingStatus::Applied((value as f32).clamp(0., clip.length))
-                            }
-                            Ok(_) => BindingStatus::InvalidCode(
-                                "Animation result exceeds finite f32 range".into(),
-                            ),
-                            Err(EvalError::Unavailable { .. }) => BindingStatus::Unavailable,
-                            Err(EvalError::Invalid(reason)) => BindingStatus::InvalidCode(reason),
-                        }
-                    }
-                }
+                code.resolve(clip.length, &mut lookup, locals.as_deref_mut())
             }
         } else {
             BindingStatus::NoDirectDriver
@@ -88,15 +75,20 @@ fn resolve_pose(
 /// Recreate this state when replacing the model or resetting simulation time.
 pub struct PoseState {
     frames: Vec<Option<f32>>,
+    locals: LocalState,
 }
 impl PoseState {
     pub fn new(clips: &[Clip]) -> Self {
         Self {
             frames: vec![None; clips.len()],
+            locals: LocalState::default(),
         }
     }
     pub fn frames(&self) -> &[Option<f32>] {
         &self.frames
+    }
+    pub fn locals(&self) -> &LocalState {
+        &self.locals
     }
     pub fn advance(
         &mut self,
@@ -107,7 +99,8 @@ impl PoseState {
         if !seconds.is_finite() || seconds < 0. || self.frames.len() != clips.len() {
             return Err("Invalid temporal pose step or changed clip catalog".into());
         }
-        let mut plan = resolve_pose(clips, lookup, true)?;
+        let mut locals = self.locals.clone();
+        let mut plan = resolve_pose(clips, lookup, true, Some(&mut locals))?;
         for (index, clip) in clips.iter().enumerate() {
             let lag = clip
                 .driver
@@ -133,6 +126,7 @@ impl PoseState {
             }
         }
         self.frames.clone_from(&plan.frames);
+        self.locals = locals;
         Ok(plan)
     }
 }
@@ -151,6 +145,45 @@ pub struct CodeDriver {
     pub lag: Option<f32>,
     program: std::result::Result<Program, String>,
 }
+impl CodeDriver {
+    fn resolve(
+        &self,
+        length: f32,
+        lookup: &mut impl FnMut(&str, &str) -> Option<f32>,
+        locals: Option<&mut LocalState>,
+    ) -> BindingStatus {
+        let program = match &self.program {
+            Ok(program) => program,
+            Err(reason) => return BindingStatus::UnsupportedCode(reason.clone()),
+        };
+        let mut staged = if program.needs_local_state() {
+            locals.as_deref().cloned()
+        } else {
+            None
+        };
+        let result = if program.needs_local_state() {
+            let Some(context) = &mut staged else {
+                return BindingStatus::UnsupportedCode(
+                    "Model-local state requires temporal evaluation".into(),
+                );
+            };
+            program.evaluate_with_locals(context, |name, units| lookup(name, units).map(f64::from))
+        } else {
+            program.evaluate(|name, units| lookup(name, units).map(f64::from))
+        };
+        match result {
+            Ok(value) if value.is_finite() && value.abs() <= f32::MAX as f64 => {
+                if let (Some(target), Some(staged)) = (locals, staged) {
+                    *target = staged;
+                }
+                BindingStatus::Applied((value as f32).clamp(0., length))
+            }
+            Ok(_) => BindingStatus::InvalidCode("Animation result exceeds finite f32 range".into()),
+            Err(EvalError::Unavailable { .. }) => BindingStatus::Unavailable,
+            Err(EvalError::Invalid(reason)) => BindingStatus::InvalidCode(reason),
+        }
+    }
+}
 fn code_driver(bytes: &[u8]) -> Result<CodeDriver> {
     if bytes.len() > 16 * 1024 + 1 {
         return Err("XAPC exceeds 16 KiB".into());
@@ -166,7 +199,7 @@ fn code_driver(bytes: &[u8]) -> Result<CodeDriver> {
     } else {
         (None, source.as_str())
     };
-    let program = Program::compile(code);
+    let program = Program::compile_with_locals(code);
     Ok(CodeDriver {
         source,
         lag,
@@ -723,6 +756,37 @@ pub(crate) mod tests {
         assert_eq!(
             fresh.advance(&clips, 0., |_, _| Some(10.)).unwrap().frames,
             vec![Some(10.)]
+        );
+    }
+    #[test]
+    fn temporal_model_locals_are_shared_in_clip_order_and_rollback_invalid_targets() {
+        let mut clips = parse(&fixture_driver(
+            b"XAPC",
+            b"(A:TEST INPUT, number) s0 2 * 1 + d (>L:TEST POSITION, number)\0",
+        ))
+        .unwrap();
+        clips.extend(parse(&fixture_driver(b"XAPC", b"(L:TEST POSITION, number) 1 +\0")).unwrap());
+        let mut state = PoseState::new(&clips);
+        assert_eq!(
+            state.advance(&clips, 0., |_, _| Some(2.)).unwrap().frames,
+            vec![Some(5.), Some(6.)]
+        );
+        assert_eq!(state.locals().get("TEST POSITION", "number"), Some(5.));
+        clips[0].code = Some(code_driver(b"9 (>L:TEST POSITION, number) 1e100\0").unwrap());
+        let plan = state.advance(&clips, 1., |_, _| None).unwrap();
+        assert!(matches!(plan.status[0], BindingStatus::InvalidCode(_)));
+        assert_eq!(plan.frames, vec![Some(5.), Some(6.)]);
+        assert_eq!(state.locals().get("TEST POSITION", "number"), Some(5.));
+        clips[0].code = Some(code_driver(b"8 d (>L:TEST POSITION, number)\0").unwrap());
+        clips[1].code.as_mut().unwrap().lag = Some(f32::NAN);
+        assert!(state.advance(&clips, 1., |_, _| None).is_err());
+        assert_eq!(state.frames(), &[Some(5.), Some(6.)]);
+        assert_eq!(state.locals().get("TEST POSITION", "number"), Some(5.));
+        assert_eq!(
+            PoseState::new(&clips)
+                .locals()
+                .get("TEST POSITION", "number"),
+            None
         );
     }
     #[test]

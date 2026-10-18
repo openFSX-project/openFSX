@@ -57,10 +57,11 @@ followed by zero padding. XANL holds XANI groups: GUID bytes, float length,
 a 16-byte type field and a terminated parameter string, then packed children.
 XAPS contains terminated variable/units/scale/bias/optional-lag fields. XAPC
 contains a terminated expression with an optional #lag# prefix. A bounded,
-read-only numeric RPN subset evaluates supported A-variable expressions into
-authored frame positions; results clamp to the clip length. Unknown syntax,
-local variables, writes, missing values and invalid results keep the clip in
-bind pose with diagnostics in static inspection. The temporal PoseState API
+numeric RPN subset evaluates supported A-variable expressions into authored
+frame positions; results clamp to the clip length. Static inspection stays
+read-only. Temporal animation can additionally read/write caller-owned L: data
+and use s0..s49, sp0..sp49 and l0..l49 scratch registers. Unknown syntax, missing
+values and invalid results retain diagnostics. The temporal PoseState API
 limits movement to Lag keyframes per simulation second for both XAPS and XAPC.
 Its first available target initializes immediately; unavailable targets hold
 the previous known pose and retain the failure diagnostic. Recreate state on
@@ -89,6 +90,23 @@ synthetic fixtures. The [Prepar3D modeling SDK](https://www.prepar3d.com/SDKv3/L
 explains variable scaling/bias and lag semantics; reading those fields does
 not establish an implemented SimVar or gauge system. See the
 [viewer guide](VIEWER.md) for supported inspection and its evidence.
+
+Model-local contexts are limited to 512 named finite numeric values. Names and
+unit strings are case-insensitive ASCII, bounded to 256 and 64 characters.
+First successful references initialize to zero. A variable retains its first
+unit string; mismatched-unit access is unavailable rather than silently
+converting. Registers start uninitialized on each evaluation; reads before a
+store fail explicitly. Stores sN retain the stack value; spN and >L: consume it.
+Exactly one finite result is required. Failed expressions, invalid animation
+targets and failed temporal steps do not commit local writes.
+
+The [SDK local-variable description](https://prepar3d.com/SDKv6/sdk/references/variables/local_variables.html)
+describes shared L: scope. The current context is shared only between a visual
+instance's Sim clips with tracks, in file order, and is cleared on simulation
+reset. Shared XML-gauge/panel scope, cross-model lifetime and full unit conversion
+remain unimplemented. The [Microsoft RPN operator reference](https://docs.flightsimulator.com/html/Additional_Information/Reverse_Polish_Notation.htm)
+documents register stack behavior; this is not a complete FSX execution contract.
+No A: writes, events, native calls, gauge DLLs, loops or strings are supported.
 
 ## MDLX visibility subset
 

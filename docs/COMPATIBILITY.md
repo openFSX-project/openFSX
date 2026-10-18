@@ -11,7 +11,8 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | aircraft.cfg | Partial | Variant references, geometry, station payload, full usable Avgas loading, loaded CG/inertia tensor and engine/control parameters; explicit encoding |
 | MDLX | Partial | Packed chunks, VERT, INDE, PART, LOD, static TRAN/AMAP/SCEN |
 | Native viewer | Experimental | Diffuse textured geometry, approximate alpha blending; manual native-key inspection |
-| MDLX animation keys | Initial runtime binding subset | ANIB/XANI/XANS/XANK and SGAL; XAPS/read-only XAPC, simulation-clock Lag limits and automatic center-wheel steering; control-surface percent mappings, RPM, Standard autoplay and full FSX timing remain unverified or unimplemented |
+| MDLX animation keys | Initial runtime binding subset | ANIB/XANI/XANS/XANK and SGAL; XAPS/XAPC, bounded instance-local data/registers, simulation-clock Lag and automatic center steering/throttle; control-surface percent mappings, RPM, Standard autoplay and full FSX timing remain unverified or unimplemented |
+| C172 interior geometry | Local offscreen validation | LOD 100 geometry and seven diffuse maps; idle/full-power throttle movement verified; dynamic gauges, cockpit flight selection and panel interaction remain unimplemented |
 | MDLX visibility | Initial read-only subset | VISL VISS/VINS/VISC/VINC and SGVL; numeric RPN, A-variable lookup and inherited draw masks; unsupported or unavailable conditions use encoded defaults |
 | Skinned MDLX parts | Omitted with a count | No bone deformation |
 | MDL8, MDL9, P3D | Unsupported | Explicit format error |
@@ -23,7 +24,7 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | Wheel contact | Initial subset | Three fixed wheels, flat-plane springs/dampers and regularized friction; non-wheel contacts omitted, no landing-performance validation |
 | Flight overlay | Optional --debug-hud | Live TAS, local height/heading, vertical speed, commands, attitude and status; independent of FSX gauges |
 | BGL / scenery | Not implemented | No airport or terrain runtime |
-| XML gauges | Not implemented | Numeric read-only RPN is used for model visibility only; no gauge XML loader, local variables, events or writes |
+| XML gauges | Not implemented | Numeric model expressions support bounded local animation data, not a gauge XML loader or shared panel-variable contract; no host events, SimVar writes or native gauge execution |
 | DLL / GAU / SimConnect | Not implemented | Native ABI/API research required |
 | Original-FSX measurement tool | Initial live acquisition | Separate x86 reader under tools/fsx-reference; loaded local C172 returned 87 valid packets over five seconds and 35 over two seconds; actual user-object ID bound after validation; control calibration and an openFSX SimConnect server remain unimplemented |
 | Passive reference screenshots | openFSX menu verified | Independent Windows Graphics Capture utility under tools/fsx-capture; 1024x738 menu and native 3D preview captured with foreground unchanged and no activation, restoration or input; original-FSX cockpit still unverified |

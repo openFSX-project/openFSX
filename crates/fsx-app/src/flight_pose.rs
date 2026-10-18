@@ -41,6 +41,9 @@ impl FlightPose {
     pub fn frames(&self) -> &[Option<f32>] {
         self.state.frames()
     }
+    pub fn local_value(&self, name: &str, units: &str) -> Option<f64> {
+        self.state.locals().get(name, units)
+    }
     pub fn new(model: &Model) -> Self {
         Self {
             state: PoseState::new(&model.animations),
@@ -56,6 +59,11 @@ impl FlightPose {
     ) -> Result<Option<Geometry>, String> {
         if !sim.time.is_finite() || sim.time < 0. {
             return Err("Invalid animation simulation time".into());
+        }
+        // Stateful expressions run once per changed simulation timestamp, not
+        // once per OS redraw. Paused redraws must not mutate model locals.
+        if self.time == Some(sim.time) {
+            return Ok(None);
         }
         if self.time.is_some_and(|time| sim.time < time) {
             self.state = PoseState::new(&model.animations);
@@ -75,6 +83,9 @@ impl FlightPose {
         let changed =
             previous != plan.frames || self.visibility.as_ref() != Some(&visibility.nodes);
         if initializing {
+            if let Some(value) = self.local_value("Engine1ThrottlePosition", "percent") {
+                println!("Model-local Engine1ThrottlePosition: {value:.4} percent");
+            }
             println!(
                 "Flight pose: {}/{} animation groups resolved from independent simulation state",
                 plan.frames.iter().filter(|f| f.is_some()).count(),
