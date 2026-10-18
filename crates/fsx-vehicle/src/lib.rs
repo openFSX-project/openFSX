@@ -1,6 +1,7 @@
 //! FSX aircraft configuration, AIR data, loading and contact definitions.
 pub mod air;
 pub mod aircraft;
+pub mod gauge;
 pub mod ground;
 pub mod mass;
 pub mod panel;

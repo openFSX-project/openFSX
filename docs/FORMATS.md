@@ -166,6 +166,54 @@ views, XML/CAB gauges, native DLL/GAU callbacks and panel interaction are not ye
 implemented. The parser does not execute or extract installed gauge code. Tests
 use original synthetic declarations; installed panel configurations remain local.
 
+## Native gauge metadata subset
+
+`fsx-vehicle::gauge` treats a native DLL/GAU file as bytes. It resolves the PE32
+Linkage export and preferred-image pointers to file-backed data; it never maps
+the library into the process, applies relocations, resolves imports or calls code.
+Only x86 PE32 images and the shared header prefix for gauge versions 800, 900 and
+1000 are supported. Other versions and PE32+ fail explicitly.
+
+Each header references one root-pointer variable. An element's next-element
+field references a null-terminated child-pointer array. The reader preserves
+authored child order and records type, resource ID, position and image flags;
+cycles fail, while shared elements are indexed once per gauge. Repeated Linkage
+entries pointing to the same header are retained. Name lookup is ASCII
+case-insensitive and rejects ambiguous names pointing to distinct headers.
+Null encoded roots remain empty rather than fabricating runtime-generated data.
+
+PE resources retain type/name/language identity, including UTF-16 named keys and
+code-page metadata. Resource access returns the exact indexed file slice without
+automatic locale fallback or writing extracted files. Type 2 identifies bitmap
+resources, whose payloads are DIB data rather than complete .bmp files. Bitmap
+decoding, transparency, element transforms, callbacks, failure systems, native
+variable access and drawing remain unimplemented in the gauge runtime.
+
+Limits are 64 MiB per file, 96 non-overlapping sections, 8192 export entries,
+512 gauge headers, 2048 distinct elements and 8192 graph edges per gauge, 65536
+elements per library, 8192 resource leaves and 32768 resource-directory entries.
+Name limits are 256 bytes for gauge/export names and 256 UTF-16 units for resource
+keys. Truncated/overlapping ranges, unbacked virtual zero-fill, forwarded Linkage
+exports, malformed ordinals, graph cycles and shared/overdeep resource directories
+fail explicitly. Windows-1252 gauge-name decoding requires the explicit option.
+
+The [Microsoft PE specification](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format)
+documents export/resource structures. The installed FSX header declarations and
+the [gauge API reference](https://www.prepar3d.org/SDKv4/sdk/panels_and_user_interface/gauges/references/gauges.html)
+describe the gauge metadata layout. These facts do not establish native ABI or
+rendering compatibility. Tests construct original non-executable PE containers;
+no installed DLL, header, sample source or bitmap is included.
+
+Reproduce the local C172 configuration/library cross-check without running FSX:
+
+```powershell
+cargo run -- inspect-gauges "./FSX/Gauges/Cessna172.dll" --windows-1252
+cargo run --locked -p fsx-check --example native-panel-check -- "./FSX"
+```
+
+The example uses the explicit installation's stock C172 and Gauges folder. It is
+not a general add-on module search-order implementation.
+
 ## MDLX visibility subset
 
 VISL contains packed VISS/VINS/VISC/VINC string chunks, bounded to 16 KiB per

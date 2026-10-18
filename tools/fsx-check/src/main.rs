@@ -40,6 +40,48 @@ fn titles(text: &str) -> Vec<String> {
 use fsx_cfg::decode;
 use fsx_sim::AircraftDynamics;
 
+fn gauge_report(path: &Path, windows_1252: bool) -> Result<(), String> {
+    use fsx_vehicle::gauge::{GaugeLibrary, ResourceKey};
+    let library = GaugeLibrary::load(path, windows_1252)?;
+    println!(
+        "{}: {} native gauges, {} resource leaves",
+        path.display(),
+        library.gauges.len(),
+        library.resources.len()
+    );
+    for gauge in &library.gauges {
+        let mut kinds = std::collections::BTreeMap::new();
+        let mut bitmap_ids = std::collections::BTreeSet::new();
+        for element in &gauge.elements {
+            *kinds.entry(element.kind).or_insert(0usize) += 1;
+            if element.resource_id > 0
+                && library.resources.iter().any(|r| {
+                    r.kind == ResourceKey::Id(2)
+                        && r.name == ResourceKey::Id(element.resource_id as u32)
+                })
+            {
+                bitmap_ids.insert(element.resource_id);
+            }
+        }
+        println!(
+            "  {} (version {}) | size_mm {:?} | {} roots | {} elements {:?} | {} referenced bitmap IDs",
+            gauge.name,
+            gauge.version,
+            gauge.size_mm,
+            gauge.roots.len(),
+            gauge.elements.len(),
+            kinds,
+            bitmap_ids.len()
+        );
+    }
+    println!("Element kinds: 0 static image, 1 needle, 2 string, 3 slider, 4 icon, 5 moving image, 6 sprite. Unknown IDs remain metadata.");
+    for (kind, count) in library.resource_counts() {
+        println!("Resource type {kind:?}: {count} localized leaves");
+    }
+    println!("Read-only metadata and resource bytes; no DLL loading, callbacks, rendering or FSX process required.");
+    Ok(())
+}
+
 fn panel_report(folder: &Path, windows_1252: bool) -> Result<(), String> {
     use fsx_vehicle::{
         aircraft::VisualAircraft,
@@ -361,6 +403,17 @@ fn inspect(root: &Path, windows_1252: bool) -> Result<(), String> {
 fn main() -> ExitCode {
     let args: Vec<_> = env::args_os().skip(1).collect();
     if (args.len() == 2 || (args.len() == 3 && args[2] == "--windows-1252"))
+        && args[0] == "inspect-gauges"
+    {
+        return match gauge_report(Path::new(&args[1]), args.len() == 3) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("Error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if (args.len() == 2 || (args.len() == 3 && args[2] == "--windows-1252"))
         && args[0] == "inspect-panel"
     {
         return match panel_report(Path::new(&args[1]), args.len() == 3) {
@@ -456,7 +509,7 @@ fn main() -> ExitCode {
     if !(args.len() == 2 || (args.len() == 3 && args[2] == "--windows-1252"))
         || args[0] != "inspect"
     {
-        eprintln!("Usage:\n  openfsx inspect <FSX folder> [--windows-1252]\n  openfsx inspect-model <model.mdl>\n  openfsx inspect-panel <aircraft folder> [--windows-1252]\n  openfsx inspect-aircraft <aircraft folder> [--windows-1252]\n  openfsx flight-check <aircraft folder> [--windows-1252]\n  openfsx takeoff-check <aircraft folder> [--windows-1252]\nFor the experimental model viewer, build package fsx-app with --features viewer (binary openfsx-viewer).");
+        eprintln!("Usage:\n  openfsx inspect <FSX folder> [--windows-1252]\n  openfsx inspect-model <model.mdl>\n  openfsx inspect-gauges <library.dll> [--windows-1252]\n  openfsx inspect-panel <aircraft folder> [--windows-1252]\n  openfsx inspect-aircraft <aircraft folder> [--windows-1252]\n  openfsx flight-check <aircraft folder> [--windows-1252]\n  openfsx takeoff-check <aircraft folder> [--windows-1252]\nFor the experimental model viewer, build package fsx-app with --features viewer (binary openfsx-viewer).");
         return ExitCode::from(2);
     }
     match inspect(Path::new(&args[1]), args.len() == 3) {

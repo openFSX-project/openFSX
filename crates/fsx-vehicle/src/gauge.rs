@@ -1,0 +1,688 @@
+//! Read-only PE32 / FS800-1000 gauge metadata. Never maps or executes a DLL.
+use fsx_cfg::decode;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    io::Read,
+    ops::Range,
+    path::Path,
+};
+
+type Result<T> = std::result::Result<T, String>;
+const MAX_FILE: usize = 64 * 1024 * 1024;
+const MAX_TABLE: u32 = 8192;
+const MAX_GAUGES: usize = 512;
+const MAX_ELEMENTS: usize = 2048;
+const MAX_TOTAL_ELEMENTS: usize = 65536;
+const MAX_RESOURCES: usize = 8192;
+
+fn bytes(b: &[u8], offset: usize, size: usize) -> Result<&[u8]> {
+    let end = offset.checked_add(size).ok_or("PE offset overflow")?;
+    b.get(offset..end).ok_or_else(|| "Truncated PE data".into())
+}
+fn u16_at(b: &[u8], offset: usize) -> Result<u16> {
+    Ok(u16::from_le_bytes(bytes(b, offset, 2)?.try_into().unwrap()))
+}
+fn u32_at(b: &[u8], offset: usize) -> Result<u32> {
+    Ok(u32::from_le_bytes(bytes(b, offset, 4)?.try_into().unwrap()))
+}
+fn plus(a: u32, b: u32) -> Result<u32> {
+    a.checked_add(b).ok_or_else(|| "PE address overflow".into())
+}
+
+#[derive(Debug)]
+struct Section {
+    rva: u32,
+    raw: Range<usize>,
+    mapped: u32,
+}
+struct Pe<'a> {
+    data: &'a [u8],
+    base: u32,
+    headers: u32,
+    sections: Vec<Section>,
+    exports: (u32, u32),
+    resources: (u32, u32),
+}
+impl<'a> Pe<'a> {
+    fn parse(data: &'a [u8]) -> Result<Self> {
+        if data.len() > MAX_FILE || bytes(data, 0, 2)? != b"MZ" {
+            return Err("Expected a PE32 gauge file within 64 MiB".into());
+        }
+        let pe = u32_at(data, 0x3c)? as usize;
+        if bytes(data, pe, 4)? != b"PE\0\0" || u16_at(data, pe + 4)? != 0x14c {
+            return Err("Only x86 PE32 gauge images are supported".into());
+        }
+        let count = u16_at(data, pe + 6)? as usize;
+        let optional_size = u16_at(data, pe + 20)? as usize;
+        let opt = pe.checked_add(24).ok_or("PE offset overflow")?;
+        let optional = bytes(data, opt, optional_size)?;
+        if count == 0
+            || count > 96
+            || optional_size < 120
+            || u16_at(optional, 0)? != 0x10b
+            || u32_at(optional, 92)? < 3
+        {
+            return Err("Invalid or unsupported PE32 optional header / section count".into());
+        }
+        let headers = u32_at(optional, 60)?;
+        let image_size = u32_at(optional, 56)?;
+        let base = u32_at(optional, 28)?;
+        plus(base, image_size)?;
+        let table = opt + optional_size;
+        bytes(data, 0, headers as usize)?;
+        if (headers as usize) < table + count * 40 || headers > image_size {
+            return Err("Invalid PE header extent".into());
+        }
+        let mut sections: Vec<Section> = Vec::new();
+        for i in 0..count {
+            let p = table + i * 40;
+            let virtual_size = u32_at(data, p + 8)?;
+            let rva = u32_at(data, p + 12)?;
+            let raw_size = u32_at(data, p + 16)?;
+            let raw_start = u32_at(data, p + 20)? as usize;
+            let mapped = virtual_size.max(raw_size);
+            let end = plus(rva, mapped)?;
+            let raw_end = raw_start
+                .checked_add(raw_size as usize)
+                .ok_or("PE offset overflow")?;
+            bytes(data, raw_start, raw_size as usize)?;
+            if mapped != 0 && (rva < headers || end > image_size)
+                || raw_size != 0 && raw_start < headers as usize
+                || sections.iter().any(|s| {
+                    mapped != 0 && s.mapped != 0 && rva < s.rva + s.mapped && s.rva < end
+                        || raw_size != 0
+                            && !s.raw.is_empty()
+                            && raw_start < s.raw.end
+                            && s.raw.start < raw_end
+                })
+            {
+                return Err("Overlapping or out-of-image PE sections".into());
+            }
+            sections.push(Section {
+                rva,
+                raw: raw_start..raw_end,
+                mapped,
+            });
+        }
+        Ok(Self {
+            data,
+            base,
+            headers,
+            sections,
+            exports: (u32_at(optional, 96)?, u32_at(optional, 100)?),
+            resources: (u32_at(optional, 112)?, u32_at(optional, 116)?),
+        })
+    }
+    fn range(&self, rva: u32, size: usize) -> Result<Range<usize>> {
+        let size_u32 = u32::try_from(size).map_err(|_| "PE range too large")?;
+        let end = plus(rva, size_u32)?;
+        if end <= self.headers {
+            return Ok(rva as usize..end as usize);
+        }
+        for section in &self.sections {
+            if rva >= section.rva {
+                let delta = (rva - section.rva) as usize;
+                if delta
+                    .checked_add(size)
+                    .is_some_and(|end| end <= section.raw.len())
+                {
+                    let start = section.raw.start + delta;
+                    return Ok(start..start + size);
+                }
+            }
+        }
+        Err("PE RVA is not wholly backed by one file section".into())
+    }
+    fn slice(&self, rva: u32, size: usize) -> Result<&'a [u8]> {
+        Ok(&self.data[self.range(rva, size)?])
+    }
+    fn word(&self, rva: u32) -> Result<u32> {
+        u32_at(self.slice(rva, 4)?, 0)
+    }
+    fn pointer_rva(&self, pointer: u32) -> Result<u32> {
+        pointer
+            .checked_sub(self.base)
+            .filter(|r| *r != 0)
+            .ok_or_else(|| {
+                format!(
+                    "Invalid gauge image pointer {pointer:#x} (base {:#x})",
+                    self.base
+                )
+            })
+    }
+    fn string_bytes(&self, rva: u32) -> Result<Vec<u8>> {
+        let mut result = Vec::new();
+        for i in 0..=256 {
+            let value = self.slice(plus(rva, i)?, 1)?[0];
+            if value == 0 {
+                return Ok(result);
+            }
+            if value < 32 || value == 127 {
+                return Err("Control byte in gauge name".into());
+            }
+            result.push(value);
+        }
+        Err("Gauge name exceeds 256 bytes or is unterminated".into())
+    }
+    fn linkage(&self) -> Result<u32> {
+        let (rva, size) = self.exports;
+        if rva == 0 || size < 40 {
+            return Err("Gauge library has no export directory".into());
+        }
+        let directory = self.slice(rva, 40)?;
+        let end = plus(rva, size)?;
+        let functions = u32_at(directory, 20)?;
+        let names = u32_at(directory, 24)?;
+        if functions == 0 || functions > MAX_TABLE || names > MAX_TABLE {
+            return Err("PE export table count exceeds limit".into());
+        }
+        let addresses = self.slice(u32_at(directory, 28)?, functions as usize * 4)?;
+        let pointers = self.slice(u32_at(directory, 32)?, names as usize * 4)?;
+        let ordinals = self.slice(u32_at(directory, 36)?, names as usize * 2)?;
+        let mut found = None;
+        for i in 0..names as usize {
+            let ordinal = u16_at(ordinals, i * 2)? as usize;
+            if ordinal >= functions as usize {
+                return Err("PE export ordinal exceeds address table".into());
+            }
+            if self.string_bytes(u32_at(pointers, i * 4)?)? == b"Linkage" {
+                let address = u32_at(addresses, ordinal * 4)?;
+                if address == 0
+                    || (address >= rva && address < end)
+                    || found.replace(address).is_some()
+                {
+                    return Err("Null, forwarded or duplicate Linkage export".into());
+                }
+            }
+        }
+        found.ok_or_else(|| "Gauge library does not export Linkage".into())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ResourceKey {
+    Id(u32),
+    Name(String),
+}
+#[derive(Debug, Clone)]
+pub struct Resource {
+    pub kind: ResourceKey,
+    pub name: ResourceKey,
+    pub language: ResourceKey,
+    pub code_page: u32,
+    range: Range<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Element {
+    /// Address within the preferred image, expressed as an RVA, never callable.
+    pub rva: u32,
+    pub kind: u32,
+    pub resource_id: i32,
+    pub position: [i32; 2],
+    pub image_flags: u32,
+    /// Child element RVAs in the authored list order.
+    pub children: Vec<u32>,
+}
+#[derive(Debug, Clone)]
+pub struct Gauge {
+    pub rva: u32,
+    pub name: String,
+    pub version: u32,
+    pub size_mm: [u32; 2],
+    pub roots: Vec<u32>,
+    pub elements: Vec<Element>,
+}
+#[derive(Debug)]
+pub struct GaugeLibrary {
+    data: Vec<u8>,
+    pub gauges: Vec<Gauge>,
+    pub resources: Vec<Resource>,
+}
+
+fn pointer_list(pe: &Pe<'_>, mut rva: u32, limit: usize) -> Result<Vec<u32>> {
+    let mut result = Vec::new();
+    for _ in 0..=limit {
+        let pointer = pe.word(rva)?;
+        if pointer == 0 {
+            return Ok(result);
+        }
+        if result.len() == limit {
+            break;
+        }
+        result.push(pe.pointer_rva(pointer)?);
+        rva = plus(rva, 4)?;
+    }
+    Err("Unterminated or oversized gauge pointer list".into())
+}
+
+fn elements(pe: &Pe<'_>, roots: &[u32]) -> Result<Vec<Element>> {
+    let mut output = Vec::new();
+    let mut active = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    let mut stack: Vec<_> = roots.iter().rev().map(|r| (*r, false)).collect();
+    let mut edges = roots.len();
+    while let Some((rva, leave)) = stack.pop() {
+        if leave {
+            active.remove(&rva);
+            continue;
+        }
+        if active.contains(&rva) {
+            return Err("Cycle in gauge element graph".into());
+        }
+        if !seen.insert(rva) {
+            continue;
+        }
+        if output.len() >= MAX_ELEMENTS {
+            return Err("Gauge exceeds 2048 distinct elements".into());
+        }
+        let b = pe.slice(rva, 60)?;
+        let next = u32_at(b, 40)?;
+        let children = if next == 0 {
+            Vec::new()
+        } else {
+            pointer_list(pe, pe.pointer_rva(next)?, MAX_ELEMENTS)?
+        };
+        edges += children.len();
+        if edges > MAX_ELEMENTS * 4 {
+            return Err("Gauge element edge budget exceeded".into());
+        }
+        active.insert(rva);
+        stack.push((rva, true));
+        stack.extend(children.iter().rev().map(|child| (*child, false)));
+        output.push(Element {
+            rva,
+            kind: u32_at(b, 0)?,
+            resource_id: u32_at(b, 4)? as i32,
+            position: [u32_at(b, 8)? as i32, u32_at(b, 12)? as i32],
+            image_flags: u32_at(b, 48)?,
+            children,
+        });
+    }
+    Ok(output)
+}
+
+fn resources(pe: &Pe<'_>) -> Result<Vec<Resource>> {
+    let (base, size) = pe.resources;
+    if base == 0 && size == 0 {
+        return Ok(Vec::new());
+    }
+    if base == 0 || size < 16 {
+        return Err("Invalid PE resource directory extent".into());
+    }
+    let directory = pe.slice(base, size as usize)?;
+    let mut output = Vec::new();
+    let mut stack = vec![(0usize, Vec::<ResourceKey>::new())];
+    let mut directories = BTreeSet::new();
+    let mut paths = BTreeSet::new();
+    let mut entry_budget = 0;
+    while let Some((offset, path)) = stack.pop() {
+        if path.len() >= 3 || !directories.insert(offset) {
+            return Err("Cyclic, shared or overdeep PE resource directory".into());
+        }
+        let header = bytes(directory, offset, 16)?;
+        let count = u16_at(header, 12)? as usize + u16_at(header, 14)? as usize;
+        entry_budget += count;
+        if entry_budget > MAX_RESOURCES * 4 {
+            return Err("PE resource entry budget exceeded".into());
+        }
+        let entries = bytes(directory, offset + 16, count * 8)?;
+        for i in 0..count {
+            let name = u32_at(entries, i * 8)?;
+            let key = if name & 0x80000000 == 0 {
+                ResourceKey::Id(name)
+            } else {
+                let p = (name & 0x7fffffff) as usize;
+                let count = u16_at(directory, p)? as usize;
+                if count > 256 {
+                    return Err("PE resource name exceeds 256 UTF-16 units".into());
+                }
+                let units = bytes(directory, p + 2, count * 2)?
+                    .chunks_exact(2)
+                    .map(|s| u16::from_le_bytes([s[0], s[1]]))
+                    .collect::<Vec<_>>();
+                ResourceKey::Name(
+                    String::from_utf16(&units).map_err(|_| "Invalid resource UTF-16")?,
+                )
+            };
+            let mut path = path.clone();
+            path.push(key);
+            let target = u32_at(entries, i * 8 + 4)?;
+            if target & 0x80000000 != 0 {
+                stack.push(((target & 0x7fffffff) as usize, path));
+                if stack.len() > MAX_RESOURCES {
+                    return Err("PE resource directory budget exceeded".into());
+                }
+            } else {
+                if path.len() != 3 || output.len() >= MAX_RESOURCES || !paths.insert(path.clone()) {
+                    return Err("Invalid depth, duplicate or excessive PE resource leaf".into());
+                }
+                let leaf = bytes(directory, target as usize, 16)?;
+                let range = pe.range(u32_at(leaf, 0)?, u32_at(leaf, 4)? as usize)?;
+                output.push(Resource {
+                    kind: path[0].clone(),
+                    name: path[1].clone(),
+                    language: path[2].clone(),
+                    code_page: u32_at(leaf, 8)?,
+                    range,
+                });
+            }
+        }
+    }
+    output.sort_by(|a, b| (&a.kind, &a.name, &a.language).cmp(&(&b.kind, &b.name, &b.language)));
+    Ok(output)
+}
+
+impl GaugeLibrary {
+    pub fn load(path: &Path, windows_1252: bool) -> Result<Self> {
+        let mut data = Vec::new();
+        fs::File::open(path)
+            .and_then(|f| f.take((MAX_FILE + 1) as u64).read_to_end(&mut data))
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        Self::parse(data, windows_1252)
+    }
+    pub fn parse(data: Vec<u8>, windows_1252: bool) -> Result<Self> {
+        let pe = Pe::parse(&data)?;
+        let linkage = pe.linkage()?;
+        pe.slice(linkage, 24)?;
+        let headers = pointer_list(&pe, plus(linkage, 24)?, MAX_GAUGES)?;
+        let mut gauges = Vec::new();
+        let mut total_elements = 0;
+        for rva in headers {
+            let header = pe.slice(rva, 52)?;
+            let version = u32_at(header, 0)?;
+            if ![800, 900, 1000].contains(&version) {
+                return Err(format!(
+                    "Unsupported gauge header version {version}; expected FS800, FS900 or FS1000"
+                ));
+            }
+            let name = decode(
+                &pe.string_bytes(pe.pointer_rva(u32_at(header, 4)?)?)?,
+                windows_1252,
+            )?;
+            if name.is_empty() {
+                return Err(format!("Empty gauge name at RVA {rva:#x}"));
+            }
+            let list = u32_at(header, 8)?;
+            let roots = if list == 0 {
+                Vec::new()
+            } else {
+                // GAUGEHDR points to one root-pointer variable, not a terminated array.
+                let root = pe.word(pe.pointer_rva(list)?)?;
+                if root == 0 {
+                    Vec::new()
+                } else {
+                    vec![pe.pointer_rva(root)?]
+                }
+            };
+            let elements = elements(&pe, &roots).map_err(|e| format!("Gauge {name}: {e}"))?;
+            total_elements += elements.len();
+            if total_elements > MAX_TOTAL_ELEMENTS {
+                return Err("Library exceeds total element budget".into());
+            }
+            gauges.push(Gauge {
+                rva,
+                name,
+                version,
+                size_mm: [u32_at(header, 44)?, u32_at(header, 48)?],
+                roots,
+                elements,
+            });
+        }
+        let resources = resources(&pe)?;
+        Ok(Self {
+            data,
+            gauges,
+            resources,
+        })
+    }
+    pub fn gauge(&self, name: &str) -> Result<&Gauge> {
+        let mut matches = self
+            .gauges
+            .iter()
+            .filter(|g| g.name.eq_ignore_ascii_case(name));
+        let first = matches
+            .next()
+            .ok_or_else(|| format!("No native gauge named {name}"))?;
+        if matches.any(|g| g.rva != first.rva) {
+            return Err(format!(
+                "Ambiguous native gauge name {name}: distinct headers"
+            ));
+        }
+        Ok(first)
+    }
+    /// Exact resource identity, including language. No implicit locale fallback.
+    pub fn resource(&self, kind: u32, id: u32, language: u32) -> Option<&Resource> {
+        self.resources.iter().find(|r| {
+            r.kind == ResourceKey::Id(kind)
+                && r.name == ResourceKey::Id(id)
+                && r.language == ResourceKey::Id(language)
+        })
+    }
+    pub fn resource_bytes(&self, resource: &Resource) -> Result<&[u8]> {
+        // Require an indexed descriptor with matching identity and range, not bounds alone.
+        let own = self.resources.iter().any(|r| {
+            r.kind == resource.kind
+                && r.name == resource.name
+                && r.language == resource.language
+                && r.range == resource.range
+                && r.code_page == resource.code_page
+        });
+        if !own {
+            return Err("Resource descriptor is not indexed by this library".into());
+        }
+        self.data
+            .get(resource.range.clone())
+            .ok_or_else(|| "Resource range is invalid".into())
+    }
+    pub fn resource_counts(&self) -> BTreeMap<ResourceKey, usize> {
+        let mut counts = BTreeMap::new();
+        for r in &self.resources {
+            *counts.entry(r.kind.clone()).or_default() += 1;
+        }
+        counts
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const BASE: u32 = 0x400000;
+    fn put16(b: &mut [u8], p: usize, v: u16) {
+        b[p..p + 2].copy_from_slice(&v.to_le_bytes());
+    }
+    fn put32(b: &mut [u8], p: usize, v: u32) {
+        b[p..p + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    fn at(rva: u32) -> usize {
+        (rva - 0x1000 + 0x200) as usize
+    }
+    fn rword(b: &mut [u8], rva: u32, v: u32) {
+        put32(b, at(rva), v);
+    }
+    // An original, non-executable synthetic PE container. No compiler/SDK/game fixture.
+    fn fixture() -> Vec<u8> {
+        let mut b = vec![0; 0x1200];
+        b[..2].copy_from_slice(b"MZ");
+        put32(&mut b, 0x3c, 0x80);
+        b[0x80..0x84].copy_from_slice(b"PE\0\0");
+        put16(&mut b, 0x84, 0x14c);
+        put16(&mut b, 0x86, 1);
+        put16(&mut b, 0x94, 224);
+        let opt = 0x98;
+        put16(&mut b, opt, 0x10b);
+        put32(&mut b, opt + 28, BASE);
+        put32(&mut b, opt + 56, 0x2000);
+        put32(&mut b, opt + 60, 0x200);
+        put32(&mut b, opt + 92, 16);
+        put32(&mut b, opt + 96, 0x1000);
+        put32(&mut b, opt + 100, 0x100);
+        put32(&mut b, opt + 112, 0x1700);
+        put32(&mut b, opt + 116, 0x200);
+        let section = opt + 224;
+        for (p, v) in [(8, 0x1000), (12, 0x1000), (16, 0x1000), (20, 0x200)] {
+            put32(&mut b, section + p, v);
+        }
+        for (rva, v) in [
+            (0x1014, 1),
+            (0x1018, 1),
+            (0x101c, 0x1060),
+            (0x1020, 0x1040),
+            (0x1024, 0x1050),
+            (0x1040, 0x1070),
+            (0x1060, 0x1100),
+            (0x1118, BASE + 0x1200),
+            (0x1200, 800),
+            (0x1204, BASE + 0x1300),
+            (0x1208, BASE + 0x1320),
+            (0x122c, 100),
+            (0x1320, BASE + 0x1400),
+            (0x1324, 1), // adjacent data is not a second root or array terminator
+            (0x1404, 101),
+            (0x1408, 2),
+            (0x140c, 3),
+            (0x1428, BASE + 0x1450),
+            (0x1430, 1),
+            (0x1450, BASE + 0x1500),
+            (0x1500, 1),
+            (0x1504, 102),
+            (0x1508, u32::MAX - 1),
+            (0x150c, 4),
+            (0x1710, 2),
+            (0x1714, 0x80000020),
+            (0x1730, 101),
+            (0x1734, 0x80000040),
+            (0x1750, 1033),
+            (0x1754, 0x60),
+            (0x1760, 0x1900),
+            (0x1764, 4),
+            (0x1768, 1252),
+        ] {
+            rword(&mut b, rva, v);
+        }
+        for rva in [0x170e, 0x172e, 0x174e] {
+            put16(&mut b, at(rva), 1);
+        }
+        b[at(0x1070)..at(0x1070) + 8].copy_from_slice(b"Linkage\0");
+        b[at(0x1300)..at(0x1300) + 9].copy_from_slice(b"Own Dial\0");
+        b[at(0x1900)..at(0x1900) + 4].copy_from_slice(b"OWN!");
+        b
+    }
+    #[test]
+    fn catalog_graph_and_exact_localized_resource_data() {
+        let lib = GaugeLibrary::parse(fixture(), false).unwrap();
+        assert_eq!(lib.gauges.len(), 1);
+        let gauge = lib.gauge("oWn dIaL").unwrap();
+        assert_eq!(gauge.version, 800);
+        assert_eq!(gauge.size_mm, [100, 0]);
+        assert_eq!(gauge.roots, [0x1400]);
+        assert_eq!(gauge.elements.len(), 2);
+        assert_eq!(gauge.elements[0].children, [0x1500]);
+        assert_eq!(gauge.elements[0].position, [2, 3]);
+        assert_eq!(gauge.elements[0].image_flags, 1);
+        assert_eq!(gauge.elements[1].position, [-2, 4]);
+        assert_eq!(gauge.elements[1].kind, 1);
+        assert_eq!(gauge.elements[1].resource_id, 102);
+        let bitmap = lib.resource(2, 101, 1033).unwrap();
+        assert_eq!(bitmap.code_page, 1252);
+        assert_eq!(lib.resource_bytes(bitmap).unwrap(), b"OWN!");
+        assert!(lib.resource(2, 101, 0).is_none());
+        assert_eq!(lib.resource_counts().get(&ResourceKey::Id(2)), Some(&1));
+    }
+    #[test]
+    fn every_truncation_is_an_error_without_a_panic() {
+        let b = fixture();
+        for length in 0..b.len() {
+            assert!(
+                GaugeLibrary::parse(b[..length].to_vec(), false).is_err(),
+                "length {length}"
+            );
+        }
+        assert!(GaugeLibrary::parse(vec![0; MAX_FILE + 1], false).is_err());
+    }
+    #[test]
+    fn checked_addresses_versions_graphs_exports_and_resource_depth() {
+        for (rva, value) in [
+            (0x1014, MAX_TABLE + 1),
+            (0x1040, u32::MAX),
+            (0x1060, 0x1070),
+            (0x1118, BASE - 1),
+            (0x1200, 1234),
+            (0x1208, u32::MAX),
+            (0x1450, BASE + 0x1400), // cycle through the static image's child list
+            (0x1714, 0x80000000),    // recursive resource root
+            (0x1734, 0x60),          // leaf at name level rather than language level
+            (0x1754, 0x80000060),
+            (0x1760, u32::MAX),
+            (0x1764, u32::MAX),
+        ] {
+            let mut b = fixture();
+            rword(&mut b, rva, value);
+            assert!(
+                GaugeLibrary::parse(b, false).is_err(),
+                "RVA {rva:x}, value {value:x}"
+            );
+        }
+        let mut b = fixture();
+        put16(&mut b, at(0x1050), 1);
+        assert!(GaugeLibrary::parse(b, false).is_err());
+        let mut b = fixture();
+        put16(&mut b, 0x84, 0x8664);
+        assert!(GaugeLibrary::parse(b, false).is_err());
+        let mut b = fixture();
+        put16(&mut b, 0x86, 2);
+        let section = b[0x178..0x1a0].to_vec();
+        b[0x1a0..0x1c8].copy_from_slice(&section);
+        assert!(GaugeLibrary::parse(b, false).is_err());
+    }
+    #[test]
+    fn named_resource_keys_and_explicit_legacy_gauge_encoding() {
+        let mut b = fixture();
+        rword(&mut b, 0x1730, 0x80000080);
+        put16(&mut b, at(0x1780), 3);
+        for (i, c) in "Own".encode_utf16().enumerate() {
+            put16(&mut b, at(0x1782) + i * 2, c);
+        }
+        b[at(0x1300)] = 0xe9;
+        assert!(GaugeLibrary::parse(b.clone(), false).is_err());
+        let lib = GaugeLibrary::parse(b, true).unwrap();
+        assert_eq!(lib.gauges[0].name, "éwn Dial");
+        assert_eq!(lib.resources[0].name, ResourceKey::Name("Own".into()));
+        assert_eq!(lib.resource_bytes(&lib.resources[0]).unwrap(), b"OWN!");
+    }
+    #[test]
+    fn common_header_prefixes_and_runtime_only_data_are_distinguished() {
+        for version in [800, 900, 1000] {
+            let mut b = fixture();
+            rword(&mut b, 0x1200, version);
+            let lib = GaugeLibrary::parse(b, false).unwrap();
+            assert_eq!(lib.gauges[0].version, version);
+            assert_eq!(lib.gauges[0].elements.len(), 2);
+        }
+        let mut b = fixture();
+        rword(&mut b, 0x1208, 0); // owner-drawn/runtime-generated gauge, no encoded root
+        assert!(GaugeLibrary::parse(b, false).unwrap().gauges[0]
+            .elements
+            .is_empty());
+        let mut b = fixture();
+        put32(&mut b, 0x98 + 56, 0x3000);
+        put32(&mut b, 0x178 + 8, 0x2000); // virtual zero-fill beyond the file-backed range
+        rword(&mut b, 0x1208, BASE + 0x2100);
+        assert!(GaugeLibrary::parse(b, false).is_err());
+    }
+    #[test]
+    fn repeated_header_aliases_resolve_but_distinct_same_name_headers_are_ambiguous() {
+        let mut b = fixture();
+        rword(&mut b, 0x111c, BASE + 0x1200);
+        let library = GaugeLibrary::parse(b.clone(), false).unwrap();
+        assert_eq!(library.gauges.len(), 2);
+        assert_eq!(library.gauge("Own Dial").unwrap().rva, 0x1200);
+        assert!(library.gauge("Missing").is_err());
+        let header = b[at(0x1200)..at(0x1200) + 52].to_vec();
+        b[at(0x1260)..at(0x1260) + 52].copy_from_slice(&header);
+        rword(&mut b, 0x111c, BASE + 0x1260);
+        let library = GaugeLibrary::parse(b, false).unwrap();
+        assert!(library.gauge("Own Dial").is_err());
+    }
+}

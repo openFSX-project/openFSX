@@ -36,6 +36,9 @@ cargo run -- inspect-model "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.md
 # Inspect panel placements and native-interior texture bindings (variant 0).
 cargo run -- inspect-panel "./FSX/SimObjects/Airplanes/C172" --windows-1252
 
+# Inspect a native gauge library as data; no DLL loading or execution.
+cargo run -- inspect-gauges "./FSX/Gauges/Cessna172.dll" --windows-1252
+
 # Open the experimental native viewer.
 cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1"
 
