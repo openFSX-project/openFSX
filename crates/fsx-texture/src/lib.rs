@@ -1,10 +1,12 @@
-//! Read-only DDS decoding and texture.cfg fallback lookup.
+//! Read-only DDS/bitmap decoding and texture.cfg fallback lookup.
 //! Only the top mip of ordinary 2D DXT1/3/5 or masked 32-bit RGB DDS is decoded.
 use std::{
     collections::{BTreeMap, HashSet, VecDeque},
     fs,
+    io::Read,
     path::{Path, PathBuf},
 };
+mod bitmap;
 
 type Result<T> = std::result::Result<T, String>;
 const MAX_FILE: u64 = 256 * 1024 * 1024;
@@ -15,6 +17,17 @@ pub struct Image {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+}
+
+fn read_image(path: &Path) -> Result<Vec<u8>> {
+    let mut data = Vec::new();
+    fs::File::open(path)
+        .and_then(|f| f.take(MAX_FILE + 1).read_to_end(&mut data))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if data.len() as u64 > MAX_FILE {
+        return Err("Image exceeds the 256 MiB file limit".into());
+    }
+    Ok(data)
 }
 
 fn word(b: &[u8], offset: usize) -> Result<u32> {
@@ -70,10 +83,18 @@ fn alpha_bc3(b: &[u8]) -> [u8; 16] {
 
 impl Image {
     pub fn load_dds(path: &Path) -> Result<Self> {
-        if fs::metadata(path).map_err(|e| e.to_string())?.len() > MAX_FILE {
-            return Err("DDS exceeds the 256 MiB file limit".into());
+        Self::dds(&read_image(path)?)
+    }
+    /// Detect an ordinary DDS or BMP file by signature, never by extension.
+    pub fn load(path: &Path) -> Result<Self> {
+        let data = read_image(path)?;
+        if data.starts_with(b"DDS ") {
+            Self::dds(&data)
+        } else if data.starts_with(b"BM") {
+            Self::bmp(&data)
+        } else {
+            Err("Expected a supported DDS or BMP image".into())
         }
-        Self::dds(&fs::read(path).map_err(|e| e.to_string())?)
     }
     pub fn dds(b: &[u8]) -> Result<Self> {
         if b.len() < 128 || &b[..4] != b"DDS " || word(b, 4)? != 124 || word(b, 76)? != 32 {

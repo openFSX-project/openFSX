@@ -212,3 +212,29 @@ right-handed projection; the native menu-window capture remains historical.
 The published PNGs are lossless P6 conversions, without compositing or AI.
 Aircraft artwork retains its respective owners' rights. Models, textures,
 original configuration files and dynamic panel resources are not distributed.
+
+## Static native panel artwork inspection
+
+c172-panel-static-artwork.png is a 960x720 direct GPU readback from the separate
+panel-artwork-check example on 18 October 2026. The original C172 interior uses
+its configured eye point and a downward inspection view. All 1,022 bitmap
+resources in the five referenced native gauge DLLs and seven ordinary panel
+BMP files decoded successfully. Language 1033 selected 28 static root images,
+composed onto the configured 512x512 $C172s_1/$C172s_2 textures before GPU upload.
+The same camera, geometry and GPU device render the before/after comparison.
+The panel replacement changes 60,090 pixels, within (276,119)..(846,492).
+Two independent runs produced byte-identical final PNGs (SHA-256
+220c1f6c0084c8f516c607888660bbdde934a37305f2c8b3136b874187a73c83).
+
+The image is an artwork inspection: 108 other native elements are omitted;
+needles, moving faces, digital values, callbacks, native variables, day/night
+blending and the XML registration plaque are unimplemented. Default flight
+mode does not load these panel previews. Static black-key composition and
+approximate viewer lighting do not establish FSX rasterization parity.
+The raw bitmap resources, generated panel atlases and before/after intermediates
+remain under ignored target; only this selected engine screenshot is published.
+
+```powershell
+cargo run --locked -p fsx-render --example panel-artwork-check -- ./FSX target/panel-artwork-02 1033
+node scripts/ppm-to-png.mjs target/panel-artwork-02/c172-panel-static-artwork.ppm target/panel-artwork-02/c172-panel-static-artwork.png
+```

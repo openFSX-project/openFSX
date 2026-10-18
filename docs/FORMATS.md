@@ -166,6 +166,35 @@ views, XML/CAB gauges, native DLL/GAU callbacks and panel interaction are not ye
 implemented. The parser does not execute or extract installed gauge code. Tests
 use original synthetic declarations; installed panel configurations remain local.
 
+## Windows bitmap subset
+
+`Image::dib` reads a packed native RT_BITMAP payload; `Image::bmp` additionally
+reads the 14-byte file header and explicit pixel offset. Supported data uses a
+40-byte BITMAPINFOHEADER, one plane, BI_RGB and 4/8/24 bits per pixel. Indexed
+images use BGR-reserved palette entries, with biClrUsed or the full bit-depth
+palette when zero. Reserved bytes remain opaque rather than becoming alpha.
+Four-bit pixels use the high nibble first; unused nibbles and DWORD row padding
+are skipped. Positive heights read bottom-up, negative heights top-down.
+
+Dimensions are bounded to 4096, files to 256 MiB and palettes to 256 entries.
+Missing palette indices, overlapping BMP offsets, truncated rows and invalid
+declared extents fail. BMP file trailers outside bfSize are ignored. BI_RGB
+biSizeImage may be zero; otherwise it must cover the required rows and fit in
+the payload. RLE, bitfields, 1/16/32-bit pixels, extended headers, alpha and color
+profiles remain unsupported. The [Windows bitmap reference](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapinfoheader)
+documents these structures; the implementation uses no GDI calls.
+
+`fsx-render::panel::static_roots` is an explicit artwork-inspection compositor.
+It requires VC panel and gauge dimensions, exact resource language, zero-origin
+static roots and supported flags. It maps CFG rectangles into panel pixels,
+clips without stretching, samples source pixels by nearest neighbor and applies
+RGB-black transparency when root image flag bit 0 is set. Mask, alpha, hidden,
+no-stretch and no-translation roots are diagnosed instead of guessed. Other
+elements are counted but omitted. Native update callbacks, conditional visibility,
+day/night/luminous blending and FSX sampling/placement parity are unimplemented.
+The result can be bound to one unambiguous model texture slot before GPU upload;
+dimension, RGBA length and total appearance memory budgets are checked.
+
 ## Native gauge metadata subset
 
 `fsx-vehicle::gauge` treats a native DLL/GAU file as bytes. It resolves the PE32
@@ -186,8 +215,9 @@ PE resources retain type/name/language identity, including UTF-16 named keys and
 code-page metadata. Resource access returns the exact indexed file slice without
 automatic locale fallback or writing extracted files. Type 2 identifies bitmap
 resources, whose payloads are DIB data rather than complete .bmp files. Bitmap
-decoding, transparency, element transforms, callbacks, failure systems, native
-variable access and drawing remain unimplemented in the gauge runtime.
+decoding is implemented for the subset above. The separate static root preview
+does not implement moving element transforms, callbacks, failure systems, native
+variable access or operational gauge drawing.
 
 Limits are 64 MiB per file, 96 non-overlapping sections, 8192 export entries,
 512 gauge headers, 2048 distinct elements and 8192 graph edges per gauge, 65536

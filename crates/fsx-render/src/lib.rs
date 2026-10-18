@@ -11,6 +11,7 @@ use std::{
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 pub mod hud;
+pub mod panel;
 // GPU initialization and map_async don't need a general-purpose async runtime.
 pub fn block_on<T>(future: impl Future<Output = T>) -> T {
     struct ThreadWake(std::thread::Thread);
@@ -39,8 +40,44 @@ fn bytes(values: impl IntoIterator<Item = f32>) -> Vec<u8> {
 pub struct Appearance {
     materials: Vec<Material>,
     images: Vec<Option<Image>>,
+    texture_names: Vec<String>,
 }
 impl Appearance {
+    /// Supply a generated texture for an exact model texture slot before GPU upload.
+    pub fn bind_image(&mut self, name: &str, image: Image) -> Result<(), String> {
+        if image.width == 0
+            || image.height == 0
+            || image.width > texture::MAX_DIMENSION
+            || image.height > texture::MAX_DIMENSION
+            || image.rgba.len() != image.width as usize * image.height as usize * 4
+        {
+            return Err("Invalid generated texture dimensions or RGBA length".into());
+        }
+        let matches: Vec<_> = self
+            .texture_names
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.eq_ignore_ascii_case(name))
+            .map(|(i, _)| i)
+            .collect();
+        if matches.len() != 1 || self.images.len() != self.texture_names.len() {
+            return Err(format!("Expected one model texture slot for {name}"));
+        }
+        let index = matches[0];
+        let memory: usize = self
+            .images
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != index)
+            .filter_map(|(_, v)| v.as_ref())
+            .map(|v| v.rgba.len())
+            .sum();
+        if memory + image.rgba.len() > 256 * 1024 * 1024 {
+            return Err("Generated texture exceeds appearance memory budget".into());
+        }
+        self.images[index] = Some(image);
+        Ok(())
+    }
     pub fn load(model: &Model, geometry: &Geometry, folder: Option<&Path>) -> Result<Self, String> {
         let mut images: Vec<Option<Image>> = (0..model.textures.len()).map(|_| None).collect();
         let mut used = std::collections::BTreeSet::new();
@@ -56,7 +93,7 @@ impl Appearance {
                 let name = &model.textures[index];
                 let result = texture::find(folder, name).and_then(|path| {
                     let path = path.ok_or_else(|| format!("Texture not found: {name}"))?;
-                    let image = Image::load_dds(&path)?;
+                    let image = Image::load(&path)?;
                     println!("Texture: {name} {}x{}", image.width, image.height);
                     Ok(image)
                 });
@@ -85,6 +122,7 @@ impl Appearance {
         Ok(Self {
             materials: model.materials.clone(),
             images,
+            texture_names: model.textures.clone(),
         })
     }
 }
@@ -995,6 +1033,33 @@ impl Gpu {
 #[cfg(test)]
 mod camera_tests {
     use super::*;
+    #[test]
+    fn generated_texture_binding_is_case_insensitive_checked_and_transactional() {
+        let mut appearance = Appearance {
+            materials: Vec::new(),
+            images: vec![None],
+            texture_names: vec!["$Own".into()],
+        };
+        let image = || Image {
+            width: 1,
+            height: 1,
+            rgba: vec![1, 2, 3, 255],
+        };
+        appearance.bind_image("$OWN", image()).unwrap();
+        assert_eq!(appearance.images[0].as_ref().unwrap().rgba, [1, 2, 3, 255]);
+        assert!(appearance.bind_image("$Missing", image()).is_err());
+        assert!(appearance
+            .bind_image(
+                "$Own",
+                Image {
+                    width: 1,
+                    height: 1,
+                    rgba: vec![0; 3]
+                }
+            )
+            .is_err());
+        assert_eq!(appearance.images[0].as_ref().unwrap().rgba, [1, 2, 3, 255]);
+    }
     #[test]
     fn attached_up_vector_rotates_the_screen_basis_and_rejects_degenerate_views() {
         let camera = Camera::new([0.; 3], [0., 0., -1.], [1., 0., 0.], 0.01, 20000., 45.).unwrap();

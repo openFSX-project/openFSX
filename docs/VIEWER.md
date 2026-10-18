@@ -1,6 +1,6 @@
 # Model viewer
 
-The native viewer reads FSX MDLX geometry and diffuse DDS textures directly. It is a development tool, not a simulator or a converter.
+The native viewer reads FSX MDLX geometry and supported diffuse DDS/BMP textures directly. It is a development tool, not a simulator or a converter.
 
 The same executable also has an experimental --fly mode with an aircraft-folder argument. Its keyboard bindings and simulation behavior differ from orbit inspection: see the [flight guide](FLIGHT.md).
 
@@ -20,7 +20,27 @@ Use --texture-dir to choose a livery directory. Without it the viewer looks for 
 
 The selected directory takes precedence over its texture.cfg fallbacks, visited in numeric order. Case-insensitive ASCII file lookup handles MDLX uppercase names on case-sensitive filesystems. Cycles are ignored and search is limited to 64 directories. No file in the installation is modified.
 
-The decoder supports the top mip of ordinary 2D DXT1, DXT3, DXT5 and masked 32-bit RGB DDS. Dimensions are limited to 4096, input files to 256 MiB, and the total selected diffuse textures to 256 MiB decoded. Cubemaps, volumes, DX10 formats, BMP and other compression variants are rejected with a diagnostic. Missing textures use material-color fallback. Generated registration decals are not available as ordinary DDS files and remain unsupported.
+The decoder supports the top mip of ordinary 2D DXT1, DXT3, DXT5 and masked 32-bit RGB DDS, plus 4/8/24-bit uncompressed BITMAPINFOHEADER BMP files. DDS/BMP selection uses the file signature. Dimensions are limited to 4096, input files to 256 MiB, and the total selected diffuse textures to 256 MiB decoded. Cubemaps, volumes, DX10 formats, compressed/extended BMP variants and other compression variants are rejected with a diagnostic. Missing textures use material-color fallback. Generated registration decals are not available as ordinary DDS files and remain unsupported.
+
+## Static panel artwork inspection
+
+This separate offscreen example decodes the stock C172 gauge-library bitmap
+resources and binds the static root images to the configured interior textures.
+It does not run native callbacks, draw needles/moving layers/digital values or
+change the default flight view's blank gauges. Use a new output directory and
+the exact resource language ID (1033 in the checked installation):
+
+```powershell
+cargo run --locked -p fsx-render --example panel-artwork-check -- "./FSX" target/panel-artwork-01 1033
+```
+
+The check decodes all 1,022 bitmap resources from the five native libraries used
+by the C172 VC, plus seven BMP files in its panel folder. It renders 28 static
+root images through the two 512x512 panel textures, with the XML registration
+plaque reported unsupported. Before/after 960x720 snapshots use the same camera,
+geometry and GPU device. This is unlit source-artwork composition followed by
+the viewer's approximate material lighting, not operational instruments or
+verified FSX panel rasterization. Raw panel atlases stay under ignored target.
 
 ## Controls
 
