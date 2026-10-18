@@ -295,6 +295,7 @@ fn run() -> Result<(), String> {
     if path == Path::new("--help") || path == Path::new("-h") {
         println!("openfsx-viewer <model.mdl> [--lod N] [--texture-dir folder | --no-textures]\nopenfsx-viewer <aircraft folder> --fly [--ground] [--variant N] [--windows-1252] [--lod N]\nWindows menu: openfsx-viewer <FSX installation> --menu\nAnimation inspector: --animation N [--frame N] (use inspect-model for IDs; [ / ] scrub)\nRecorded pose: --reference-pose sample.ndjson [--reference-sample N] (inspection only)\nOrbit camera: --view front|rear --zoom N (0.1..10)\nOptional: --debug-hud (experimental telemetry); --snapshot output.ppm [--seconds N, flight only, 0..300]\nFlight keys: Down/Up pull/push; Left/Right bank; Q/E rudder; PageUp/PageDown throttle; F1 idle; F4 full power; B parking brake; Space wheel brakes; Home/End trim; P pause; R reset; Esc close.");
         println!("Visibility inspector: repeat --visibility-var NAME#units#value (explicit values; no flight override)");
+        println!("Pose inspector: repeat --pose-var NAME#units#value (XAPS/read-only XAPC; no flight override)");
         return Ok(());
     }
     let (mut lod, mut snapshot) = (None, None);
@@ -310,11 +311,17 @@ fn run() -> Result<(), String> {
     let mut reference_path = None;
     let mut reference_index = None;
     let mut visibility_values: Vec<(String, String, f64)> = Vec::new();
+    let mut pose_values: Vec<(String, String, f64)> = Vec::new();
     while let Some(arg) = args.next() {
         match arg.to_str() {
-            Some("--visibility-var") => {
-                if visibility_values.len() >= 128 {
-                    return Err("At most 128 visibility variables are accepted".into());
+            Some("--visibility-var" | "--pose-var") => {
+                let values = if arg == "--pose-var" {
+                    &mut pose_values
+                } else {
+                    &mut visibility_values
+                };
+                if values.len() >= 128 {
+                    return Err("At most 128 variables per inspection option are accepted".into());
                 }
                 let text = args
                     .next()
@@ -322,22 +329,24 @@ fn run() -> Result<(), String> {
                     .ok_or("Expected NAME#units#value")?;
                 let fields = text.split('#').collect::<Vec<_>>();
                 if fields.len() != 3 || fields[0].trim().is_empty() || fields[1].trim().is_empty() {
-                    return Err("--visibility-var expects NAME#units#value".into());
+                    return Err("Inspection variable expects NAME#units#value".into());
                 }
                 let value: f64 = fields[2]
                     .trim()
                     .parse()
-                    .map_err(|_| "Invalid visibility number")?;
-                if !value.is_finite() {
-                    return Err("Visibility values must be finite".into());
+                    .map_err(|_| "Invalid inspection number")?;
+                if !value.is_finite() || (arg == "--pose-var" && value.abs() > f32::MAX as f64) {
+                    return Err(
+                        "Inspection values must be finite and within the supported range".into(),
+                    );
                 }
                 let (name, units) = (fields[0].trim().to_owned(), fields[1].trim().to_owned());
-                if visibility_values.iter().any(|(n, u, _)| {
+                if values.iter().any(|(n, u, _)| {
                     n.eq_ignore_ascii_case(&name) && u.eq_ignore_ascii_case(&units)
                 }) {
-                    return Err("Duplicate visibility variable and units".into());
+                    return Err("Duplicate inspection variable and units".into());
                 }
-                visibility_values.push((name, units, value));
+                values.push((name, units, value));
             }
             Some("--reference-pose") => {
                 reference_path = Some(PathBuf::from(
@@ -441,6 +450,7 @@ fn run() -> Result<(), String> {
             || reference_path.is_some()
             || reference_index.is_some()
             || !visibility_values.is_empty()
+            || !pose_values.is_empty()
         {
             return Err("--menu takes an FSX installation path and cannot be combined with renderer options".into());
         }
@@ -464,6 +474,13 @@ fn run() -> Result<(), String> {
     if fly && !visibility_values.is_empty() {
         return Err("--visibility-var is an inspection option, not a flight-state override".into());
     }
+    if !pose_values.is_empty()
+        && (fly || reference_path.is_some() || animation.is_some() || frame.is_some())
+    {
+        return Err(
+            "--pose-var cannot be combined with flight, recorded poses or manual animation".into(),
+        );
+    }
     let model_path = aircraft
         .as_ref()
         .map(|a| a.model.as_path())
@@ -479,7 +496,26 @@ fn run() -> Result<(), String> {
         );
     }
     let mut reference_label = None;
-    let reference_plan = if let Some(path) = &reference_path {
+    let reference_plan = if !pose_values.is_empty() {
+        let plan = fsx_model::animation::plan_pose(&model.animations, |name, units| {
+            pose_values
+                .iter()
+                .find(|(n, u, _)| n.eq_ignore_ascii_case(name) && u.eq_ignore_ascii_case(units))
+                .map(|(_, _, v)| *v as f32)
+        })?;
+        let applied = plan.frames.iter().filter(|f| f.is_some()).count();
+        if applied == 0 {
+            return Err("No supplied variables drive supported stateless animation tracks".into());
+        }
+        println!("Explicit inspection pose: {applied}/{} animation groups; values are user-supplied, not simulator measurements", plan.frames.len());
+        for (i, status) in plan.status.iter().enumerate() {
+            println!("  Clip {i}: {status:?}");
+        }
+        reference_label = Some(format!(
+            "openFSX Explicit inspection pose | {applied} groups | Esc close"
+        ));
+        Some(plan)
+    } else if let Some(path) = &reference_path {
         let index = reference_index.unwrap_or(0);
         let sample = reference_pose::Sample::load(path, index)?;
         let plan = fsx_model::animation::plan_pose(&model.animations, |name, units| {
@@ -487,13 +523,13 @@ fn run() -> Result<(), String> {
         })?;
         let applied = plan.frames.iter().filter(|f| f.is_some()).count();
         if applied == 0 {
-            return Err("No available reference variables drive this model's direct, stateless animation tracks".into());
+            return Err("No available reference variables drive this model's supported stateless animation tracks".into());
         }
         println!(
             "Reference pose: declared source {} | sample {} | elapsed {:.3} s | aircraft {:?}",
             sample.source, index, sample.elapsed, sample.title
         );
-        println!("Applied {applied}/{} animation groups. Other clips remain in bind pose; code, visibility and temporal lag are not evaluated.",plan.frames.len());
+        println!("Applied {applied}/{} animation groups. Other clips remain in bind pose; unsupported code, visibility and temporal lag are not evaluated.",plan.frames.len());
         for (i, status) in plan.status.iter().enumerate() {
             println!("  Clip {i}: {status:?}");
         }
@@ -582,7 +618,7 @@ fn run() -> Result<(), String> {
         model.animated_nodes,
         geometry.skipped_skinned_parts
     );
-    println!("Preview limitations: diffuse DDS only; approximate alpha blending; no skinning; read-only visibility subset with encoded defaults for unavailable conditions. Keys are evaluated only for explicit clip selection or supported reference bindings.");
+    println!("Preview limitations: diffuse DDS only; approximate alpha blending; no skinning; read-only visibility subset with encoded defaults for unavailable conditions. Keys are evaluated for explicit clips, supported inspection variables or recorded poses.");
     if let Some(index) = animation {
         println!(
             "Manual animation {index}: frame {frame} / {} | use [ / ] to scrub by five frames",

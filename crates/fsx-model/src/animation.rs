@@ -1,5 +1,6 @@
-//! Bounds-checked MDLX animation keys. No executable code or gauge VM is run.
+//! Bounds-checked MDLX keys and a bounded, read-only animation expression subset.
 use fsx_geometry::{Mat4, IDENTITY};
+use fsx_script::{EvalError, Program};
 use std::collections::BTreeMap;
 
 type Result<T> = std::result::Result<T, String>;
@@ -8,6 +9,8 @@ pub enum BindingStatus {
     Applied(f32),
     NotSim,
     NoDirectDriver,
+    UnsupportedCode(String),
+    InvalidCode(String),
     NoTracks,
     StatefulLag,
     Unavailable,
@@ -26,6 +29,9 @@ pub fn plan_pose(
     let mut frames = Vec::with_capacity(clips.len());
     let mut status = Vec::with_capacity(clips.len());
     for clip in clips {
+        if !clip.length.is_finite() || clip.length < 0. {
+            return Err("Invalid animation clip length".into());
+        }
         let state = if clip.kind != "Sim" {
             BindingStatus::NotSim
         } else if clip.tracks.is_empty() {
@@ -37,6 +43,26 @@ pub fn plan_pose(
                 BindingStatus::Applied(driver.frame(value, clip.length)?)
             } else {
                 BindingStatus::Unavailable
+            }
+        } else if let Some(code) = &clip.code {
+            if code.lag.is_some_and(|lag| lag > 0.) {
+                BindingStatus::StatefulLag
+            } else {
+                match &code.program {
+                    Err(reason) => BindingStatus::UnsupportedCode(reason.clone()),
+                    Ok(program) => {
+                        match program.evaluate(|name, units| lookup(name, units).map(f64::from)) {
+                            Ok(value) if value.is_finite() && value.abs() <= f32::MAX as f64 => {
+                                BindingStatus::Applied((value as f32).clamp(0., clip.length))
+                            }
+                            Ok(_) => BindingStatus::InvalidCode(
+                                "Animation result exceeds finite f32 range".into(),
+                            ),
+                            Err(EvalError::Unavailable { .. }) => BindingStatus::Unavailable,
+                            Err(EvalError::Invalid(reason)) => BindingStatus::InvalidCode(reason),
+                        }
+                    }
+                }
             }
         } else {
             BindingStatus::NoDirectDriver
@@ -56,7 +82,36 @@ pub struct Clip {
     pub kind: String,
     pub parameters: String,
     pub driver: Option<Driver>,
+    pub code: Option<CodeDriver>,
     tracks: BTreeMap<u32, Channels>,
+}
+#[derive(Debug)]
+pub struct CodeDriver {
+    pub source: String,
+    pub lag: Option<f32>,
+    program: std::result::Result<Program, String>,
+}
+fn code_driver(bytes: &[u8]) -> Result<CodeDriver> {
+    if bytes.len() > 16 * 1024 + 1 {
+        return Err("XAPC exceeds 16 KiB".into());
+    }
+    let source = string(bytes)?;
+    let (lag, code) = if let Some(rest) = source.strip_prefix('#') {
+        let (number, code) = rest.split_once('#').ok_or("Invalid XAPC lag prefix")?;
+        let lag: f32 = number.parse().map_err(|_| "Invalid XAPC lag")?;
+        if !lag.is_finite() || lag < 0. {
+            return Err("Invalid XAPC lag".into());
+        }
+        (Some(lag), code)
+    } else {
+        (None, source.as_str())
+    };
+    let program = Program::compile(code);
+    Ok(CodeDriver {
+        source,
+        lag,
+        program,
+    })
 }
 #[derive(Debug)]
 pub struct Driver {
@@ -197,6 +252,7 @@ pub fn parse(b: &[u8]) -> Result<Vec<Clip>> {
     }
     let mut clips = Vec::new();
     let mut key_count = 0usize;
+    let mut code_instructions = 0usize;
     for (tag, body) in chunks(list.ok_or("Missing XANL")?)? {
         if &tag != b"XANI" {
             continue;
@@ -221,14 +277,29 @@ pub fn parse(b: &[u8]) -> Result<Vec<Clip>> {
             kind,
             parameters,
             driver: None,
+            code: None,
             tracks: BTreeMap::new(),
         };
         for (tag, track) in chunks(&body[param_end..])? {
             if &tag == b"XAPS" {
-                if clip.driver.is_some() {
-                    return Err("Duplicate XAPS driver".into());
+                if clip.driver.is_some() || clip.code.is_some() {
+                    return Err("Duplicate animation driver".into());
                 }
                 clip.driver = Some(driver(track)?);
+                continue;
+            }
+            if &tag == b"XAPC" {
+                if clip.driver.is_some() || clip.code.is_some() {
+                    return Err("Duplicate animation driver".into());
+                }
+                let code = code_driver(track)?;
+                if let Ok(program) = &code.program {
+                    code_instructions += program.instruction_count();
+                    if code_instructions > 262144 {
+                        return Err("ANIB exceeds the total 262144-instruction budget".into());
+                    }
+                }
+                clip.code = Some(code);
                 continue;
             }
             if &tag != b"XANS" {
@@ -403,6 +474,9 @@ pub(crate) mod tests {
         chunk(b"XANK", &body)
     }
     pub(crate) fn fixture() -> Vec<u8> {
+        fixture_driver(b"XAPS", b"TEST VALUE#percent#2#1\0")
+    }
+    fn fixture_driver(tag: &[u8; 4], source: &[u8]) -> Vec<u8> {
         let mut rotation = [
             0u32.to_le_bytes().as_slice(),
             &0u32.to_le_bytes(),
@@ -431,7 +505,7 @@ pub(crate) mod tests {
         let mut clip = vec![0; 16];
         clip.extend(10f32.to_le_bytes());
         clip.extend(b"Sim\0\0\0\0\0\0\0\0\0\0\0\0\0AutoPlay\0");
-        clip.extend(chunk(b"XAPS", b"TEST VALUE#percent#2#1\0"));
+        clip.extend(chunk(tag, source));
         clip.extend(chunk(b"XANS", &rotation));
         clip.extend(chunk(b"XANS", &translation));
         chunk(
@@ -442,6 +516,83 @@ pub(crate) mod tests {
             ]
             .concat(),
         )
+    }
+    #[test]
+    fn code_driver_reads_requested_units_and_preserves_bind_pose_on_failure() {
+        let clips = parse(&fixture_driver(
+            b"XAPC",
+            b"(A:TEST TURN, grads) 0 > if{ 3 } els{ 8 }\0",
+        ))
+        .unwrap();
+        for (value, frame) in [(20., 3.), (-20., 8.)] {
+            let plan = plan_pose(&clips, |name, units| {
+                assert_eq!((name, units), ("TEST TURN", "grads"));
+                Some(value)
+            })
+            .unwrap();
+            assert_eq!(plan.frames, vec![Some(frame)]);
+            let matrix = clips[0].transform(0, frame).unwrap().unwrap();
+            assert!((matrix[12] - frame).abs() < 1e-5);
+        }
+        assert_eq!(
+            plan_pose(&clips, |_, _| None).unwrap().status,
+            vec![BindingStatus::Unavailable]
+        );
+        for (source, expected) in [
+            ("#5#(A:TEST TURN, grads)", BindingStatus::StatefulLag),
+            (
+                "(>L:WRITE,number)",
+                BindingStatus::UnsupportedCode("Only read-only A: variables are supported".into()),
+            ),
+            (
+                "1 0 /",
+                BindingStatus::InvalidCode("Non-finite RPN result".into()),
+            ),
+        ] {
+            let mut bytes = source.as_bytes().to_vec();
+            bytes.push(0);
+            let clips = parse(&fixture_driver(b"XAPC", &bytes)).unwrap();
+            let plan = plan_pose(&clips, |_, _| None).unwrap();
+            assert_eq!(plan.frames, vec![None]);
+            assert_eq!(
+                std::mem::discriminant(&plan.status[0]),
+                std::mem::discriminant(&expected)
+            );
+        }
+        for (source, frame) in [("-4", 0.), ("1000", 10.), ("#0#4", 4.)] {
+            let clips = parse(&fixture_driver(b"XAPC", format!("{source}\0").as_bytes())).unwrap();
+            assert_eq!(
+                plan_pose(&clips, |_, _| None).unwrap().frames,
+                vec![Some(frame)]
+            );
+        }
+    }
+    #[test]
+    fn code_driver_lengths_lag_duplicates_and_total_program_budget_are_checked() {
+        for source in ["#-1#0", "#NaN#0", "#5", "1\0trailing"] {
+            assert!(parse(&fixture_driver(b"XAPC", format!("{source}\0").as_bytes())).is_err());
+        }
+        assert!(code_driver(&vec![b' '; 16 * 1024 + 2]).is_err());
+        let original = fixture_driver(b"XAPC", b"1\0");
+        let outer = chunks(&original[8..]).unwrap();
+        let list = outer.iter().find(|(tag, _)| tag == b"XANL").unwrap().1;
+        let clip = chunks(list).unwrap()[0].1;
+        let duplicate = [clip, &chunk(b"XAPS", b"TEST#number\0")].concat();
+        let wrap = |list: &[u8]| {
+            chunk(
+                b"RIFF",
+                &[chunk(b"XANH", &9.2f32.to_le_bytes()), chunk(b"XANL", list)].concat(),
+            )
+        };
+        assert!(parse(&wrap(&chunk(b"XANI", &duplicate)))
+            .unwrap_err()
+            .contains("Duplicate"));
+        let many = fixture_driver(b"XAPC", format!("{}\0", "0 ".repeat(4096)).as_bytes());
+        let outer = chunks(&many[8..]).unwrap();
+        let list = outer.iter().find(|(tag, _)| tag == b"XANL").unwrap().1;
+        assert!(parse(&wrap(&list.repeat(65)))
+            .unwrap_err()
+            .contains("budget"));
     }
     #[test]
     fn native_keys_interpolate_rotation_translation_and_clamp() {

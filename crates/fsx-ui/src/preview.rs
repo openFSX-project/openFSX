@@ -59,7 +59,19 @@ impl Preview {
             return Err("Preview resources must belong to the selected installation".into());
         }
         let model = Model::load(&model_path)?;
-        let mut geometry = model.geometry(None)?;
+        // A stationary preview has zero nose-wheel steering. Resolve the model's
+        // own driver; do not assume a frame index or derive angle from rudder.
+        let pose = fsx_model::animation::plan_pose(&model.animations, |name, units| {
+            (name.eq_ignore_ascii_case("GEAR CENTER STEER ANGLE")
+                && units.eq_ignore_ascii_case("grads"))
+            .then_some(0.)
+        })?;
+        let mut geometry = model.posed_geometry(None, &pose.frames)?;
+        println!(
+            "Menu stationary pose: {}/{} animation groups resolved",
+            pose.frames.iter().filter(|f| f.is_some()).count(),
+            pose.frames.len()
+        );
         // A stationary, engine-stopped inspection state. Do not infer live
         // simulator values from throttle or execute original gauge code.
         let visibility = model.visibility_plan(|name, units| {

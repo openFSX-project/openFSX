@@ -99,3 +99,21 @@ confined to (267,379)..(350,502). An intermediate value of 8 was also checked
 locally; its capture stays under ignored target. No physical RPM, spin timing
 or FSX measurement is inferred from these explicit inputs. The PNG files are
 lossless conversions from original P6 GPU readbacks, without compositing or AI.
+
+
+## Native steering-expression inspection
+
+`c172-steer-positive.png` and `c172-steer-negative.png` are direct 960 x 720
+GPU readbacks from openFSX on 18 October 2026, using the local C172 LOD 150,
+texture.1, front view and zoom 1.6. `--pose-var` supplies explicit values +40
+and -40 for `GEAR CENTER STEER ANGLE#grads`; `--visibility-var` supplies 0 for
+`PROP MAX RPM PERCENT:1#percent` in both captures. The model's own XAPC
+expression resolves clip 4 to frames 20 and 180, without a hard-coded frame
+mapping. It drives four linked scene tracks. Only 516 RGB pixels differ,
+within nose-wheel bounds (342,470)..(366,502) on the tested Vulkan backend.
+
+These are inspection inputs, not FSX readings, control calibration or an FSX
+comparison. Other clips retain their unavailable/unsupported states. Source
+artwork retains its respective owners' rights. Both PNG files are lossless
+P6 readback conversions, without compositing or AI. To reproduce, use the
+viewer guide's steering command and change the input sign for the second file.

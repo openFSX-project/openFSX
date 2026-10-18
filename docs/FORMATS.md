@@ -55,8 +55,15 @@ The independent reader was checked against field definitions distributed with Ai
 ANIB in the observed C172 contains an inner packed RIFF with XANH and XANL,
 followed by zero padding. XANL holds XANI groups: GUID bytes, float length,
 a 16-byte type field and a terminated parameter string, then packed children.
-XAPS contains terminated variable/units/scale/bias/optional-lag fields; XAPC
-code is not executed. XANS begins with channel type, transform ID and float
+XAPS contains terminated variable/units/scale/bias/optional-lag fields. XAPC
+contains a terminated expression with an optional #lag# prefix. A bounded,
+read-only numeric RPN subset evaluates supported A-variable expressions into
+authored frame positions; results clamp to the clip length. Unknown syntax,
+local variables, writes, missing values and invalid results keep the clip in
+bind pose with diagnostics. Positive lag requires a temporal evaluator and is
+deferred. XAPC source is limited to 16 KiB, each program to 4096 instructions
+and the ANIB total to 262144 compiled instructions. Duplicate XAPS/XAPC drivers
+are rejected. XANS begins with channel type, transform ID and float
 track length. Observed channels 0 and 2 contain XANK keys with a one-byte kind,
 float frame and respectively XYZW quaternion (kind 4) or XYZ translation
 (kind 3). SGAL is one signed 16-bit transform ID per scene node, with -1 for

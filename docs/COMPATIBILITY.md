@@ -11,7 +11,7 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | aircraft.cfg | Partial | Variant references, geometry, station payload, full usable Avgas loading, loaded CG/inertia tensor and engine/control parameters; explicit encoding |
 | MDLX | Partial | Packed chunks, VERT, INDE, PART, LOD, static TRAN/AMAP/SCEN |
 | Native viewer | Experimental | Diffuse textured geometry, approximate alpha blending; manual native-key inspection |
-| MDLX animation keys | Initial inspection subset | ANIB/XANI/XANS/XANK and SGAL; explicit clip/frame, linear translation, quaternion slerp; no automatic animation SimVar/code evaluation |
+| MDLX animation keys | Initial binding subset | ANIB/XANI/XANS/XANK and SGAL; explicit frames, XAPS and bounded read-only XAPC drivers, linear translation and quaternion slerp; flight-driven states, temporal lag and Standard autoplay remain unimplemented |
 | MDLX visibility | Initial read-only subset | VISL VISS/VINS/VISC/VINC and SGVL; numeric RPN, A-variable lookup and inherited draw masks; unsupported or unavailable conditions use encoded defaults |
 | Skinned MDLX parts | Omitted with a count | No bone deformation |
 | MDL8, MDL9, P3D | Unsupported | Explicit format error |
@@ -27,7 +27,7 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | DLL / GAU / SimConnect | Not implemented | Native ABI/API research required |
 | Original-FSX measurement tool | Initial live acquisition | Separate x86 reader under tools/fsx-reference; loaded local C172 returned 87 valid packets over five seconds and 35 over two seconds; actual user-object ID bound after validation; control calibration and an openFSX SimConnect server remain unimplemented |
 | Passive reference screenshots | openFSX menu verified | Independent Windows Graphics Capture utility under tools/fsx-capture; 1024x738 menu and native 3D preview captured with foreground unchanged and no activation, restoration or input; original-FSX cockpit still unverified |
-| Recorded pose inspection | Initial static subset | One schema-1 NDJSON sample drives available XAPS bindings; synthetic C172 pipeline checked, no live calibration or temporal lag evaluation |
+| Recorded pose inspection | Initial static subset | One schema-1 NDJSON sample drives available XAPS/read-only XAPC bindings; synthetic and locally captured neutral C172 samples rendered; no live calibration or temporal lag evaluation |
 | Audio, AI, multiplayer | Not implemented | Future subsystems |
 
 ## Local evidence

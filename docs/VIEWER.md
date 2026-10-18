@@ -156,14 +156,39 @@ console identify the declared source and sample. Use the matching aircraft MDL;
 the tool prints the recorded title but cannot prove that it matches an arbitrary
 model file. Source labels are metadata, not proof of a capture's authenticity.
 
+Sample 0 from the locally recorded 87-packet C172 baseline was imported and
+rendered offscreen. Its seven available XAPS control/trim bindings resolve to
+frame 50. All recorded control readings were neutral, so this verifies the live
+acquisition-to-pose pipeline without establishing motion, signs or calibration.
+
 The adapter resolves known variables in their requested units, then uses the
 model's own XAPS scale and bias to choose keyframes. Percent and percent-over-100
 conversion and degree/radian conversion are explicit. Unknown variables/units,
-code drivers, positive lag and standard autoplay are skipped with diagnostics.
+unsupported code, positive lag and standard autoplay are skipped with diagnostics.
 Shared transform IDs compose in file order; full multi-clip FSX equivalence
 remains unverified. This is one static pose, not temporal replay or flight input.
 It cannot be combined with --fly or manual --animation/--frame. Add --snapshot
 for offscreen output through the same renderer.
+
+For variables outside the recorded schema, repeat `--pose-var NAME#units#value`.
+This supplies explicit inspection values, not FSX measurements, and resolves
+both XAPS and supported read-only XAPC expressions. The source code chooses
+authored frames; no manual frame mapping is added for individual aircraft.
+The option cannot be combined with flight, a recorded pose or manual animation.
+Up to 128 distinct variable/unit pairs are allowed, with finite f32-range values.
+
+```powershell
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1" --pose-var "GEAR CENTER STEER ANGLE#grads#40" --visibility-var "PROP MAX RPM PERCENT:1#percent#0" --view front --zoom 1.6 --snapshot target/c172-steer.ppm
+```
+
+On the local C172, explicit steering values +40 and -40 in the model-requested
+grads unit resolve XAPC clip 4 to frames 20 and 180. Offscreen GPU snapshots
+from the same camera differ at 516 pixels, confined to the nose-wheel region
+(342,470)..(366,502). This verifies the native expression-to-geometry path;
+it does not establish steering calibration or a match to an FSX reference frame.
+The menu now supplies zero steering to this same pose evaluator for its
+stationary preview. That menu wiring is compiled; the changed native menu has
+not been reopened for visual verification during this check.
 
 For a reproducible pipeline check without an FSX server:
 

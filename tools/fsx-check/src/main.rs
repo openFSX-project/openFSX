@@ -335,7 +335,20 @@ fn main() -> ExitCode {
                                 d.variable, d.units, d.scale, d.bias, d.lag
                             )
                         })
-                        .unwrap_or_else(|| "code-driven or standard; no direct Sim binding".into());
+                        .unwrap_or_else(|| {
+                            clip.code
+                                .as_ref()
+                                .map(|c| {
+                                    format!(
+                                        "XAPC (lag {:?}; read-only subset only): {}",
+                                        c.lag,
+                                        c.source.trim()
+                                    )
+                                })
+                                .unwrap_or_else(|| {
+                                    "standard or unknown; no supported driver".into()
+                                })
+                        });
                     println!(
                         "Animation {index}: {} | {} frames | {} tracks | {driver}",
                         clip.kind,
