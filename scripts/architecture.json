@@ -1,7 +1,8 @@
 {
   "fsx-cfg": { "path": "crates/fsx-cfg", "dependencies": [], "headless": true },
   "fsx-geometry": { "path": "crates/fsx-geometry", "dependencies": [], "headless": true },
-  "fsx-model": { "path": "crates/fsx-model", "dependencies": ["fsx-geometry"], "headless": true },
+  "fsx-script": { "path": "crates/fsx-script", "dependencies": [], "headless": true },
+  "fsx-model": { "path": "crates/fsx-model", "dependencies": ["fsx-geometry", "fsx-script"], "headless": true },
   "fsx-texture": { "path": "crates/fsx-texture", "dependencies": [], "headless": true },
   "fsx-vehicle": { "path": "crates/fsx-vehicle", "dependencies": ["fsx-cfg", "fsx-geometry"], "headless": true },
   "fsx-sim": { "path": "crates/fsx-sim", "dependencies": ["fsx-vehicle", "fsx-geometry"], "headless": true },

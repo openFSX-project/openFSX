@@ -76,3 +76,21 @@ synthetic fixtures. The [Prepar3D modeling SDK](https://www.prepar3d.com/SDKv3/L
 explains variable scaling/bias and lag semantics; reading those fields does
 not establish an implemented SimVar or gauge system. See the
 [viewer guide](VIEWER.md) for supported inspection and its evidence.
+
+## MDLX visibility subset
+
+VISL contains packed VISS/VINS/VISC/VINC string chunks, bounded to 16 KiB per
+condition. Strings must terminate and may have only zero bytes afterward.
+SGVL is one signed i16 condition index per scene node, with -1 for no condition;
+counts and references are checked. Direct Sim reads currently accept only the
+observed variable#units form. Code may have a #lag# prefix; positive lag is
+reported unsupported rather than silently ignored. VISS/VISC default visible;
+VINS/VINC default hidden when evaluation cannot be completed. A nonzero result
+selects visible. Parent visibility propagates through the scene traversal.
+
+The C172 byte layout was inspected independently; the [FSDeveloper MDLX notes](https://www.fsdeveloper.com/wiki/index.php/MDL_file_format_%28FSX%29)
+identify these chunks. The [modeling SDK](https://www.prepar3d.com/SDKv3/LearningCenter/modeling/using_modeling_tools.html)
+describes visibility parameters, and the [Microsoft RPN reference](https://docs.flightsimulator.com/html/Additional_Information/Reverse_Polish_Notation.htm)
+describes stack/branch syntax. These documents do not establish complete FSX
+runtime equivalence. Tests use original synthetic expressions and triangle data;
+no installed model expressions or SDK implementation are distributed.

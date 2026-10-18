@@ -11,7 +11,8 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | aircraft.cfg | Partial | Variant references, geometry, station payload, full usable Avgas loading, loaded CG/inertia tensor and engine/control parameters; explicit encoding |
 | MDLX | Partial | Packed chunks, VERT, INDE, PART, LOD, static TRAN/AMAP/SCEN |
 | Native viewer | Experimental | Diffuse textured geometry, approximate alpha blending; manual native-key inspection |
-| MDLX animation keys | Initial inspection subset | ANIB/XANI/XANS/XANK and SGAL; explicit clip/frame, linear translation, quaternion slerp; no automatic SimVar/code/visibility evaluation |
+| MDLX animation keys | Initial inspection subset | ANIB/XANI/XANS/XANK and SGAL; explicit clip/frame, linear translation, quaternion slerp; no automatic animation SimVar/code evaluation |
+| MDLX visibility | Initial read-only subset | VISL VISS/VINS/VISC/VINC and SGVL; numeric RPN, A-variable lookup and inherited draw masks; unsupported or unavailable conditions use encoded defaults |
 | Skinned MDLX parts | Omitted with a count | No bone deformation |
 | MDL8, MDL9, P3D | Unsupported | Explicit format error |
 | DDS diffuse maps | Partial | DXT1/3/5 and masked 32-bit RGB, top mip only; up to 4096 pixels per dimension |
@@ -22,10 +23,10 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | Wheel contact | Initial subset | Three fixed wheels, flat-plane springs/dampers and regularized friction; non-wheel contacts omitted, no landing-performance validation |
 | Flight overlay | Optional --debug-hud | Live TAS, local height/heading, vertical speed, commands, attitude and status; independent of FSX gauges |
 | BGL / scenery | Not implemented | No airport or terrain runtime |
-| XML gauges | Not implemented | No expression engine |
+| XML gauges | Not implemented | Numeric read-only RPN is used for model visibility only; no gauge XML loader, local variables, events or writes |
 | DLL / GAU / SimConnect | Not implemented | Native ABI/API research required |
 | Original-FSX measurement tool | Synthetic protocol checks only | Separate x86 reader under tools/fsx-reference; original FSX refused the observed RDP session; no live capture verified or SimConnect server in openFSX |
-| Recorded pose inspection | Initial static subset | One schema-1 NDJSON sample drives available XAPS bindings; synthetic C172 pipeline checked, no live calibration or temporal lag/visibility evaluation |
+| Recorded pose inspection | Initial static subset | One schema-1 NDJSON sample drives available XAPS bindings; synthetic C172 pipeline checked, no live calibration or temporal lag evaluation |
 | Audio, AI, multiplayer | Not implemented | Future subsystems |
 
 ## Local evidence
@@ -47,3 +48,5 @@ An offscreen C172 LOD 150 render was produced using the same wgpu pipeline as th
 The game installation and source resources are excluded from Git. Selected PNG engine screenshots are published in the website gallery at the project owner's request; intermediate captures remain under ignored target. CI uses original synthetic fixtures and does not contain or download FSX resources.
 
 The airborne prototype loads the local C172 variant, AIR and MDL without starting FSX. CFG payload and full usable Avgas yield 1,046.89 kg, a loaded CG and coupled inertia tensor. Reproducible checks hold 90 kt and 300 m for 60 seconds, verify initial control signs, report a full-power transient and enter the post-peak lift region during a power-off pull. Derived sea-level clean stall is 50.97 kt at this loading; the CFG lists 53.00 kt without an established loading condition. These are consistency checks, not validated flight performance. Native-window keyboard injection with this loading and the flight overlay verified short Right/Down impulses changing bank/pitch and vertical speed, plus P pause, R reset and Esc exit. Dedicated and NumLock-off navigation events are mapped consistently; sustained hardware holds remain unverified. Full details are in the [flight guide](FLIGHT.md).
+
+Visibility evidence: the local C172 has 61 conditions. Explicit prop-RPM-percent values 0, 8 and 20 each resolve 30 conditions and hide four LOD-150 draw batches, selecting the still, intermediate and blurred propeller alternatives. Identical-camera GPU readbacks differ only in the propeller region. These are explicit inspection inputs, not recorded FSX RPM or calibrated engine dynamics. The menu supplies an engine-stopped, stationary preview state and resolves all 61 C172 conditions; flight mode does not yet provide propeller or wheel RPM.

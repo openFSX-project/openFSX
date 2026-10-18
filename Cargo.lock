@@ -735,6 +735,7 @@ name = "fsx-model"
 version = "0.1.0"
 dependencies = [
  "fsx-geometry",
+ "fsx-script",
 ]
 
 [[package]]
@@ -749,6 +750,10 @@ dependencies = [
  "wgpu",
  "winit",
 ]
+
+[[package]]
+name = "fsx-script"
+version = "0.1.0"
 
 [[package]]
 name = "fsx-sim"

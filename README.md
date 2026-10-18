@@ -95,7 +95,8 @@ Cargo.toml            Virtual Cargo workspace and shared dependencies
 crates/
   fsx-cfg/            CFG reader and code pages
   fsx-geometry/       Matrices and rigid orientation
-  fsx-model/          MDLX, scene graph and animation keys
+  fsx-script/         Bounded read-only numeric RPN
+  fsx-model/          MDLX, scene graph, keys and visibility
   fsx-texture/        DDS and livery lookup
   fsx-vehicle/        Aircraft/AIR data, mass and contact definitions
   fsx-sim/            Flight integration and wheel contact forces

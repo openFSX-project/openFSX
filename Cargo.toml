@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/fsx-cfg",
     "crates/fsx-geometry",
+    "crates/fsx-script",
     "crates/fsx-model",
     "crates/fsx-texture",
     "crates/fsx-vehicle",
@@ -22,6 +23,7 @@ publish = false
 [workspace.dependencies]
 fsx-cfg = { path = "crates/fsx-cfg" }
 fsx-geometry = { path = "crates/fsx-geometry" }
+fsx-script = { path = "crates/fsx-script" }
 fsx-model = { path = "crates/fsx-model" }
 fsx-texture = { path = "crates/fsx-texture" }
 fsx-vehicle = { path = "crates/fsx-vehicle" }

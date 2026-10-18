@@ -343,6 +343,8 @@ fn main() -> ExitCode {
                         clip.track_count()
                     );
                 }
+                let visibility = model.visibility_plan(|_, _| None);
+                println!("Visibility: {} conditions | {} hidden scene nodes in default/unavailable state", model.visibility_rules.len(),visibility.nodes.iter().filter(|v|!**v).count());
                 ExitCode::SUCCESS
             }
             Err(e) => {

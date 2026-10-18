@@ -15,7 +15,8 @@ There are no placeholder crates for unimplemented scenery, gauges or APIs.
 | --- | --- | --- |
 | fsx-cfg | CFG parsing and explicit code-page decoding | None |
 | fsx-geometry | Matrices, camera math and double-precision rigid orientation | None |
-| fsx-model | MDLX geometry, materials, scene graph and authored animation keys | fsx-geometry |
+| fsx-script | Bounded, read-only numeric RPN expressions | None |
+| fsx-model | MDLX geometry, materials, scene graph, authored keys and visibility | fsx-geometry, fsx-script |
 | fsx-texture | DDS top-mip decoding and texture.cfg fallback lookup | None |
 | fsx-vehicle | Aircraft CFG/AIR data, static loading and contact definitions | fsx-cfg, fsx-geometry |
 | fsx-sim | 6DOF integration, aerodynamics and wheel contact forces | fsx-vehicle, fsx-geometry |
@@ -72,7 +73,7 @@ claims must follow the evidence in the [compatibility record](COMPATIBILITY.md).
 
 ## Rendering boundary
 
-The MDLX reader produces validated world-space triangles for one LOD. It applies the static TRAN/AMAP/SCEN hierarchy. Animated nodes stay in bind pose by default; explicit manual clip/frame inspection evaluates authored rotation and translation keys. Skinning and visibility expressions are not evaluated. Omitted skinned parts are counted; complete visual compatibility must not be claimed.
+The MDLX reader produces validated world-space triangles for one LOD. It applies the static TRAN/AMAP/SCEN hierarchy. Animated nodes stay in bind pose by default; explicit manual clip/frame inspection evaluates authored rotation and translation keys. A bounded read-only RPN subset evaluates VISL conditions through an application-provided variable lookup; SGVL visibility inherits through scene parents and masks draw calls without changing topology. Unavailable or unsupported conditions keep their encoded defaults with diagnostics. Skinning is not evaluated. Omitted skinned parts are counted; complete visual compatibility must not be claimed.
 
 The renderer uses a depth buffer, diffuse DDS maps, material RGB fallback and face lighting. Opaque parts write depth first; ordinary source-alpha/inverse-source-alpha parts are drawn back to front by part center without depth writes. Alpha tests are evaluated separately from blending. This is approximate transparency, not parity with FSX material rendering. Normal/specular maps, reflection, effects and live aircraft state remain future work. Offscreen snapshots use the same pipeline as the window.
 

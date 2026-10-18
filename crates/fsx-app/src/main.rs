@@ -35,6 +35,7 @@ struct App {
     visible: bool,
     debug_hud: bool,
     reference_label: Option<String>,
+    visibility_nodes: Option<Vec<bool>>,
 }
 fn flight_view(flight: &FlightSession, orbit: &mut Orbit) {
     orbit.center = flight.center();
@@ -50,9 +51,12 @@ impl App {
         self.frame = (self.frame + delta).clamp(0., self.model.animations[index].length);
         let mut frames = vec![None; self.model.animations.len()];
         frames[index] = Some(self.frame);
-        let geometry = self
+        let mut geometry = self
             .model
             .posed_geometry(Some(self.geometry.lod), &frames)?;
+        if let Some(nodes) = &self.visibility_nodes {
+            geometry.apply_visibility(nodes)?;
+        }
         if let Some(gpu) = &mut self.gpu {
             gpu.update_geometry(&geometry)?;
         }
@@ -290,6 +294,7 @@ fn run() -> Result<(), String> {
     );
     if path == Path::new("--help") || path == Path::new("-h") {
         println!("openfsx-viewer <model.mdl> [--lod N] [--texture-dir folder | --no-textures]\nopenfsx-viewer <aircraft folder> --fly [--ground] [--variant N] [--windows-1252] [--lod N]\nWindows menu: openfsx-viewer <FSX installation> --menu\nAnimation inspector: --animation N [--frame N] (use inspect-model for IDs; [ / ] scrub)\nRecorded pose: --reference-pose sample.ndjson [--reference-sample N] (inspection only)\nOrbit camera: --view front|rear --zoom N (0.1..10)\nOptional: --debug-hud (experimental telemetry); --snapshot output.ppm [--seconds N, flight only, 0..300]\nFlight keys: Down/Up pull/push; Left/Right bank; Q/E rudder; PageUp/PageDown throttle; F1 idle; F4 full power; B parking brake; Space wheel brakes; Home/End trim; P pause; R reset; Esc close.");
+        println!("Visibility inspector: repeat --visibility-var NAME#units#value (explicit values; no flight override)");
         return Ok(());
     }
     let (mut lod, mut snapshot) = (None, None);
@@ -304,8 +309,36 @@ fn run() -> Result<(), String> {
     let mut zoom: f32 = 1.;
     let mut reference_path = None;
     let mut reference_index = None;
+    let mut visibility_values: Vec<(String, String, f64)> = Vec::new();
     while let Some(arg) = args.next() {
         match arg.to_str() {
+            Some("--visibility-var") => {
+                if visibility_values.len() >= 128 {
+                    return Err("At most 128 visibility variables are accepted".into());
+                }
+                let text = args
+                    .next()
+                    .and_then(|s| s.to_str().map(str::to_owned))
+                    .ok_or("Expected NAME#units#value")?;
+                let fields = text.split('#').collect::<Vec<_>>();
+                if fields.len() != 3 || fields[0].trim().is_empty() || fields[1].trim().is_empty() {
+                    return Err("--visibility-var expects NAME#units#value".into());
+                }
+                let value: f64 = fields[2]
+                    .trim()
+                    .parse()
+                    .map_err(|_| "Invalid visibility number")?;
+                if !value.is_finite() {
+                    return Err("Visibility values must be finite".into());
+                }
+                let (name, units) = (fields[0].trim().to_owned(), fields[1].trim().to_owned());
+                if visibility_values.iter().any(|(n, u, _)| {
+                    n.eq_ignore_ascii_case(&name) && u.eq_ignore_ascii_case(&units)
+                }) {
+                    return Err("Duplicate visibility variable and units".into());
+                }
+                visibility_values.push((name, units, value));
+            }
             Some("--reference-pose") => {
                 reference_path = Some(PathBuf::from(
                     args.next().ok_or("Expected reference NDJSON path")?,
@@ -407,6 +440,7 @@ fn run() -> Result<(), String> {
             || zoom != 1.
             || reference_path.is_some()
             || reference_index.is_some()
+            || !visibility_values.is_empty()
         {
             return Err("--menu takes an FSX installation path and cannot be combined with renderer options".into());
         }
@@ -426,6 +460,9 @@ fn run() -> Result<(), String> {
     };
     if ground && !fly {
         return Err("--ground requires --fly".into());
+    }
+    if fly && !visibility_values.is_empty() {
+        return Err("--visibility-var is an inspection option, not a flight-state override".into());
     }
     let model_path = aircraft
         .as_ref()
@@ -478,7 +515,7 @@ fn run() -> Result<(), String> {
         return Err("--view and --zoom are orbit-viewer options".into());
     }
     let frame = frame.unwrap_or(0.);
-    let geometry = if let Some(plan) = &reference_plan {
+    let mut geometry = if let Some(plan) = &reference_plan {
         model.posed_geometry(lod, &plan.frames)?
     } else if let Some(index) = animation {
         let clip = model
@@ -493,6 +530,30 @@ fn run() -> Result<(), String> {
         model.posed_geometry(lod, &frames)?
     } else {
         model.geometry(lod)?
+    };
+    let visibility_nodes = if !visibility_values.is_empty() {
+        let plan = model.visibility_plan(|name, units| {
+            visibility_values
+                .iter()
+                .find(|(n, u, _)| n.eq_ignore_ascii_case(name) && u.eq_ignore_ascii_case(units))
+                .map(|(_, _, v)| *v)
+        });
+        geometry.apply_visibility(&plan.nodes)?;
+        println!("Visibility: {}/{} conditions evaluated; {} hidden draw batches; unknown/unsupported conditions use their encoded defaults",plan.decisions.iter().filter(|d|d.status==fsx_model::visibility::Status::Evaluated).count(),plan.decisions.len(),geometry.batches.iter().filter(|b|!b.visible).count());
+        for (index, decision) in plan.decisions.iter().enumerate() {
+            println!(
+                "  Visibility {index}: {} | {:?}",
+                if decision.visible {
+                    "visible"
+                } else {
+                    "hidden"
+                },
+                decision.status
+            );
+        }
+        Some(plan.nodes)
+    } else {
+        None
     };
     if no_textures && texture_dir.is_some() {
         return Err("Use either --texture-dir or --no-textures".into());
@@ -521,7 +582,7 @@ fn run() -> Result<(), String> {
         model.animated_nodes,
         geometry.skipped_skinned_parts
     );
-    println!("Preview limitations: diffuse DDS only; approximate alpha blending; no skinning or visibility evaluation. Keys are evaluated only for explicit clip selection or supported reference bindings.");
+    println!("Preview limitations: diffuse DDS only; approximate alpha blending; no skinning; read-only visibility subset with encoded defaults for unavailable conditions. Keys are evaluated only for explicit clip selection or supported reference bindings.");
     if let Some(index) = animation {
         println!(
             "Manual animation {index}: frame {frame} / {} | use [ / ] to scrub by five frames",
@@ -596,6 +657,7 @@ fn run() -> Result<(), String> {
         visible: true,
         debug_hud,
         reference_label,
+        visibility_nodes,
     };
     EventLoop::new()
         .map_err(|e| e.to_string())?

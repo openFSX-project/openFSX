@@ -1,5 +1,5 @@
 //! Independently implemented, bounds-checked subset of the FSX MDLX container.
-//! Native rotation/translation key inspection; no visibility VM or skin deformation.
+//! Native key inspection and read-only visibility expressions; no skin deformation.
 use fsx_geometry::{self as math, Mat4, IDENTITY};
 use std::{collections::BTreeMap, fs, path::Path};
 
@@ -18,6 +18,8 @@ pub struct Model {
     pub animated_nodes: usize,
     pub materials: Vec<Material>,
     pub animations: Vec<animation::Clip>,
+    pub visibility_rules: Vec<visibility::Rule>,
+    visibility_links: Vec<i16>,
     scene: Vec<SceneNode>,
     traversal: Vec<usize>,
 }
@@ -64,6 +66,8 @@ pub struct Geometry {
 }
 #[derive(Debug)]
 pub struct DrawBatch {
+    pub scene: usize,
+    pub visible: bool,
     pub range: std::ops::Range<u32>,
     pub material: usize,
     pub center: [f32; 3],
@@ -308,6 +312,26 @@ impl Model {
         if seen.contains(&false) {
             return Err("Unreachable scene nodes are not supported".into());
         }
+        let visibility_rules = if data.iter().any(|(tag, _)| tag == b"VISL") {
+            visibility::parse(single(&data, b"VISL")?)?
+        } else {
+            Vec::new()
+        };
+        let visibility_links = if data.iter().any(|(tag, _)| tag == b"SGVL") {
+            let links = records(single(&data, b"SGVL")?, 2)?
+                .map(|r| i16::from_le_bytes(r.try_into().unwrap()))
+                .collect::<Vec<_>>();
+            if links.len() != scene.len()
+                || links
+                    .iter()
+                    .any(|&i| i < -1 || (i >= 0 && i as usize >= visibility_rules.len()))
+            {
+                return Err("SGVL visibility reference outside VISL/scene".into());
+            }
+            links
+        } else {
+            vec![-1; scene.len()]
+        };
         let mut lods = BTreeMap::new();
         for (tag, entry) in chunks(single(&data, b"LODT")?)? {
             if &tag != b"LODE" {
@@ -346,6 +370,8 @@ impl Model {
             animated_nodes,
             materials,
             animations,
+            visibility_rules,
+            visibility_links,
             scene,
             traversal,
         };
@@ -393,6 +419,24 @@ impl Model {
 
     pub fn geometry(&self, requested: Option<u32>) -> Result<Geometry> {
         self.geometry_with_matrices(requested, &self.matrices)
+    }
+
+    pub fn visibility_plan(
+        &self,
+        mut lookup: impl FnMut(&str, &str) -> Option<f64>,
+    ) -> visibility::Plan {
+        let decisions = self
+            .visibility_rules
+            .iter()
+            .map(|rule| rule.evaluate(&mut lookup))
+            .collect::<Vec<_>>();
+        let mut nodes = vec![true; self.scene.len()];
+        for &index in &self.traversal {
+            let link = self.visibility_links[index];
+            nodes[index] = (link < 0 || decisions[link as usize].visible)
+                && self.scene[index].parent.is_none_or(|p| nodes[p]);
+        }
+        visibility::Plan { nodes, decisions }
     }
 
     /// None leaves a clip in bind pose; Some(frame) evaluates its native keys.
@@ -491,6 +535,8 @@ impl Model {
             }
             if vertices.len() as u32 > start {
                 batches.push(DrawBatch {
+                    scene: part.scene,
+                    visible: true,
                     range: start..vertices.len() as u32,
                     material: part.material,
                     center: std::array::from_fn(|i| (part_min[i] + part_max[i]) * 0.5),
@@ -500,14 +546,28 @@ impl Model {
         if vertices.is_empty() {
             return Err("Selected LOD has no supported unskinned triangles".into());
         }
-        Ok(Geometry {
+        let mut geometry = Geometry {
             vertices,
             batches,
             min,
             max,
             skipped_skinned_parts,
             lod,
-        })
+        };
+        geometry.apply_visibility(&self.visibility_plan(|_, _| None).nodes)?;
+        Ok(geometry)
+    }
+}
+
+impl Geometry {
+    pub fn apply_visibility(&mut self, nodes: &[bool]) -> Result<()> {
+        if self.batches.iter().any(|b| b.scene >= nodes.len()) {
+            return Err("Visibility node mask is shorter than geometry scene references".into());
+        }
+        for batch in &mut self.batches {
+            batch.visible = nodes[batch.scene];
+        }
+        Ok(())
     }
 }
 
@@ -533,6 +593,7 @@ mod tests {
             local: IDENTITY,
             animation: -1,
         });
+        model.visibility_links.push(-1);
         model.traversal.push(1);
         model.lods.get_mut(&100).unwrap()[0].scene = 1;
         let child = model.posed_geometry(None, &[Some(5.)]).unwrap();
@@ -570,6 +631,61 @@ mod tests {
         );
         assert!(Model::parse(&build(99)).unwrap_err().contains("SGAL"));
         assert!(Model::parse(&build(-2)).unwrap_err().contains("SGAL"));
+    }
+    #[test]
+    fn visibility_links_parent_mask_and_draw_topology() {
+        let bytes = model_bytes(2);
+        let root = chunks(&bytes[12..]).unwrap();
+        let data = single(&root, b"MDLD").unwrap();
+        let rules = [
+            chunk(b"VISS", b"TEST SWITCH#bool\0"),
+            chunk(b"VISC", b"1\0"),
+        ]
+        .concat();
+        let build = |links: &[u8]| {
+            chunk(
+                b"RIFF",
+                &[
+                    b"MDLX".as_slice(),
+                    &chunk(
+                        b"MDLD",
+                        &[data, &chunk(b"VISL", &rules), &chunk(b"SGVL", links)].concat(),
+                    ),
+                ]
+                .concat(),
+            )
+        };
+        let mut model = Model::parse(&build(&0i16.to_le_bytes())).unwrap();
+        model.scene.push(SceneNode {
+            parent: Some(0),
+            local: IDENTITY,
+            animation: -1,
+        });
+        model.traversal.push(1);
+        model.visibility_links.push(1);
+        model.lods.get_mut(&100).unwrap()[0].scene = 1;
+        let mut geometry = model.posed_geometry(None, &[]).unwrap();
+        let original = geometry.vertices.clone();
+        let range = geometry.batches[0].range.clone();
+        let plan = model.visibility_plan(|_, _| Some(0.));
+        assert_eq!(plan.nodes, vec![false, false]);
+        geometry.apply_visibility(&plan.nodes).unwrap();
+        assert!(!geometry.batches[0].visible);
+        geometry
+            .apply_visibility(&model.visibility_plan(|_, _| Some(1.)).nodes)
+            .unwrap();
+        assert!(geometry.batches[0].visible);
+        assert_eq!(geometry.vertices, original);
+        assert_eq!(geometry.batches[0].range, range);
+        assert!(geometry.apply_visibility(&[]).is_err());
+        for links in [
+            vec![],
+            (-2i16).to_le_bytes().to_vec(),
+            2i16.to_le_bytes().to_vec(),
+            vec![0; 4],
+        ] {
+            assert!(Model::parse(&build(&links)).is_err());
+        }
     }
     fn chunk(id: &[u8; 4], data: &[u8]) -> Vec<u8> {
         [id.as_slice(), &(data.len() as u32).to_le_bytes(), data].concat()
@@ -677,3 +793,4 @@ mod tests {
 }
 
 pub mod animation;
+pub mod visibility;

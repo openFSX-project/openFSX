@@ -157,6 +157,7 @@ pub struct Gpu {
     aircraft_draws: usize,
 }
 struct GpuDraw {
+    visible: bool,
     range: std::ops::Range<u32>,
     material: usize,
     pub center: [f32; 3],
@@ -501,6 +502,7 @@ impl Gpu {
             .batches
             .iter()
             .map(|batch| GpuDraw {
+                visible: batch.visible,
                 range: batch.range.clone(),
                 material: batch.material,
                 center: batch.center,
@@ -522,6 +524,7 @@ impl Gpu {
             quad(-8000., -8000., 8000., 8000., 0.);
             let mut count = 6;
             draws.push(GpuDraw {
+                visible: true,
                 range: start..start + count,
                 material: ground_material,
                 center: [0.; 3],
@@ -529,6 +532,7 @@ impl Gpu {
             });
             quad(-15., -500., 15., 1500., 0.02);
             draws.push(GpuDraw {
+                visible: true,
                 range: start + count..start + count + 6,
                 material: ground_material + 1,
                 center: [0.; 3],
@@ -540,6 +544,7 @@ impl Gpu {
                 quad(-0.7, z, 0.7, z + 25., 0.04);
             }
             draws.push(GpuDraw {
+                visible: true,
                 range: start + count..start + count + 240,
                 material: ground_material + 2,
                 center: [0.; 3],
@@ -552,6 +557,7 @@ impl Gpu {
                 quad(-8000., p, 8000., p + 0.8, 0.01);
             }
             draws.push(GpuDraw {
+                visible: true,
                 range: start + count..vertices.len() as u32,
                 material: ground_material + 3,
                 center: [0.; 3],
@@ -610,6 +616,7 @@ impl Gpu {
         );
         for (batch, draw) in geometry.batches.iter().zip(&mut self.draws) {
             draw.center = batch.center;
+            draw.visible = batch.visible;
         }
         Ok(())
     }
@@ -697,14 +704,18 @@ impl Gpu {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind, &[]);
             pass.set_vertex_buffer(0, self.vertex.slice(..));
-            for draw in self.draws.iter().filter(|draw| !draw.blended) {
+            for draw in self
+                .draws
+                .iter()
+                .filter(|draw| draw.visible && !draw.blended)
+            {
                 pass.set_bind_group(1, &self.material_binds[draw.material], &[]);
                 pass.draw(draw.range.clone(), 0..1);
             }
             let mut blended = self
                 .draws
                 .iter()
-                .filter(|draw| draw.blended)
+                .filter(|draw| draw.visible && draw.blended)
                 .collect::<Vec<_>>();
             let eye = orbit.eye();
             let distance = |draw: &GpuDraw| {

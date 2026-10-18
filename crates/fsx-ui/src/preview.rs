@@ -59,7 +59,35 @@ impl Preview {
             return Err("Preview resources must belong to the selected installation".into());
         }
         let model = Model::load(&model_path)?;
-        let geometry = model.geometry(None)?;
+        let mut geometry = model.geometry(None)?;
+        // A stationary, engine-stopped inspection state. Do not infer live
+        // simulator values from throttle or execute original gauge code.
+        let visibility = model.visibility_plan(|name, units| {
+            if (name.eq_ignore_ascii_case("PROP MAX RPM PERCENT:1")
+                && units.eq_ignore_ascii_case("percent"))
+                || (["CENTER WHEEL RPM", "LEFT WHEEL RPM", "RIGHT WHEEL RPM"]
+                    .iter()
+                    .any(|n| name.eq_ignore_ascii_case(n))
+                    && units.eq_ignore_ascii_case("grads"))
+                || (name.eq_ignore_ascii_case("LIGHT LANDING")
+                    && units.eq_ignore_ascii_case("bool"))
+            {
+                Some(0.)
+            } else {
+                None
+            }
+        });
+        geometry.apply_visibility(&visibility.nodes)?;
+        println!(
+            "Menu visibility: {}/{} conditions evaluated; {} hidden draw batches",
+            visibility
+                .decisions
+                .iter()
+                .filter(|d| d.status == fsx_model::visibility::Status::Evaluated)
+                .count(),
+            visibility.decisions.len(),
+            geometry.batches.iter().filter(|b| !b.visible).count()
+        );
         let appearance = Appearance::load(&model, &geometry, Some(&texture))?;
         let mut orbit = Orbit::new(&geometry);
         orbit.pitch = 0.12;

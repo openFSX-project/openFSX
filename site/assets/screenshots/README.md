@@ -36,7 +36,7 @@ with Microsoft or Dovetail Games, or full FSX compatibility.
 `free-flight-menu.png` is a direct 1024 x 738 native Windows window capture of
 `openfsx-viewer ./FSX --menu`, taken on 18 October 2026. It shows the independent
 WebView2 menu host, installed FSX UI bitmap artwork and the live C172 MDLX/DDS
-preview rendered by a native child surface. It is a direct composed-window
+preview rendered by a native child surface. The preview supplies an engine-stopped, stationary state; all 61 C172 visibility conditions resolve and seven draw batches are hidden. It is a direct composed-window
 capture, exported by the capture tool as JPEG and re-encoded as PNG without
 cropping or visual changes, not a screenshot of the original FSX process. Aircraft selection, launching C172 and returning from flight were
 checked. Other menu sections are incomplete; pixel parity is not verified.
@@ -85,3 +85,17 @@ frame 47.5 to 80, with 2,661 changed RGB pixels confined to bounds (257, 380)
 to (441, 445) in this backend/camera check. This checks binding isolation, not
 physical accuracy. Other content, material, visibility and skinning limits
 remain. Aircraft artwork retains its respective owners' rights.
+
+## Native visibility inspection
+
+`c172-visibility-stopped.png` and `c172-visibility-fast.png` are direct 960 x 720
+GPU readbacks on 18 October 2026. Both use the local C172 LOD 150, texture.1,
+front view and zoom 1.6. The explicit variable `PROP MAX RPM PERCENT:1#percent`
+is set to 0 and 20 respectively using --visibility-var. The renderer evaluates
+30 of 61 model conditions and hides four draw batches in each case; other
+unavailable variables retain their encoded defaults. The resulting images
+select the solid and blurred propeller alternatives. Pixel differences are
+confined to (267,379)..(350,502). An intermediate value of 8 was also checked
+locally; its capture stays under ignored target. No physical RPM, spin timing
+or FSX measurement is inferred from these explicit inputs. The PNG files are
+lossless conversions from original P6 GPU readbacks, without compositing or AI.

@@ -52,7 +52,7 @@ The same depth-tested pipeline renders without a window and writes a binary PPM.
 
 ## Known limits
 
-Diffuse textures and flat face lighting only, with approximate ordinary alpha blending and MDLX alpha tests. Transparent parts are sorted by their centers; intersecting transparent triangles are not sorted individually. Other blend modes, accurate FSX material lighting, specular/bump/reflection maps and texture mip chains are absent. No visibility expressions, automatic animation drivers, skinning, attachments or effects. Manual native-key inspection is described below. Bind pose can expose normally hidden alternatives, including multiple propeller states. Startup diagnostics report these limits.
+Diffuse textures and flat face lighting only, with approximate ordinary alpha blending and MDLX alpha tests. Transparent parts are sorted by their centers; intersecting transparent triangles are not sorted individually. Other blend modes, accurate FSX material lighting, specular/bump/reflection maps and texture mip chains are absent. Visibility supports a bounded read-only numeric subset, described below. Automatic animation drivers, skinning, attachments and effects remain incomplete. Manual native-key inspection is described below. Unavailable visibility variables can expose normally hidden alternatives, including multiple propeller states. Startup diagnostics report these limits.
 
 Windows x64 is the initial target. The first offscreen C172 render was verified on an NVIDIA RTX 2080 through Vulkan. Building on another platform or backend does not establish rendering support there.
 
@@ -64,7 +64,7 @@ cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX" --menu
 
 The menu host requires the Microsoft Edge WebView2 Runtime. It reads the local
 installation's `uires` bitmap skin and aircraft thumbnails; these assets are not
-included in openFSX. No original executable code is loaded. The independent
+included in openFSX. No original executable or gauge DLL is loaded. The independent
 HTML/CSS layout is not yet pixel-verified against FSX.
 
 **CHANGE...** under Current Aircraft opens the installation catalog, with a
@@ -111,8 +111,7 @@ to capture a chosen pose without opening a window.
 This is manual key inspection, not simulation-driven animation. Direct Sim
 bindings are decoded and listed, including variable, units, scale, bias and
 optional lag. Their units, signs and response still need FSX reference tests
-before connection to the flight state. Code expressions, visibility conditions,
-standard autoplay timing/randomization, animation lag and skin deformation are
+before connection to the flight state. Animation code expressions, standard autoplay timing/randomization, animation lag and skin deformation are
 not evaluated. Other clips remain in bind pose; mutually exclusive propeller
 and wheel alternatives can still be visible together. A clip with no geometry
 tracks is reported as such and has no visual effect.
@@ -181,3 +180,36 @@ A subsequent local launch reached the main menu and SimConnect_Open succeeded,
 but the menu-only check returned no aircraft samples. Reference capture still
 needs a loaded FSX flight. This limitation belongs to the observed original-game startup;
 the offline openFSX pipeline above does not launch it.
+
+## Visibility inspection
+
+VISL conditions link to scene nodes through SGVL. The reader supports direct
+VISS/VINS variable reads and a numeric, read-only VISC/VINC RPN subset: finite
+numbers, A-variable reads with explicit units, arithmetic, comparisons, boolean
+operators and lazy nested if/else branches. Defaults encoded by the file apply
+to unavailable variables, unsupported operations and invalid evaluation, with
+diagnostics. Hiding a parent hides its descendants. Draw masks preserve vertex
+buffers, material ranges and framing; both opaque and blended draws honor them.
+
+Supply exact variable/unit values for inspection, for example:
+
+```powershell
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1" --visibility-var "PROP MAX RPM PERCENT:1#percent#0" --view front --zoom 1.6 --snapshot target/c172-visibility-stopped.ppm
+```
+
+Repeat --visibility-var for different variables; at most 128 unique name/unit
+pairs are accepted. Matching is ASCII case-insensitive, without inferred unit
+conversion. Values must be finite. Set the example value to 8 or 20 to inspect
+the intermediate or blurred propeller alternative. These are explicit inputs,
+not captured RPM. The option cannot override --fly or --menu; a selected mask
+is preserved while manually scrubbing animation keys.
+
+The menu supplies a stationary, engine-stopped inspection state: propeller
+percent and wheel rotation rates zero, landing lights off. On the local C172,
+all 61 conditions resolve and seven LOD-400 draw batches are hidden. This is a
+presentation state, not a simulation of propeller mechanics or FSX menu parity.
+Flight still lacks engine/wheel RPM state, so unknown conditions retain their
+encoded defaults. Model visibility does not implement gauge XML, local variables,
+assignment/events, registers, loops, strings, animation code or temporal lag. Evaluation must leave exactly one finite scalar result.
+The RPN interpreter bounds source size (16 KiB), instructions (4096), nesting
+(32) and stack entries (64), and never executes native or original gauge code. A model visibility block is limited to 4 MiB and 262,144 compiled instructions in total.
