@@ -24,7 +24,14 @@ pub struct PosePlan {
 /// Unknown bindings stay in bind pose; positive lag requires a temporal evaluator.
 pub fn plan_pose(
     clips: &[Clip],
+    lookup: impl FnMut(&str, &str) -> Option<f32>,
+) -> Result<PosePlan> {
+    resolve_pose(clips, lookup, false)
+}
+fn resolve_pose(
+    clips: &[Clip],
     mut lookup: impl FnMut(&str, &str) -> Option<f32>,
+    temporal: bool,
 ) -> Result<PosePlan> {
     let mut frames = Vec::with_capacity(clips.len());
     let mut status = Vec::with_capacity(clips.len());
@@ -37,7 +44,7 @@ pub fn plan_pose(
         } else if clip.tracks.is_empty() {
             BindingStatus::NoTracks
         } else if let Some(driver) = &clip.driver {
-            if driver.lag.is_some_and(|lag| lag > 0.) {
+            if !temporal && driver.lag.is_some_and(|lag| lag > 0.) {
                 BindingStatus::StatefulLag
             } else if let Some(value) = lookup(&driver.variable, &driver.units) {
                 BindingStatus::Applied(driver.frame(value, clip.length)?)
@@ -45,7 +52,7 @@ pub fn plan_pose(
                 BindingStatus::Unavailable
             }
         } else if let Some(code) = &clip.code {
-            if code.lag.is_some_and(|lag| lag > 0.) {
+            if !temporal && code.lag.is_some_and(|lag| lag > 0.) {
                 BindingStatus::StatefulLag
             } else {
                 match &code.program {
@@ -75,6 +82,59 @@ pub fn plan_pose(
         status.push(state);
     }
     Ok(PosePlan { frames, status })
+}
+/// Per-model temporal state. Initial available targets snap into place. Missing
+/// or unsupported targets hold the last known pose with their original status.
+/// Recreate this state when replacing the model or resetting simulation time.
+pub struct PoseState {
+    frames: Vec<Option<f32>>,
+}
+impl PoseState {
+    pub fn new(clips: &[Clip]) -> Self {
+        Self {
+            frames: vec![None; clips.len()],
+        }
+    }
+    pub fn frames(&self) -> &[Option<f32>] {
+        &self.frames
+    }
+    pub fn advance(
+        &mut self,
+        clips: &[Clip],
+        seconds: f64,
+        lookup: impl FnMut(&str, &str) -> Option<f32>,
+    ) -> Result<PosePlan> {
+        if !seconds.is_finite() || seconds < 0. || self.frames.len() != clips.len() {
+            return Err("Invalid temporal pose step or changed clip catalog".into());
+        }
+        let mut plan = resolve_pose(clips, lookup, true)?;
+        for (index, clip) in clips.iter().enumerate() {
+            let lag = clip
+                .driver
+                .as_ref()
+                .and_then(|d| d.lag)
+                .or_else(|| clip.code.as_ref().and_then(|c| c.lag));
+            if lag.is_some_and(|v| !v.is_finite() || v < 0.) {
+                return Err("Invalid animation lag".into());
+            }
+            if let Some(target) = plan.frames[index] {
+                let frame = match (self.frames[index], lag) {
+                    (Some(previous), Some(rate)) if rate > 0. => {
+                        let previous = previous.clamp(0., clip.length) as f64;
+                        let limit = rate as f64 * seconds;
+                        (previous + (target as f64 - previous).clamp(-limit, limit)) as f32
+                    }
+                    _ => target,
+                };
+                plan.frames[index] = Some(frame);
+                plan.status[index] = BindingStatus::Applied(frame);
+            } else {
+                plan.frames[index] = self.frames[index];
+            }
+        }
+        self.frames.clone_from(&plan.frames);
+        Ok(plan)
+    }
 }
 #[derive(Debug)]
 pub struct Clip {
@@ -593,6 +653,77 @@ pub(crate) mod tests {
         assert!(parse(&wrap(&list.repeat(65)))
             .unwrap_err()
             .contains("budget"));
+    }
+    #[test]
+    fn temporal_direct_and_code_lag_limit_speed_reverse_and_hold_missing_targets() {
+        for (tag, source) in [
+            (b"XAPS", "TEST VALUE#percent#2#1#2"),
+            (b"XAPC", "#2#(A:TEST VALUE, percent) 2 * 1 +"),
+        ] {
+            let clips = parse(&fixture_driver(tag, format!("{source}\0").as_bytes())).unwrap();
+            let mut state = PoseState::new(&clips);
+            assert_eq!(
+                state.advance(&clips, 0., |_, _| Some(0.)).unwrap().frames,
+                vec![Some(1.)]
+            );
+            assert_eq!(
+                state.advance(&clips, 0., |_, _| Some(4.)).unwrap().frames,
+                vec![Some(1.)]
+            );
+            assert_eq!(
+                state.advance(&clips, 0.5, |_, _| Some(4.)).unwrap().frames,
+                vec![Some(2.)]
+            );
+            let missing = state.advance(&clips, 10., |_, _| None).unwrap();
+            assert_eq!(missing.frames, vec![Some(2.)]);
+            assert_eq!(missing.status, vec![BindingStatus::Unavailable]);
+            assert_eq!(
+                state
+                    .advance(&clips, 0.25, |_, _| Some(-10.))
+                    .unwrap()
+                    .frames,
+                vec![Some(1.5)]
+            );
+            assert_eq!(
+                state.advance(&clips, 1., |_, _| Some(-10.)).unwrap().frames,
+                vec![Some(0.)]
+            );
+            assert_eq!(
+                state
+                    .advance(&clips, f64::MAX, |_, _| Some(4.))
+                    .unwrap()
+                    .frames,
+                vec![Some(9.)]
+            );
+            for bad in [-1., f64::NAN, f64::INFINITY] {
+                assert!(state.advance(&clips, bad, |_, _| Some(0.)).is_err());
+                assert_eq!(state.frames(), &[Some(9.)]);
+            }
+            assert!(state.advance(&[], 0., |_, _| None).is_err());
+        }
+    }
+    #[test]
+    fn temporal_lag_is_time_based_and_initialization_is_explicit() {
+        let clips = parse(&fixture_driver(b"XAPC", b"#2#(A:TARGET, number)\0")).unwrap();
+        let mut one = PoseState::new(&clips);
+        let mut many = PoseState::new(&clips);
+        for state in [&mut one, &mut many] {
+            assert_eq!(
+                state.advance(&clips, 1., |_, _| None).unwrap().frames,
+                vec![None]
+            );
+            state.advance(&clips, 0., |_, _| Some(0.)).unwrap();
+        }
+        one.advance(&clips, 1., |_, _| Some(10.)).unwrap();
+        for _ in 0..120 {
+            many.advance(&clips, 1. / 120., |_, _| Some(10.)).unwrap();
+        }
+        assert!((one.frames()[0].unwrap() - many.frames()[0].unwrap()).abs() < 1e-5);
+        let mut fresh = PoseState::new(&clips);
+        assert_eq!(
+            fresh.advance(&clips, 0., |_, _| Some(10.)).unwrap().frames,
+            vec![Some(10.)]
+        );
     }
     #[test]
     fn native_keys_interpolate_rotation_translation_and_clamp() {

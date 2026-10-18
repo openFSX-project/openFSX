@@ -24,5 +24,9 @@ name = "openfsx-viewer"
 path = "src/main.rs"
 required-features = ["viewer"]
 
+[[example]]
+name = "flight-pose-check"
+required-features = ["viewer"]
+
 [dev-dependencies]
 fsx-vehicle = { workspace = true, features = ["test-support"] }

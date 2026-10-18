@@ -6,6 +6,16 @@ This is an experimental flight-dynamics subset with an optional fixed-wheel
 runway start. Ground roll and departure are demonstrated; FSX behavior parity,
 a complete aircraft system model and validated landing behavior are absent.
 
+The visual model now follows the physical center-wheel steering angle through
+its own animation binding. Q/E therefore changes both contact-force direction
+and the nose-wheel pose. Supported XAPS/XAPC targets can use model Lag limits
+on the simulation clock; pause holds the pose and reset initializes it again.
+The current visual adapter also exposes throttle lever position and on-ground
+state. It does not invent RPM or control-surface percent mappings. C172 steering
+was checked from the shared keyboard controller through physics to offscreen GPU
+output; original-FSX motion and timing comparisons remain unverified. See the
+[viewer guide](VIEWER.md) for the reproducible local-content check.
+
 ## Start a flight
 
 From the repository root, with your own FSX installation under FSX:

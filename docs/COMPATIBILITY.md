@@ -11,7 +11,7 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | aircraft.cfg | Partial | Variant references, geometry, station payload, full usable Avgas loading, loaded CG/inertia tensor and engine/control parameters; explicit encoding |
 | MDLX | Partial | Packed chunks, VERT, INDE, PART, LOD, static TRAN/AMAP/SCEN |
 | Native viewer | Experimental | Diffuse textured geometry, approximate alpha blending; manual native-key inspection |
-| MDLX animation keys | Initial binding subset | ANIB/XANI/XANS/XANK and SGAL; explicit frames, XAPS and bounded read-only XAPC drivers, linear translation and quaternion slerp; flight-driven states, temporal lag and Standard autoplay remain unimplemented |
+| MDLX animation keys | Initial runtime binding subset | ANIB/XANI/XANS/XANK and SGAL; XAPS/read-only XAPC, simulation-clock Lag limits and automatic center-wheel steering; control-surface percent mappings, RPM, Standard autoplay and full FSX timing remain unverified or unimplemented |
 | MDLX visibility | Initial read-only subset | VISL VISS/VINS/VISC/VINC and SGVL; numeric RPN, A-variable lookup and inherited draw masks; unsupported or unavailable conditions use encoded defaults |
 | Skinned MDLX parts | Omitted with a count | No bone deformation |
 | MDL8, MDL9, P3D | Unsupported | Explicit format error |

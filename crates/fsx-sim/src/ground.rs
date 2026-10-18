@@ -4,7 +4,10 @@ use crate::flight::Quaternion;
 #[cfg(test)]
 use crate::flight::GRAVITY;
 use crate::flight::{Controls, State};
-use fsx_vehicle::ground::Gear;
+use fsx_vehicle::ground::{Gear, Wheel};
+fn steering(wheel: &Wheel, yaw: f64) -> f64 {
+    yaw * wheel.steering
+}
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [
         a[1] * b[2] - a[2] * b[1],
@@ -15,8 +18,21 @@ fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
 
 pub trait GroundForces {
     fn forces(&self, s: State, cg: [f64; 3], c: Controls) -> ([f64; 3], [f64; 3], usize);
+    fn center_steering_angle(&self, yaw: f64) -> Option<f64>;
 }
 impl GroundForces for Gear {
+    fn center_steering_angle(&self, yaw: f64) -> Option<f64> {
+        if !yaw.is_finite() || yaw.abs() > 1. {
+            return None;
+        }
+        let mut centers = self.wheels.iter().filter(|w| w.position[1].abs() < 1e-6);
+        let center = centers.next()?;
+        if centers.next().is_some() {
+            return None;
+        }
+        let angle = steering(center, yaw);
+        angle.is_finite().then_some(angle)
+    }
     /// Body force and moment about loaded CG. Contact coordinates are the
     /// uncompressed tire contact points; wheel radius is not added a second time.
     fn forces(&self, s: State, cg: [f64; 3], c: Controls) -> ([f64; 3], [f64; 3], usize) {
@@ -37,7 +53,7 @@ impl GroundForces for Gear {
             let spring =
                 wheel.stiffness * (compression + 19. * (compression - wheel.travel).max(0.));
             let normal = (spring + wheel.damping * velocity[2]).max(0.);
-            let steer = c.yaw * wheel.steering;
+            let steer = steering(wheel, c.yaw);
             let direction = q.rotate([steer.cos(), steer.sin(), 0.]);
             let horizontal = direction[0].hypot(direction[1]).max(1e-9);
             let forward = [direction[0] / horizontal, direction[1] / horizontal];

@@ -108,11 +108,13 @@ The camera initially uses bind-pose bounds so two frame captures have identical
 framing. R resets the orbit around the current pose. Add `--snapshot path.ppm`
 to capture a chosen pose without opening a window.
 
-This is manual key inspection, not simulation-driven animation. Direct Sim
-bindings are decoded and listed, including variable, units, scale, bias and
-optional lag. Their units, signs and response still need FSX reference tests
-before connection to the flight state. Animation code expressions, standard autoplay timing/randomization, animation lag and skin deformation are
-not evaluated. Other clips remain in bind pose; mutually exclusive propeller
+Manual clip/frame selection is separate from flight animation. Direct Sim
+bindings expose variable, units, scale, bias and optional lag. Supported XAPC
+expressions use the bounded read-only interpreter. Flight currently supplies
+physical center-wheel steering, throttle lever position and on-ground state;
+unknown values remain unavailable. Control-surface percent mappings, RPM,
+Standard autoplay timing/randomization and skin deformation still require work.
+Other clips remain in bind pose; mutually exclusive propeller
 and wheel alternatives can still be visible together. A clip with no geometry
 tracks is reported as such and has no visual effect.
 
@@ -121,6 +123,29 @@ Elevator frames 0 and 100 rendered through the same Vulkan path with identical
 camera framing; differences were confined to the tail region. Native **]**
 input advanced frame 50 to 55 and presented the updated geometry. This proves
 the inspected path, not FSX animation parity for all aircraft or channels.
+
+In flight mode, Q/E steering now updates C172 clip 4 automatically from the same
+CFG-derived angle used in wheel contact forces. The temporal evaluator uses
+simulation elapsed time, so pause holds visual state and R reinitializes it.
+Positive Lag bounds motion in authored keyframes per second. Unknown targets
+hold the last available pose; the first available target initializes immediately.
+These policies and the steering direction still lack an original-FSX comparison.
+
+Run the local-content controller-to-GPU check without opening a window:
+
+```powershell
+cargo run --locked -p fsx-app --features viewer --example flight-pose-check -- ./FSX target/flight-pose-check
+```
+
+The output directory must be new. The check drives the shared flight keyboard
+controller directly, advances physics, evaluates the native animation, saves
+center/right/left P6 renders, and verifies pause/reset. It sends no OS input.
+Its fixed model-space camera isolates deformation from aircraft translation.
+The tested C172 CFG has 22 degrees maximum center steering: controller values
+0 and +/-0.5 produce angles 0 and +/-11 degrees, or +/-12.222222 grads.
+Its native XAPC selects frames 200, 6.111111 and 193.88889. The two turning
+captures differ at 498 pixels within (342,469)..(368,502). This verifies the
+independent physics-to-rendering path, not FSX steering fidelity.
 
 ## Reference calibration
 
@@ -140,7 +165,7 @@ and another 35 over two seconds on 18 October 2026. User-aircraft request alias
 0 resolved to actual object ID 1, which the reader validates and binds.
 This establishes baseline acquisition; control sweeps and angle/percentage
 calibration remain unverified. A failed connection or an empty output is not
-calibration evidence. Flight mode still has no simulation-driven animation. Offline pose import is
+calibration evidence. Flight mode has an initial center-steering binding; control-surface mapping remains uncalibrated. Offline pose import is
 available for supported recorded bindings, as described below.
 
 ## Inspect one captured pose
@@ -260,6 +285,6 @@ all 61 conditions resolve and seven LOD-400 draw batches are hidden. This is a
 presentation state, not a simulation of propeller mechanics or FSX menu parity.
 Flight still lacks engine/wheel RPM state, so unknown conditions retain their
 encoded defaults. Model visibility does not implement gauge XML, local variables,
-assignment/events, registers, loops, strings, animation code or temporal lag. Evaluation must leave exactly one finite scalar result.
+assignment/events, registers, loops, strings, native gauge DLLs or temporal visibility lag. Evaluation must leave exactly one finite scalar result.
 The RPN interpreter bounds source size (16 KiB), instructions (4096), nesting
 (32) and stack entries (64), and never executes native or original gauge code. A model visibility block is limited to 4 MiB and 262,144 compiled instructions in total.

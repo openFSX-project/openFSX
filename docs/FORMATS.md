@@ -60,8 +60,14 @@ contains a terminated expression with an optional #lag# prefix. A bounded,
 read-only numeric RPN subset evaluates supported A-variable expressions into
 authored frame positions; results clamp to the clip length. Unknown syntax,
 local variables, writes, missing values and invalid results keep the clip in
-bind pose with diagnostics. Positive lag requires a temporal evaluator and is
-deferred. XAPC source is limited to 16 KiB, each program to 4096 instructions
+bind pose with diagnostics in static inspection. The temporal PoseState API
+limits movement to Lag keyframes per simulation second for both XAPS and XAPC.
+Its first available target initializes immediately; unavailable targets hold
+the previous known pose and retain the failure diagnostic. Recreate state on
+model changes or simulation reset. This initialization/missing-value policy is
+explicit and has not been compared with FSX. Static plan_pose inspection still
+defers positive lag because one sample has no time history.
+XAPC source is limited to 16 KiB, each program to 4096 instructions
 and the ANIB total to 262144 compiled instructions. Duplicate XAPS/XAPC drivers
 are rejected. XANS begins with channel type, transform ID and float
 track length. Observed channels 0 and 2 contain XANK keys with a one-byte kind,

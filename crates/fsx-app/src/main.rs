@@ -16,6 +16,7 @@ use winit::{
     window::Window,
 };
 mod desktop_flight;
+mod flight_pose;
 mod reference_pose;
 struct App {
     model: Model,
@@ -30,6 +31,7 @@ struct App {
     cursor: Option<(f64, f64)>,
     error: Option<String>,
     flight: Option<FlightSession>,
+    flight_pose: flight_pose::FlightPose,
     last_frame: Instant,
     last_title: Instant,
     visible: bool,
@@ -75,6 +77,15 @@ impl App {
         self.last_frame = now;
         if let Some(flight) = &mut self.flight {
             flight.advance(elapsed)?;
+            if let Some(geometry) =
+                self.flight_pose
+                    .update(&self.model, self.geometry.lod, &flight.simulation)?
+            {
+                if let Some(gpu) = &mut self.gpu {
+                    gpu.update_geometry(&geometry)?;
+                }
+                self.geometry = geometry;
+            }
             flight_view(flight, &mut self.orbit);
             if let Some(gpu) = &mut self.gpu {
                 gpu.model_matrix = flight.model_matrix();
@@ -639,6 +650,7 @@ fn run() -> Result<(), String> {
             }
         })
         .transpose()?;
+    let mut flight_pose = flight_pose::FlightPose::new(&model);
     if let Some(flight) = &mut flight {
         if ground {
             println!("Experimental runway start: fixed tricycle gear, parking brake on. B releases brake; F4 full power; F1 idle; Space wheel brakes.");
@@ -651,6 +663,9 @@ fn run() -> Result<(), String> {
         }
         println!("{}", flight.title()?);
         flight_view(flight, &mut orbit);
+        if let Some(posed) = flight_pose.update(&model, geometry.lod, &flight.simulation)? {
+            geometry = posed;
+        }
     }
     if let Some(path) = snapshot {
         let mut gpu = block_on(Gpu::new(
@@ -688,6 +703,7 @@ fn run() -> Result<(), String> {
         cursor: None,
         error: None,
         flight,
+        flight_pose,
         last_frame: Instant::now(),
         last_title: Instant::now() - Duration::from_secs(1),
         visible: true,
