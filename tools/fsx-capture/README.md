@@ -41,10 +41,13 @@ The local MSVC build and synthetic self-test pass. The test checks BGRA-to-RGB
 ordering, alpha omission and dimension limits without opening a window or
 capturing the screen. Windows CI runs the same build and test.
 
-The first local window inspection found FSX minimized, so no window was restored
-and no actual cockpit frame has yet been verified with this utility. Successful
-compilation and synthetic checks alone do not establish capture compatibility
-with FSX's renderer.
+On 18 October 2026, a passive capture of the running openFSX menu produced a
+1024x738 frame containing both the HTML interface and native 3D aircraft preview.
+The saved image was visually inspected and the foreground-window handle was
+unchanged across capture. No activation, restoration or input was used.
+The first original-FSX inspection found it minimized; no window was restored.
+Original-FSX cockpit capture remains unverified. The openFSX result does not
+establish capture compatibility with the original game's renderer.
 
 The utility is outside the Cargo dependency graph and is not used by the engine.
 Its implementation uses the public Windows APIs, with no game DLL injection or

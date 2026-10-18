@@ -198,10 +198,13 @@ indicators and security policy keep their defaults; there is no desktop fallback
 
 Replace `12345` with the running game's process ID. The build needs installed
 Visual Studio C++ tools and a Windows SDK with C++/WinRT headers. Output must
-be a new file. Local compilation and synthetic pixel/dimension checks pass;
-an actual FSX cockpit capture is still pending because the inspected game
-window was minimized. Keep original-game images under ignored `target/` as
-reference material. They are not screenshots of openFSX progress.
+be a new file. Local compilation and synthetic pixel/dimension checks pass.
+A 1024x738 passive capture of the openFSX menu was visually verified, including
+the native 3D preview; the foreground-window handle was unchanged. Original-FSX
+cockpit capture remains unverified: it was minimized during the first inspection,
+and the later available game window belonged to openFSX. Keep original-game
+images under ignored `target/` as reference material. They are not screenshots
+of openFSX progress.
 
 ## Visibility inspection
 
