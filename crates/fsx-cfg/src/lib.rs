@@ -63,6 +63,12 @@ impl Config {
     pub fn section(&self, section: &str) -> Option<&Section> {
         self.sections.get(&section.to_ascii_lowercase())
     }
+    /// Normalized section names and values, in lexical order.
+    pub fn sections(&self) -> impl Iterator<Item = (&str, &Section)> {
+        self.sections
+            .iter()
+            .map(|(name, values)| (name.as_str(), values))
+    }
     pub fn number(&self, section: &str, key: &str) -> Result<f64, String> {
         let value = self
             .get(section, key)

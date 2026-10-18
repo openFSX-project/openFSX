@@ -136,6 +136,36 @@ remain unimplemented. The [Microsoft RPN operator reference](https://docs.flight
 documents register stack behavior; this is not a complete FSX execution contract.
 No A: writes, events, native calls, gauge DLLs, loops or strings are supported.
 
+## Panel placement subset
+
+`fsx-vehicle::panel` reads the selected variant's panel.cfg without loading gauge
+code. Aircraft definitions select panel/panel.cfg or panel.SUFFIX/panel.cfg;
+suffixes must be filename components. The `inspect-panel` command selects variant
+0, reports all configured panels and checks each dynamic texture in the native
+interior against the virtual-cockpit configuration.
+
+WindowNN and VCockpitNN sections sort numerically. Gauge references retain the
+module and instrument names, X/Y panel coordinates, optional positive width and
+height, and the remaining parameter string including commas. Omitted dimensions
+remain unresolved until the gauge's own intrinsic size is available. The loader
+visits indices below 100 in numeric order and then contiguous indices from 100;
+later entries after a gap are reported separately. This follows the documented
+ordering in the [panel configuration reference](https://prepar3d.com/SDKv3/LearningCenter/simobjects/panels_and_gauges/panel_configuration_files.html),
+but native FSX ordering at gaps has not been measured.
+
+Panel coordinate extents, explicit pixel extents and RGB background colors are
+read separately; no automatic scaling or aspect-ratio resolution is applied.
+Virtual-cockpit texture names start with $, are at most 15 bytes and match the
+model case-insensitively. Duplicate numeric panel/gauge aliases and duplicate VC
+texture names fail explicitly. Limits are 2 MiB of decoded CFG text, 256 panels,
+4096 loaded gauges, indices below 4096 and finite coordinates within +/-65536.
+Other section/directive names are retained as unsupported diagnostics.
+
+Background bitmaps, window positioning/visibility, panel aliases, render-to-texture
+views, XML/CAB gauges, native DLL/GAU callbacks and panel interaction are not yet
+implemented. The parser does not execute or extract installed gauge code. Tests
+use original synthetic declarations; installed panel configurations remain local.
+
 ## MDLX visibility subset
 
 VISL contains packed VISS/VINS/VISC/VINC string chunks, bounded to 16 KiB per

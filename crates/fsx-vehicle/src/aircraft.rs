@@ -50,6 +50,7 @@ pub struct Aircraft {
     /// SI body forward/right/down coordinates, including reference datum.
     pub eye_point: Option<[f64; 3]>,
     pub texture: PathBuf,
+    pub panel: PathBuf,
     pub air_path: PathBuf,
     pub parameters: Parameters,
 }
@@ -61,6 +62,8 @@ pub struct VisualAircraft {
     pub interior: Option<PathBuf>,
     pub eye_point: Option<[f64; 3]>,
     pub texture: PathBuf,
+    /// Variant-selected panel configuration; existence is checked when loaded.
+    pub panel: PathBuf,
 }
 fn component(value: &str) -> Result<&str, String> {
     if value.contains(['/', '\\', ':', '\0']) || value == "." || value == ".." {
@@ -100,6 +103,7 @@ impl VisualAircraft {
             .to_owned();
         let model = component(config.get(&section, "model").unwrap_or(""))?;
         let texture = component(config.get(&section, "texture").unwrap_or(""))?;
+        let panel = component(config.get(&section, "panel").unwrap_or(""))?;
         let model_dir = folder.join(if model.is_empty() {
             "model".to_owned()
         } else {
@@ -162,6 +166,13 @@ impl VisualAircraft {
             } else {
                 format!("texture.{texture}")
             }),
+            panel: folder
+                .join(if panel.is_empty() {
+                    "panel".to_owned()
+                } else {
+                    format!("panel.{panel}")
+                })
+                .join("panel.cfg"),
         })
     }
 }
@@ -186,6 +197,7 @@ impl Aircraft {
             interior: visual.interior,
             eye_point: visual.eye_point,
             texture: visual.texture,
+            panel: visual.panel,
             air_path,
             parameters: Parameters::from_config(&config, air.dynamics()?)?,
         })
@@ -363,7 +375,7 @@ mod tests {
                 .as_nanos()
         ));
         fs::create_dir_all(folder.join("model.jet")).unwrap();
-        fs::write(folder.join("aircraft.cfg"), b"[fltsim.3]\ntitle=Original synthetic jet\nmodel=jet\ntexture=blue\n[GeneralEngineData]\nengine_type=1\n").unwrap();
+        fs::write(folder.join("aircraft.cfg"), b"[fltsim.3]\ntitle=Original synthetic jet\nmodel=jet\ntexture=blue\npanel=ifr\n[GeneralEngineData]\nengine_type=1\n").unwrap();
         fs::write(
             folder.join("model.jet/model.cfg"),
             b"[models]\nnormal=synthetic\n",
@@ -373,6 +385,11 @@ mod tests {
         assert_eq!(visual.title, "Original synthetic jet");
         assert_eq!(visual.model, folder.join("model.jet/synthetic.mdl"));
         assert_eq!(visual.texture, folder.join("texture.blue"));
+        assert_eq!(visual.panel, folder.join("panel.ifr/panel.cfg"));
+        for value in ["../outside", "C:\\outside", "/outside", ".."] {
+            let cfg = Config::parse(&format!("[fltsim.3]\ntitle=Own\npanel={value}\n")).unwrap();
+            assert!(VisualAircraft::from_config(&folder, 3, false, &cfg).is_err());
+        }
         assert!(visual.interior.is_none() && visual.eye_point.is_none());
         assert!(Aircraft::load(&folder, 3, false).is_err());
         fs::remove_dir_all(folder).unwrap();
@@ -397,6 +414,7 @@ mod tests {
         .unwrap();
         let visual = VisualAircraft::load(&folder, 2, false).unwrap();
         assert_eq!(visual.interior, Some(folder.join("model.dual/inside.mdl")));
+        assert_eq!(visual.panel, folder.join("panel/panel.cfg"));
         assert_eq!(visual.eye_point, Some([FOOT, 5. * FOOT, -7. * FOOT]));
         for invalid in ["NaN,0,1", "1,2,3,4", "1e30,0,0"] {
             fs::write(

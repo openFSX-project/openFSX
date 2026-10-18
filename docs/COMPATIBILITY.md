@@ -13,6 +13,7 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | Native viewer | Experimental | Diffuse textured geometry, approximate alpha blending; manual native-key inspection |
 | MDLX animation keys | Initial runtime binding subset | ANIB/XANI/XANS/XANK and SGAL; XAPS/XAPC, bounded instance-local data/registers, simulation-clock Lag and automatic center steering/throttle; control-surface percent mappings, RPM, Standard autoplay and full FSX timing remain unverified or unimplemented |
 | Cockpit flight view | Initial native-interior subset | Variant model.cfg interior and CFG eyepoint, attached pitch/bank camera, F9/F11 selection and existing-device resource exchange; offscreen ground/air/bank and release CLI checked; native key input, FSX camera definitions/FOV parity, dynamic gauges and panel interaction remain unverified or unimplemented |
+| panel.cfg | Read-only placement subset | Variant-selected panel path, Window/VCockpit indices, titles, gauge references/coordinates/optional dimensions/parameters and case-insensitive model texture bindings; backgrounds, aliases, layout behavior and gauge execution remain unimplemented |
 | MDLX visibility | Initial read-only subset | VISL VISS/VINS/VISC/VINC and SGVL; numeric RPN, A-variable lookup and inherited draw masks; unsupported or unavailable conditions use encoded defaults |
 | Skinned MDLX parts | Omitted with a count | No bone deformation |
 | MDL8, MDL9, P3D | Unsupported | Explicit format error |
@@ -32,6 +33,8 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | Audio, AI, multiplayer | Not implemented | Future subsystems |
 
 ## Local evidence
+
+On 18 October 2026, `inspect-panel` read the installed C172 variant-0 configuration: six 2D windows with 147 placements and two virtual-cockpit panels with 29 placements. Both native interior texture names matched their configured panels case-insensitively. A321 (17 VC placements) and B747 (28 VC placements) also matched both configured textures. These are configuration/model checks, not instrument rendering or behavior validation. C208B inspection rejects its installed `pixel_size=512,512s` value; FSX's handling of that malformed value has not been measured. No installation file was corrected or included in the repository.
 
 The native Windows menu loaded the local aircraft catalog and live C172 exterior preview. On 18 October 2026, native capture and input verified camera movement, zoom, hiding the preview for the aircraft picker and replacing C172 with the selected A321 model (29,888 LOD-400 triangles). Visual resource loading does not require the single-piston flight model; this does not establish A321 flight support. Skinned parts, registration decals and automatic model animation remain incomplete. Aircraft chooser opening, FLY NOW launching the C172 runway renderer and Esc restoring the menu were checked. This establishes the launch path only; it does not establish FSX menu or simulation parity.
 

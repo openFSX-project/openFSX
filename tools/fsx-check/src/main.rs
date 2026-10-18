@@ -40,6 +40,82 @@ fn titles(text: &str) -> Vec<String> {
 use fsx_cfg::decode;
 use fsx_sim::AircraftDynamics;
 
+fn panel_report(folder: &Path, windows_1252: bool) -> Result<(), String> {
+    use fsx_vehicle::{
+        aircraft::VisualAircraft,
+        panel::{Kind, PanelConfig},
+    };
+    let aircraft = VisualAircraft::load(folder, 0, windows_1252)?;
+    let config = PanelConfig::load(&aircraft.panel, windows_1252)?;
+    println!("{} | {}", aircraft.title, aircraft.panel.display());
+    let mut modules = std::collections::BTreeMap::<String, usize>::new();
+    for panel in &config.panels {
+        let target = match &panel.kind {
+            Kind::Window => format!(
+                "Window{:02} ({})",
+                panel.index,
+                panel.title.as_deref().unwrap_or("untitled")
+            ),
+            Kind::VirtualCockpit { texture } => format!("VCockpit{:02} -> {texture}", panel.index),
+        };
+        println!(
+            "{target}: {} gauges | size_mm {:?} | pixel_size {:?} | background {:?}",
+            panel.gauges.len(),
+            panel.size_mm,
+            panel.pixel_size,
+            panel.background_color
+        );
+        for gauge in &panel.gauges {
+            *modules
+                .entry(gauge.module.to_ascii_lowercase())
+                .or_default() += 1;
+            if matches!(panel.kind, Kind::VirtualCockpit { .. }) {
+                println!(
+                    "  gauge{:02}: {}!{} | position {:?} | size {:?}{}",
+                    gauge.index,
+                    gauge.module,
+                    gauge.name,
+                    gauge.position,
+                    gauge.size,
+                    if gauge.parameters.is_some() {
+                        " | gauge parameters present"
+                    } else {
+                        ""
+                    }
+                );
+            }
+        }
+        if !panel.ignored_gauges.is_empty() {
+            println!(
+                "  Not loaded after extended-index gap: {:?}",
+                panel.ignored_gauges
+            );
+        }
+    }
+    println!("Gauge module references (placements, not unique instruments):");
+    for (module, count) in modules {
+        println!("  {module}: {count}");
+    }
+    if let Some(interior) = &aircraft.interior {
+        let model = fsx_model::Model::load(interior)?;
+        for texture in model.textures.iter().filter(|name| name.starts_with('$')) {
+            match config.virtual_cockpit(texture) {
+                Some(panel) => println!(
+                    "Interior texture {texture} -> VCockpit{:02} ({} gauge placements)",
+                    panel.index,
+                    panel.gauges.len()
+                ),
+                None => println!("Interior texture {texture}: no configured VCockpit binding"),
+            }
+        }
+    }
+    println!(
+        "{} unsupported layout/background directives; no gauge code was loaded or executed.",
+        config.unsupported.len()
+    );
+    Ok(())
+}
+
 fn takeoff_report(folder: &Path, windows_1252: bool) -> Result<(), String> {
     use fsx_sim::flight::{Simulation, STEP};
     use fsx_vehicle::aircraft::{Aircraft, KNOT};
@@ -285,6 +361,17 @@ fn inspect(root: &Path, windows_1252: bool) -> Result<(), String> {
 fn main() -> ExitCode {
     let args: Vec<_> = env::args_os().skip(1).collect();
     if (args.len() == 2 || (args.len() == 3 && args[2] == "--windows-1252"))
+        && args[0] == "inspect-panel"
+    {
+        return match panel_report(Path::new(&args[1]), args.len() == 3) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("Error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if (args.len() == 2 || (args.len() == 3 && args[2] == "--windows-1252"))
         && (args[0] == "inspect-aircraft"
             || args[0] == "flight-check"
             || args[0] == "takeoff-check")
@@ -369,7 +456,7 @@ fn main() -> ExitCode {
     if !(args.len() == 2 || (args.len() == 3 && args[2] == "--windows-1252"))
         || args[0] != "inspect"
     {
-        eprintln!("Usage:\n  openfsx inspect <FSX folder> [--windows-1252]\n  openfsx inspect-model <model.mdl>\n  openfsx inspect-aircraft <aircraft folder> [--windows-1252]\n  openfsx flight-check <aircraft folder> [--windows-1252]\n  openfsx takeoff-check <aircraft folder> [--windows-1252]\nFor the experimental model viewer, build package fsx-app with --features viewer (binary openfsx-viewer).");
+        eprintln!("Usage:\n  openfsx inspect <FSX folder> [--windows-1252]\n  openfsx inspect-model <model.mdl>\n  openfsx inspect-panel <aircraft folder> [--windows-1252]\n  openfsx inspect-aircraft <aircraft folder> [--windows-1252]\n  openfsx flight-check <aircraft folder> [--windows-1252]\n  openfsx takeoff-check <aircraft folder> [--windows-1252]\nFor the experimental model viewer, build package fsx-app with --features viewer (binary openfsx-viewer).");
         return ExitCode::from(2);
     }
     match inspect(Path::new(&args[1]), args.len() == 3) {
