@@ -17,8 +17,8 @@ There are no placeholder crates for unimplemented scenery, gauges or APIs.
 | fsx-geometry | Matrices, camera math and double-precision rigid orientation | None |
 | fsx-script | Bounded numeric RPN and optional model-local data | None |
 | fsx-model | MDLX geometry, materials, scene graph, authored keys and visibility | fsx-geometry, fsx-script |
-| fsx-texture | DDS top-mip decoding and texture.cfg fallback lookup | None |
-| fsx-vehicle | Aircraft CFG/AIR data, static loading and contact definitions | fsx-cfg, fsx-geometry |
+| fsx-texture | DDS top-mip and BI_RGB bitmap decoding, texture.cfg fallback lookup | None |
+| fsx-vehicle | CFG/AIR data, static loading, contacts, panel placements and native gauge metadata | fsx-cfg, fsx-geometry |
 | fsx-sim | 6DOF integration, aerodynamics and wheel contact forces | fsx-vehicle, fsx-geometry |
 | fsx-render | wgpu resources, materials, draw passes, debugging overlay and readback | model, texture, geometry, vehicle, sim |
 | fsx-ui | Windows WebView2 menu host, native 3D preview and bounded installation asset access | fsx-cfg, fsx-model, fsx-vehicle, fsx-render |
@@ -31,6 +31,14 @@ The separate `tools/fsx-reference` Windows x86 measurement helper reads an
 original running FSX through its installed client. It is outside the engine's
 Cargo graph; no subsystem links the original SimConnect DLL. Protocol checks
 use original synthetic packets and run in Windows CI without game resources.
+
+The separate C++ tool under tools/fsx-gauge-host is an experimental Windows x86
+process for isolated native needle-update calls. It loads only the explicitly
+selected installed stock library; Rust engine packages do not link to it or to
+FSX import libraries. Its own synthetic ABI/exception/protocol self-test runs in
+Windows CI without game files. Local native probes do not implement the PANELS
+API or a full gauge lifecycle and are not connected to flight-mode instruments.
+The Rust content reader remains read-only and never executes DLLs.
 Build the native application with an explicit package:
 
 ```powershell

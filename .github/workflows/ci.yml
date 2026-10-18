@@ -30,3 +30,6 @@ jobs:
       - name: Build and check passive window capture
         shell: pwsh
         run: ./scripts/build-capture.ps1
+      - name: Build and check isolated x86 gauge probe
+        shell: pwsh
+        run: ./scripts/build-gauge-host.ps1

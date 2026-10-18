@@ -113,6 +113,7 @@ launcher/             Independent menu frontend
 assets/               Owned runtime shaders
 tools/fsx-check/      Headless inspection and consistency-check CLI
 tools/fsx-reference/  Separate original-FSX measurement helper (Windows x86)
+tools/fsx-gauge-host/ Isolated native needle-update diagnostic (Windows x86)
 docs/                 English documentation, also published on the site
 site/                 GitHub Pages website
 scripts/              Documentation generation and local preview

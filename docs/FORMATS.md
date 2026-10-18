@@ -244,6 +244,43 @@ cargo run --locked -p fsx-check --example native-panel-check -- "./FSX"
 The example uses the explicit installation's stock C172 and Gauges folder. It is
 not a general add-on module search-order implementation.
 
+## Isolated native update-call protocol
+
+The separate tools/fsx-gauge-host process can execute a selected installed
+needle update function on Windows x86. It is outside the Rust content-reader
+and engine dependency graph. Build and check without running FSX:
+
+```powershell
+./scripts/build-gauge-host.ps1
+./target/fsx-gauge-host.exe --probe ./FSX Cessna172.dll Airspeed
+./target/fsx-gauge-host.exe --sample ./FSX Cessna172.dll Airspeed 1001 75
+./scripts/check-native-gauges.ps1 -FsxRoot ./FSX -Output target/native-gauge-check.ndjson
+```
+
+Probe mode loads the selected DLL but invokes no exported module/element
+functions. Sample mode calls ModuleInit/ModuleDeinit around one selected needle
+update call. It fills current and previous numeric source values with the same
+explicit raw input. No simulator token lookup, units or native PANELS services
+are supplied. Schema-1 single-line JSON identifies source native-gauge-probe,
+mode, pointer_bits, library/gauge, lifecycle calls, needles and optional sample
+resource/token/raw_input/callback_result. All numeric results must be finite.
+
+Only the five checked stock library filenames under the explicit installation's
+canonical Gauges folder are accepted. Names are bounded ASCII; pointers remain
+within the loaded image and are checked for page access. Limits are 64 MiB on
+disk, 512 headers, 2048 elements, 8192 edges and raw magnitudes up to 1e12.
+Structured exceptions become errors; a five-second watchdog terminates only
+the helper. Errors use stderr and a nonzero exit status. No native resources or
+SDK headers are copied into the repository.
+
+The [Windows library-loader reference](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-loadlibraryexw)
+describes native loading, and the gauge API documents the four-byte x86 slot
+layout and stdcall element callbacks. The helper does not implement a full
+query/install/initialize/update/generate/draw/kill sequence, panel callbacks,
+shared variables, events or rendering. Its raw return values need the element's
+authored mapping before they can drive a renderer. No instrument/FSX parity is
+claimed by an isolated successful function call.
+
 ## MDLX visibility subset
 
 VISL contains packed VISS/VINS/VISC/VINC string chunks, bounded to 16 KiB per
