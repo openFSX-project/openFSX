@@ -11,7 +11,7 @@ $captureSdk = Get-ChildItem -LiteralPath (Join-Path $captureKit 'Include') -Dire
 if (-not $captureSdk) { throw 'A Windows SDK with C++/WinRT capture headers is required.' }
 $captureTarget = Join-Path $captureRoot 'target'
 New-Item -ItemType Directory -Path $captureTarget -Force | Out-Null
-$captureArguments = @('/nologo','/std:c++17','/EHsc','/O2','/W4','/permissive-',"/I$(Join-Path $captureVc 'include')")
+$captureArguments = @('/nologo','/std:c++20','/EHsc','/O2','/W4','/permissive-',"/I$(Join-Path $captureVc 'include')")
 foreach ($captureInclude in @('ucrt','shared','um','winrt','cppwinrt')) { $captureArguments += "/I$(Join-Path $captureSdk.FullName $captureInclude)" }
 $captureArguments += @("/Fo$(Join-Path $captureTarget 'fsx-capture.obj')", "/Fe$(Join-Path $captureTarget 'fsx-capture.exe')", (Join-Path $captureRoot 'tools/fsx-capture/main.cpp'), '/link', "/LIBPATH:$(Join-Path $captureVc 'lib/x64')")
 foreach ($captureLibrary in @('ucrt','um')) { $captureArguments += "/LIBPATH:$(Join-Path $captureKit "Lib/$($captureSdk.Name)/$captureLibrary/x64")" }
