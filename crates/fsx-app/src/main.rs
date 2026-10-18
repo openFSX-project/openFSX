@@ -1,6 +1,6 @@
 //! Native application and event loop; rendering lives in fsx-render.
 use desktop_flight::FlightSession;
-use fsx_model::{Geometry, Model};
+use fsx_model::Model;
 use fsx_render::{block_on, Appearance, Gpu, Orbit};
 use fsx_vehicle::aircraft::Aircraft;
 use std::{
@@ -17,13 +17,12 @@ use winit::{
 };
 mod desktop_flight;
 mod flight_pose;
+mod flight_view;
 mod reference_pose;
 struct App {
-    model: Model,
+    visual: flight_view::Visual,
     animation: Option<usize>,
     frame: f32,
-    geometry: Geometry,
-    appearance: Appearance,
     orbit: Orbit,
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
@@ -31,7 +30,10 @@ struct App {
     cursor: Option<(f64, f64)>,
     error: Option<String>,
     flight: Option<FlightSession>,
-    flight_pose: flight_pose::FlightPose,
+    alternate: Option<flight_view::Visual>,
+    cockpit: bool,
+    eye_point: Option<[f64; 3]>,
+    look: flight_view::Look,
     last_frame: Instant,
     last_title: Instant,
     visible: bool,
@@ -39,34 +41,63 @@ struct App {
     reference_label: Option<String>,
     visibility_nodes: Option<Vec<bool>>,
 }
-fn flight_view(flight: &FlightSession, orbit: &mut Orbit) {
-    orbit.center = flight.center();
-    orbit.yaw = flight.heading() + std::f32::consts::PI + 0.35;
-    orbit.pitch = 0.25;
-    orbit.far = 20000.;
-}
 impl App {
+    fn select_view(&mut self, cockpit: bool) -> Result<(), String> {
+        let Some(flight) = &self.flight else {
+            return Ok(());
+        };
+        if cockpit && self.eye_point.is_none() {
+            return Err("No configured cockpit eye point".into());
+        }
+        if cockpit != self.cockpit {
+            let alternate = self
+                .alternate
+                .as_mut()
+                .ok_or("No available alternate visual model")?;
+            self.visual.exchange(alternate, self.gpu.as_mut())?;
+            self.cockpit = cockpit;
+            self.orbit = Orbit::new(&self.visual.geometry);
+        }
+        self.look = flight_view::Look::default();
+        flight_view::camera(
+            flight,
+            &mut self.orbit,
+            if self.cockpit { self.eye_point } else { None },
+            self.look,
+        )?;
+        self.last_frame = Instant::now();
+        println!(
+            "Flight view: {}",
+            if self.cockpit {
+                "virtual cockpit (dynamic gauges unavailable)"
+            } else {
+                "exterior"
+            }
+        );
+        Ok(())
+    }
     fn scrub(&mut self, delta: f32) -> Result<(), String> {
         let Some(index) = self.animation else {
             return Ok(());
         };
-        self.frame = (self.frame + delta).clamp(0., self.model.animations[index].length);
-        let mut frames = vec![None; self.model.animations.len()];
+        self.frame = (self.frame + delta).clamp(0., self.visual.model.animations[index].length);
+        let mut frames = vec![None; self.visual.model.animations.len()];
         frames[index] = Some(self.frame);
         let mut geometry = self
+            .visual
             .model
-            .posed_geometry(Some(self.geometry.lod), &frames)?;
+            .posed_geometry(Some(self.visual.geometry.lod), &frames)?;
         if let Some(nodes) = &self.visibility_nodes {
             geometry.apply_visibility(nodes)?;
         }
         if let Some(gpu) = &mut self.gpu {
             gpu.update_geometry(&geometry)?;
         }
-        self.geometry = geometry;
+        self.visual.geometry = geometry;
         if let Some(w) = &self.window {
             w.set_title(&format!(
                 "openFSX Animation {index} | frame {:.2} / {:.2} | [ / ] scrub | Esc close",
-                self.frame, self.model.animations[index].length
+                self.frame, self.visual.model.animations[index].length
             ));
         }
         Ok(())
@@ -77,16 +108,25 @@ impl App {
         self.last_frame = now;
         if let Some(flight) = &mut self.flight {
             flight.advance(elapsed)?;
-            if let Some(geometry) =
-                self.flight_pose
-                    .update(&self.model, self.geometry.lod, &flight.simulation)?
-            {
+            if let Some(alternate) = &mut self.alternate {
+                alternate.update(flight)?;
+            }
+            if let Some(geometry) = self.visual.pose.update(
+                &self.visual.model,
+                self.visual.geometry.lod,
+                &flight.simulation,
+            )? {
                 if let Some(gpu) = &mut self.gpu {
                     gpu.update_geometry(&geometry)?;
                 }
-                self.geometry = geometry;
+                self.visual.geometry = geometry;
             }
-            flight_view(flight, &mut self.orbit);
+            flight_view::camera(
+                flight,
+                &mut self.orbit,
+                if self.cockpit { self.eye_point } else { None },
+                self.look,
+            )?;
             if let Some(gpu) = &mut self.gpu {
                 gpu.model_matrix = flight.model_matrix();
                 gpu.hud = if self.debug_hud {
@@ -134,7 +174,7 @@ impl ApplicationHandler for App {
             let title = self.reference_label.clone().unwrap_or_else(|| {
                 format!(
                     "openFSX • MDLX LOD {} • Drag: orbit | Wheel: zoom | R: reset | Esc: close",
-                    self.geometry.lod
+                    self.visual.geometry.lod
                 )
             });
             let window = Arc::new(
@@ -149,8 +189,8 @@ impl ApplicationHandler for App {
             let size = window.inner_size();
             self.gpu = Some(block_on(Gpu::new(
                 Some(window.clone()),
-                &self.geometry,
-                &self.appearance,
+                &self.visual.geometry,
+                &self.visual.appearance,
                 self.flight.is_some(),
                 size.width.max(1),
                 size.height.max(1),
@@ -173,6 +213,18 @@ impl ApplicationHandler for App {
         event: WindowEvent,
     ) {
         if let WindowEvent::KeyboardInput { event, .. } = &event {
+            if self.flight.is_some() && event.state == ElementState::Pressed && !event.repeat {
+                let desired = match event.physical_key {
+                    PhysicalKey::Code(KeyCode::F9) => Some(true),
+                    PhysicalKey::Code(KeyCode::F11) => Some(false),
+                    _ => None,
+                };
+                if let Some(cockpit) = desired {
+                    if let Err(error) = self.select_view(cockpit) {
+                        eprintln!("View unavailable: {error}");
+                    }
+                }
+            }
             if let (Some(flight), Some(key)) = (
                 &mut self.flight,
                 desktop_flight::flight_key(event.physical_key, &event.logical_key),
@@ -231,17 +283,28 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some((x, y)) = self.cursor {
                     if self.dragging {
-                        self.orbit.yaw += (position.x - x) as f32 * 0.008;
-                        self.orbit.pitch =
-                            (self.orbit.pitch + (position.y - y) as f32 * 0.008).clamp(-1.45, 1.45);
+                        if self.cockpit {
+                            self.look.drag(position.x - x, position.y - y);
+                        } else {
+                            self.orbit.yaw += (position.x - x) as f32 * 0.008;
+                            self.orbit.pitch = (self.orbit.pitch + (position.y - y) as f32 * 0.008)
+                                .clamp(-1.45, 1.45);
+                        }
                     }
                 }
                 self.cursor = Some((position.x, position.y));
             }
-            WindowEvent::MouseWheel { delta, .. } => self.orbit.zoom(match delta {
-                MouseScrollDelta::LineDelta(_, y) => y,
-                MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.,
-            }),
+            WindowEvent::MouseWheel { delta, .. } => {
+                let amount = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(p) => p.y as f32 / 60.,
+                };
+                if self.cockpit {
+                    self.look.zoom(amount);
+                } else {
+                    self.orbit.zoom(amount);
+                }
+            }
             WindowEvent::KeyboardInput { ref event, .. }
                 if event.state == ElementState::Pressed && self.flight.is_none() =>
             {
@@ -259,7 +322,9 @@ impl ApplicationHandler for App {
                         }
                     }
                     PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
-                    PhysicalKey::Code(KeyCode::KeyR) => self.orbit = Orbit::new(&self.geometry),
+                    PhysicalKey::Code(KeyCode::KeyR) => {
+                        self.orbit = Orbit::new(&self.visual.geometry)
+                    }
                     PhysicalKey::Code(KeyCode::ArrowLeft) => self.orbit.yaw -= 0.12,
                     PhysicalKey::Code(KeyCode::ArrowRight) => self.orbit.yaw += 0.12,
                     PhysicalKey::Code(KeyCode::ArrowUp) => {
@@ -307,12 +372,14 @@ fn run() -> Result<(), String> {
         println!("openfsx-viewer <model.mdl> [--lod N] [--texture-dir folder | --no-textures]\nopenfsx-viewer <aircraft folder> --fly [--ground] [--variant N] [--windows-1252] [--lod N]\nWindows menu: openfsx-viewer <FSX installation> --menu\nAnimation inspector: --animation N [--frame N] (use inspect-model for IDs; [ / ] scrub)\nRecorded pose: --reference-pose sample.ndjson [--reference-sample N] (inspection only)\nOrbit camera: --view front|rear --zoom N (0.1..10)\nOptional: --debug-hud (experimental telemetry); --snapshot output.ppm [--seconds N, flight only, 0..300]\nFlight keys: Down/Up pull/push; Left/Right bank; Q/E rudder; PageUp/PageDown throttle; F1 idle; F4 full power; B parking brake; Space wheel brakes; Home/End trim; P pause; R reset; Esc close.");
         println!("Visibility inspector: repeat --visibility-var NAME#units#value (explicit values; no flight override)");
         println!("Pose inspector: repeat --pose-var NAME#units#value (XAPS/read-only XAPC; no flight override)");
+        println!("Flight views: --cockpit starts inside; F9 virtual cockpit / recenter, F11 exterior; cockpit drag looks around, wheel changes FOV.");
         return Ok(());
     }
     let (mut lod, mut snapshot) = (None, None);
     let (mut texture_dir, mut no_textures) = (None, false);
     let (mut fly, mut variant, mut windows_1252, mut seconds) = (false, 0u32, false, 0f64);
     let mut ground = false;
+    let mut cockpit = false;
     let mut menu = false;
     let mut debug_hud = false;
     let mut animation = None;
@@ -407,6 +474,7 @@ fn run() -> Result<(), String> {
             Some("--no-textures") => no_textures = true,
             Some("--fly") => fly = true,
             Some("--ground") => ground = true,
+            Some("--cockpit") => cockpit = true,
             Some("--menu") => menu = true,
             Some("--debug-hud") => debug_hud = true,
             Some("--animation") => {
@@ -447,6 +515,7 @@ fn run() -> Result<(), String> {
     }
     if menu {
         if fly
+            || cockpit
             || ground
             || snapshot.is_some()
             || debug_hud
@@ -479,6 +548,13 @@ fn run() -> Result<(), String> {
     } else {
         None
     };
+    if cockpit && !fly {
+        return Err("--cockpit requires --fly".into());
+    }
+    let eye_point = aircraft.as_ref().and_then(|a| a.eye_point);
+    if cockpit && eye_point.is_none() {
+        return Err("--cockpit requires a configured [views] eyepoint".into());
+    }
     if ground && !fly {
         return Err("--ground requires --fly".into());
     }
@@ -492,10 +568,18 @@ fn run() -> Result<(), String> {
             "--pose-var cannot be combined with flight, recorded poses or manual animation".into(),
         );
     }
-    let model_path = aircraft
-        .as_ref()
-        .map(|a| a.model.as_path())
-        .unwrap_or(&path);
+    let model_path = if let Some(aircraft) = &aircraft {
+        if cockpit {
+            aircraft
+                .interior
+                .as_deref()
+                .ok_or("No [models] interior reference")?
+        } else {
+            aircraft.model.as_path()
+        }
+    } else {
+        &path
+    };
     let model = Model::load(model_path)?;
     if reference_index.is_some() && reference_path.is_none() {
         return Err("--reference-sample requires --reference-pose".into());
@@ -641,6 +725,33 @@ fn run() -> Result<(), String> {
         orbit.yaw += std::f32::consts::PI;
     }
     orbit.distance = (orbit.distance / zoom).clamp(orbit.radius * 1.1, orbit.radius * 30.);
+    let mut alternate = if let Some(a) = &aircraft {
+        let other = if cockpit {
+            Some(a.model.as_path())
+        } else if a.eye_point.is_some() {
+            a.interior.as_deref()
+        } else {
+            None
+        };
+        other.and_then(|path| {
+            match flight_view::Visual::load(
+                path,
+                if no_textures {
+                    None
+                } else {
+                    texture_dir.as_deref().or(Some(a.texture.as_path()))
+                },
+            ) {
+                Ok(view) => Some(view),
+                Err(error) => {
+                    eprintln!("Alternate flight view unavailable: {error}");
+                    None
+                }
+            }
+        })
+    } else {
+        None
+    };
     let mut flight = aircraft
         .map(|a| {
             if ground {
@@ -662,9 +773,17 @@ fn run() -> Result<(), String> {
             flight.advance(fsx_sim::flight::STEP)?;
         }
         println!("{}", flight.title()?);
-        flight_view(flight, &mut orbit);
+        flight_view::camera(
+            flight,
+            &mut orbit,
+            if cockpit { eye_point } else { None },
+            flight_view::Look::default(),
+        )?;
         if let Some(posed) = flight_pose.update(&model, geometry.lod, &flight.simulation)? {
             geometry = posed;
+        }
+        if let Some(alternate) = &mut alternate {
+            alternate.update(flight)?;
         }
     }
     if let Some(path) = snapshot {
@@ -691,11 +810,14 @@ fn run() -> Result<(), String> {
         return gpu.snapshot(&orbit, &path);
     }
     let mut app = App {
-        model,
+        visual: flight_view::Visual {
+            model,
+            geometry,
+            appearance,
+            pose: flight_pose,
+        },
         animation,
         frame,
-        geometry,
-        appearance,
         orbit,
         window: None,
         gpu: None,
@@ -703,7 +825,10 @@ fn run() -> Result<(), String> {
         cursor: None,
         error: None,
         flight,
-        flight_pose,
+        alternate,
+        cockpit,
+        eye_point,
+        look: flight_view::Look::default(),
         last_frame: Instant::now(),
         last_title: Instant::now() - Duration::from_secs(1),
         visible: true,

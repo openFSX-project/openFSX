@@ -27,7 +27,10 @@ fn run() -> Result<(), String> {
     }
     let aircraft = Aircraft::load(&root.join("SimObjects/Airplanes/C172"), 0, true)?;
     let model_path = if interior {
-        root.join("SimObjects/Airplanes/C172/model/cessna172sp_interior.mdl")
+        aircraft
+            .interior
+            .clone()
+            .ok_or("No configured interior model")?
     } else {
         aircraft.model.clone()
     };
@@ -38,10 +41,13 @@ fn run() -> Result<(), String> {
     let mut orbit = Orbit::new(&base);
     orbit.distance = (orbit.distance / 1.6).clamp(orbit.radius * 1.1, orbit.radius * 30.);
     if interior {
-        // Local stock-C172 validation camera. Eye derived from its observed
-        // CFG datum/eyepoint; aim is chosen to inspect the throttle, not to
+        // Stock-C172 validation camera. Eye is loaded from CFG metadata;
+        // aim is chosen to inspect the throttle, not to
         // claim FSX default-view parity or a general cockpit camera system.
-        let eye = [-0.25908f32, 0.57912, -0.10668];
+        let body = aircraft
+            .eye_point
+            .ok_or("No configured cockpit eye point")?;
+        let eye = [body[1] as f32, -body[2] as f32, body[0] as f32];
         orbit.center = [0., -0.1, 0.5];
         let delta = std::array::from_fn::<_, 3, _>(|i| eye[i] - orbit.center[i]);
         orbit.radius = 0.6;

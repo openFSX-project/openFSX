@@ -10,7 +10,7 @@ const files = new Map([
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/docs.js', ['docs.js', 'text/javascript; charset=utf-8']],
   ['/favicon.svg', ['favicon.svg', 'image/svg+xml']],
-  ...['c172-viewer.png', 'c172-flight.png', 'c172-ground.png', 'free-flight-menu.png', 'c172-elevator-0.png', 'c172-elevator-100.png', 'c172-reference-synthetic.png', 'c172-visibility-stopped.png', 'c172-visibility-fast.png', 'c172-steer-positive.png', 'c172-steer-negative.png', 'c172-flight-steer-right.png', 'c172-flight-steer-left.png', 'c172-cockpit-throttle-idle.png', 'c172-cockpit-throttle-full-power.png'].map(name => [`/assets/screenshots/${name}`, [`assets/screenshots/${name}`, 'image/png']]),
+  ...['c172-viewer.png', 'c172-flight.png', 'c172-ground.png', 'free-flight-menu.png', 'c172-elevator-0.png', 'c172-elevator-100.png', 'c172-reference-synthetic.png', 'c172-visibility-stopped.png', 'c172-visibility-fast.png', 'c172-steer-positive.png', 'c172-steer-negative.png', 'c172-flight-steer-right.png', 'c172-flight-steer-left.png', 'c172-cockpit-throttle-idle.png', 'c172-cockpit-throttle-full-power.png', 'c172-cockpit-ground.png', 'c172-cockpit-bank-right.png'].map(name => [`/assets/screenshots/${name}`, [`assets/screenshots/${name}`, 'image/png']]),
   ...['openfsx-light.svg', 'openfsx-dark.svg', 'openfsx-mono.svg', 'openfsx-icon.svg'].map(name => [`/assets/brand/${name}`, [`assets/brand/${name}`, 'image/svg+xml']]),
   ...['openfsx-avatar.png', 'openfsx-preview.png'].map(name => [`/assets/brand/${name}`, [`assets/brand/${name}`, 'image/png']]),
 ]);

@@ -6,7 +6,35 @@ This independent loader uses observed local data and the research published by F
 
 No third-party importer implementation was copied. Tests create small original triangle files; original game assets stay in the local installation.
 
+## Visual model and eye-point references
+
+The selected fltsim.N model suffix chooses model/model.suffix; its model.cfg
+provides [models] normal and optional interior. Both references are restricted
+to file-name components and receive .mdl when no extension is present. No
+embedded directory or absolute reference is accepted by this subset.
+
+An optional [views] eyepoint is exactly three finite feet values relative to
+reference_datum_position: longitudinal, lateral and vertical. The visual reader
+uses a zero datum if omitted; the full dynamics loader still requires its mass
+configuration. The sum converts to body forward/right/down SI coordinates, with
+vertical sign inversion. Eye components outside 1 km are rejected. Missing eye
+metadata leaves exterior viewing available. The installed C172 resolves to
+[-0.10668,-0.25908,-0.57912] body metres, or
+[-0.25908,0.57912,-0.10668] model-space metres before the aircraft/world transform.
+Camera-definition overlays and user camera profiles are not yet interpreted.
+
 ## MDLX subset
+
+MDLX model/view coordinates follow the left-handed Direct3D convention, with
+Y up and forward depth positive. The [modeling SDK coordinate-system notes](https://www.prepar3d.com/SDK/Environment%20Kit/Modeling%20SDK/Modeling%20File%20Formats.html)
+describe conversion from right-handed authoring coordinates. The projection
+uses target minus eye for forward and maps near/far to depth 0/1. The earlier
+right-handed camera mirrored geometry, cockpit text/control layout and the
+pilot's bank direction. This is corrected in the shared renderer; physics axes
+and simulation state are not changed. Synthetic projection tests verify that
+right remains screen-right, up remains up, depth is bounded, and a right-bank
+camera moves an eastern horizon point upward. Published GPU captures were
+rerendered; the older native menu-window image is labeled historical.
 
 Accepted files begin with RIFF, a little-endian payload length and the MDLX type. Nested chunks have a four-byte tag and a little-endian length. Observed MDLX chunks are packed without generic RIFF odd-byte padding; the C172's odd-length VISL chunk confirms this distinction.
 

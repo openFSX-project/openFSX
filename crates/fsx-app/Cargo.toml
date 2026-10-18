@@ -28,5 +28,9 @@ required-features = ["viewer"]
 name = "flight-pose-check"
 required-features = ["viewer"]
 
+[[example]]
+name = "flight-view-check"
+required-features = ["viewer"]
+
 [dev-dependencies]
 fsx-vehicle = { workspace = true, features = ["test-support"] }

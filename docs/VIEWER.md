@@ -146,7 +146,7 @@ Its fixed model-space camera isolates deformation from aircraft translation.
 The tested C172 CFG has 22 degrees maximum center steering: controller values
 0 and +/-0.5 produce angles 0 and +/-11 degrees, or +/-12.222222 grads.
 Its native XAPC selects frames 200, 6.111111 and 193.88889. The two turning
-captures differ at 498 pixels within (342,469)..(368,502). This verifies the
+captures differ at 498 pixels within (591,469)..(617,502). This verifies the
 independent physics-to-rendering path, not FSX steering fidelity.
 
 ## Model-local throttle expression and cockpit check
@@ -171,17 +171,72 @@ at the throttle. Its eye [-0.25908, 0.57912, -0.10668] metres is derived from th
 observed stock C172 CFG datum/eyepoint; target [0, -0.1, 0.5] is chosen for this
 inspection, not FSX default-camera parity. One of 42 groups resolves. Seven of
 nine diffuse maps load (18 MiB decoded); dynamic $C172S_1/$C172S_2 panel surfaces
-are unavailable, so gauges remain blank. Interior flight selection, live gauges,
-panel interaction and a general CFG camera loader are not implemented by this
-example.
+are unavailable, so gauges remain blank. This control-inspection example is
+separate from the flight camera below; it does not implement live gauges or
+panel interaction.
 
 The verified idle/full-power renders differ at 1,908 pixels confined to the
-throttle region (512,166)..(562,222). Pose and local values follow model code;
+throttle region (397,166)..(447,222). Pose and local values follow model code;
 pause holds state even if a power key changes the pending control, and reset
 reinitializes the local context. Program writes commit only on valid results.
 Registers are temporary; local values are shared between this instance's clips,
 with matching units required. Other-aircraft/gauge sharing and original-FSX
 timing, scope and control-position comparison remain unverified.
+
+## Cockpit flight camera
+
+```powershell
+cargo run --locked -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --ground --cockpit --windows-1252
+```
+
+Omit --ground for the 90 kt / 300 m airborne start. F9 selects/recenters the
+virtual cockpit and F11 returns to the exterior chase view. The default FSX
+Standard.xml maps F9/F11 to VIEW_CAMERA_SELECT_1/3; the installed cameras.cfg
+assigns those slots to Virtual Cockpit/Locked Spot. Those associations were
+checked locally; original files are not copied into openFSX. The prototype's
+exterior camera remains its own chase view, not FSX Locked Spot behavior.
+
+The loader reads [models] interior from the selected variant's model.cfg, and
+[views] eyepoint plus reference_datum_position from aircraft.cfg. Feet convert
+to body forward/right/down metres, then to the same loaded-CG/world transform
+as the aircraft mesh. Camera up follows aircraft attitude, including bank.
+Missing interior/eyepoint disables cockpit selection; --cockpit reports an
+error. Invalid vectors and non-component model references fail explicitly.
+
+In cockpit view, left drag looks around and the wheel changes vertical FOV
+between 15 and 90 degrees; F9 recenters at a nominal 45 degrees. This free-look
+gesture, initial FOV, camera definitions, InitialZoom/InitialPbh, head movement
+and clip behavior have not been matched to FSX. The near plane is 0.01 m.
+The [camera SDK](https://www.prepar3d.com/SDKv3/LearningCenter/utilities/camera_configuration/camera_configuration.html)
+describes the broader system; the current camera implements only this subset.
+Dynamic gauge surfaces are still blank and panel clicks are not implemented.
+Use --debug-hud if experimental telemetry is needed. The outside world remains
+the original test plane/runway, with no FSX scenery loaded.
+
+Both visual models retain and update their animation states. Selection exchanges
+mesh/material resources on the existing GPU device and surface; it does not
+recreate the window or reset physics. --lod applies to the starting model; the
+alternate model initially selects its highest available LOD. A failed optional
+alternate load leaves the starting view usable, with a diagnostic.
+
+For a reproducible check without a window or OS input:
+
+```powershell
+cargo run --locked -p fsx-app --features viewer --example flight-view-check -- ./FSX target/flight-view-check
+```
+
+The output directory must be new. The shared camera/resource-exchange code was
+checked at ground start, level flight and after one second of right-bank input.
+The last state reports 90.1 kt, 300 m and 15.7 degrees right bank. Its horizon
+tilts while cockpit geometry stays attached to the aircraft. For all three
+states, exterior -> cockpit -> exterior produces byte-identical exterior GPU
+readbacks and leaves simulation time, position, orientation and throttle unchanged.
+The common projection now uses the native Direct3D/MDLX handedness, correcting
+previously mirrored left/right geometry and bank direction. All published GPU
+captures were rerendered after this correction. Release CLI --cockpit snapshots passed for one-second ground
+and ten-second airborne runs. These checks verify the shared rendering path;
+native F9/F11 input has been wired and compiled but was not injected into a
+desktop window during this verification.
 
 ## Reference calibration
 
@@ -245,7 +300,7 @@ cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects
 On the local C172, explicit steering values +40 and -40 in the model-requested
 grads unit resolve XAPC clip 4 to frames 20 and 180. Offscreen GPU snapshots
 from the same camera differ at 516 pixels, confined to the nose-wheel region
-(342,470)..(366,502). This verifies the native expression-to-geometry path;
+(593,470)..(617,502). This verifies the native expression-to-geometry path;
 it does not establish steering calibration or a match to an FSX reference frame.
 The menu now supplies zero steering to this same pose evaluator for its
 stationary preview. That menu wiring is compiled; the changed native menu has

@@ -12,7 +12,7 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | MDLX | Partial | Packed chunks, VERT, INDE, PART, LOD, static TRAN/AMAP/SCEN |
 | Native viewer | Experimental | Diffuse textured geometry, approximate alpha blending; manual native-key inspection |
 | MDLX animation keys | Initial runtime binding subset | ANIB/XANI/XANS/XANK and SGAL; XAPS/XAPC, bounded instance-local data/registers, simulation-clock Lag and automatic center steering/throttle; control-surface percent mappings, RPM, Standard autoplay and full FSX timing remain unverified or unimplemented |
-| C172 interior geometry | Local offscreen validation | LOD 100 geometry and seven diffuse maps; idle/full-power throttle movement verified; dynamic gauges, cockpit flight selection and panel interaction remain unimplemented |
+| Cockpit flight view | Initial native-interior subset | Variant model.cfg interior and CFG eyepoint, attached pitch/bank camera, F9/F11 selection and existing-device resource exchange; offscreen ground/air/bank and release CLI checked; native key input, FSX camera definitions/FOV parity, dynamic gauges and panel interaction remain unverified or unimplemented |
 | MDLX visibility | Initial read-only subset | VISL VISS/VINS/VISC/VINC and SGVL; numeric RPN, A-variable lookup and inherited draw masks; unsupported or unavailable conditions use encoded defaults |
 | Skinned MDLX parts | Omitted with a count | No bone deformation |
 | MDL8, MDL9, P3D | Unsupported | Explicit format error |

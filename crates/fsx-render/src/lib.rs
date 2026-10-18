@@ -89,7 +89,80 @@ impl Appearance {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct Camera {
+    eye: [f32; 3],
+    target: [f32; 3],
+    up: [f32; 3],
+    near: f32,
+    far: f32,
+    fov: f32,
+}
+impl Camera {
+    pub fn new(
+        eye: [f32; 3],
+        target: [f32; 3],
+        up: [f32; 3],
+        near: f32,
+        far: f32,
+        fov: f32,
+    ) -> Result<Self, String> {
+        let forward = math::sub(target, eye);
+        let cross = math::cross(up, forward);
+        let norms = [
+            math::dot(forward, forward),
+            math::dot(up, up),
+            math::dot(cross, cross),
+        ];
+        if eye
+            .iter()
+            .chain(target.iter())
+            .chain(up.iter())
+            .chain([near, far, fov].iter())
+            .any(|v| !v.is_finite())
+            || near <= 0.
+            || far <= near
+            || !(1. ..179.).contains(&fov)
+            || math::dot(forward, forward) < 1e-10
+            || math::dot(up, up) < 1e-10
+            || math::dot(cross, cross) < 1e-10
+            || norms.iter().any(|n| !n.is_finite())
+        {
+            return Err("Invalid attached camera basis or projection".into());
+        }
+        let camera = Self {
+            eye,
+            target,
+            up,
+            near,
+            far,
+            fov,
+        };
+        if camera.matrix(1.).iter().any(|v| !v.is_finite()) {
+            return Err("Camera matrix exceeds finite projection range".into());
+        }
+        Ok(camera)
+    }
+    pub fn eye(&self) -> [f32; 3] {
+        self.eye
+    }
+    pub fn up(&self) -> [f32; 3] {
+        self.up
+    }
+    fn matrix(&self, aspect: f32) -> Mat4 {
+        math::camera_with_up(
+            self.eye,
+            self.target,
+            self.up,
+            aspect,
+            self.near,
+            self.far,
+            self.fov,
+        )
+    }
+}
 pub struct Orbit {
+    pub camera: Option<Camera>,
     pub center: [f32; 3],
     pub radius: f32,
     pub yaw: f32,
@@ -105,6 +178,7 @@ impl Orbit {
             .max(0.1)
             * 0.5;
         Self {
+            camera: None,
             center,
             radius,
             yaw: 0.7,
@@ -114,6 +188,9 @@ impl Orbit {
         }
     }
     fn matrix(&self, aspect: f32) -> Mat4 {
+        if let Some(camera) = self.camera {
+            return camera.matrix(aspect);
+        }
         math::camera(
             self.eye(),
             self.center,
@@ -123,6 +200,9 @@ impl Orbit {
         )
     }
     fn eye(&self) -> [f32; 3] {
+        if let Some(camera) = self.camera {
+            return camera.eye();
+        }
         [
             self.center[0] + self.distance * self.yaw.sin() * self.pitch.cos(),
             self.center[1] + self.distance * self.pitch.sin(),
@@ -145,6 +225,7 @@ pub struct Gpu {
     uniform: wgpu::Buffer,
     bind: wgpu::BindGroup,
     depth: wgpu::TextureView,
+    material_layout: wgpu::BindGroupLayout,
     material_binds: Vec<wgpu::BindGroup>,
     draws: Vec<GpuDraw>,
     pub model_matrix: Mat4,
@@ -155,6 +236,11 @@ pub struct Gpu {
     presented: bool,
     aircraft_vertices: usize,
     aircraft_draws: usize,
+}
+struct UploadedScene {
+    vertex: wgpu::Buffer,
+    materials: Vec<wgpu::BindGroup>,
+    draws: Vec<GpuDraw>,
 }
 struct GpuDraw {
     visible: bool,
@@ -381,6 +467,57 @@ impl Gpu {
                 resource: uniform.as_entire_binding(),
             }],
         });
+        let scene = Self::upload_scene(
+            &device,
+            &queue,
+            &material_layout,
+            geometry,
+            appearance,
+            flight,
+        )?;
+        let depth = Self::depth(&device, width, height);
+        Ok(Self {
+            surface,
+            device,
+            queue,
+            config,
+            pipeline,
+            blend_pipeline,
+            vertex: scene.vertex,
+            uniform,
+            bind,
+            depth,
+            material_layout,
+            material_binds: scene.materials,
+            draws: scene.draws,
+            model_matrix: math::IDENTITY,
+            flight,
+            hud: None,
+            hud_pipeline,
+            hud_vertex,
+            presented: false,
+            aircraft_vertices: geometry.vertices.len(),
+            aircraft_draws: geometry.batches.len(),
+        })
+    }
+    fn upload_scene(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        material_layout: &wgpu::BindGroupLayout,
+        geometry: &Geometry,
+        appearance: &Appearance,
+        flight: bool,
+    ) -> Result<UploadedScene, String> {
+        if geometry.batches.iter().any(|b| {
+            b.material >= appearance.materials.len()
+                || b.range.start > b.range.end
+                || b.range.end as usize > geometry.vertices.len()
+        }) || appearance.materials.iter().any(|m| {
+            m.diffuse_texture
+                .is_some_and(|i| i >= appearance.images.len())
+        }) {
+            return Err("Scene references an unavailable material, texture or vertex range".into());
+        }
         let upload = |image: &Image| {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("DDS diffuse"),
@@ -569,29 +706,32 @@ impl Gpu {
             contents: &bytes(vertices.iter().flatten().copied()),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
-        let depth = Self::depth(&device, width, height);
-        Ok(Self {
-            surface,
-            device,
-            queue,
-            config,
-            pipeline,
-            blend_pipeline,
+        Ok(UploadedScene {
             vertex,
-            uniform,
-            bind,
-            depth,
-            material_binds,
+            materials: material_binds,
             draws,
-            model_matrix: math::IDENTITY,
-            flight,
-            hud: None,
-            hud_pipeline,
-            hud_vertex,
-            presented: false,
-            aircraft_vertices: geometry.vertices.len(),
-            aircraft_draws: geometry.batches.len(),
         })
+    }
+    /// Replace model resources without recreating the device, surface or flight state.
+    pub fn replace_scene(
+        &mut self,
+        geometry: &Geometry,
+        appearance: &Appearance,
+    ) -> Result<(), String> {
+        let scene = Self::upload_scene(
+            &self.device,
+            &self.queue,
+            &self.material_layout,
+            geometry,
+            appearance,
+            self.flight,
+        )?;
+        self.vertex = scene.vertex;
+        self.material_binds = scene.materials;
+        self.draws = scene.draws;
+        self.aircraft_vertices = geometry.vertices.len();
+        self.aircraft_draws = geometry.batches.len();
+        Ok(())
     }
     pub fn update_geometry(&mut self, geometry: &Geometry) -> Result<(), String> {
         if geometry.vertices.len() != self.aircraft_vertices
@@ -849,5 +989,26 @@ impl Gpu {
         std::fs::write(path, ppm).map_err(|e| e.to_string())?;
         println!("Snapshot: {} ({}x{})", path.display(), width, height);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod camera_tests {
+    use super::*;
+    #[test]
+    fn attached_up_vector_rotates_the_screen_basis_and_rejects_degenerate_views() {
+        let camera = Camera::new([0.; 3], [0., 0., -1.], [1., 0., 0.], 0.01, 20000., 45.).unwrap();
+        let projected = math::transform(camera.matrix(1.), [1., 0., -1.]);
+        assert!(projected[0].abs() < 1e-6 && projected[1] > 2.);
+        for (target, up, near, far, fov) in [
+            ([0.; 3], [0., 1., 0.], 0.01, 1000., 45.),
+            ([0., 1., 0.], [0., 1., 0.], 0.01, 1000., 45.),
+            ([0., 0., -1.], [0., 1., 0.], 0., 1000., 45.),
+            ([0., 0., -1.], [0., 1., 0.], 1., 0.1, 45.),
+            ([0., 0., -1.], [0., 1., 0.], 0.01, 1000., 180.),
+            ([f32::MAX, 0., 0.], [0., 1., 0.], 0.01, 1000., 45.),
+        ] {
+            assert!(Camera::new([0.; 3], target, up, near, far, fov).is_err());
+        }
     }
 }

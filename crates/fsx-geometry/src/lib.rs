@@ -43,8 +43,20 @@ pub fn normalized(v: [f32; 3]) -> [f32; 3] {
 }
 
 pub fn camera(eye: [f32; 3], target: [f32; 3], aspect: f32, near: f32, far: f32) -> Mat4 {
-    let z = normalized(sub(eye, target));
-    let x = normalized(cross([0., 1., 0.], z));
+    camera_with_up(eye, target, [0., 1., 0.], aspect, near, far, 45.)
+}
+/// Left-handed Direct3D/MDLX perspective, +Z forward, depth 0..1.
+pub fn camera_with_up(
+    eye: [f32; 3],
+    target: [f32; 3],
+    up: [f32; 3],
+    aspect: f32,
+    near: f32,
+    far: f32,
+    vertical_fov: f32,
+) -> Mat4 {
+    let z = normalized(sub(target, eye));
+    let x = normalized(cross(up, z));
     let y = cross(z, x);
     let view = [
         x[0],
@@ -64,7 +76,7 @@ pub fn camera(eye: [f32; 3], target: [f32; 3], aspect: f32, near: f32, far: f32)
         -dot(z, eye),
         1.,
     ];
-    let f = 1. / (45_f32.to_radians() / 2.).tan();
+    let f = 1. / (vertical_fov.to_radians() / 2.).tan();
     let projection = [
         f / aspect,
         0.,
@@ -76,11 +88,11 @@ pub fn camera(eye: [f32; 3], target: [f32; 3], aspect: f32, near: f32, far: f32)
         0.,
         0.,
         0.,
-        far / (near - far),
-        -1.,
+        far / (far - near),
+        1.,
         0.,
         0.,
-        far * near / (near - far),
+        -far * near / (far - near),
         0.,
     ];
     multiply(projection, view)
@@ -89,6 +101,31 @@ pub fn camera(eye: [f32; 3], target: [f32; 3], aspect: f32, near: f32, far: f32)
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn direct3d_forward_camera_preserves_right_up_and_zero_to_one_depth() {
+        let matrix = camera([0.; 3], [0., 0., 1.], 1., 1., 100.);
+        let project = |p: [f32; 3]| {
+            let v = transform(matrix, p);
+            let w = matrix[3] * p[0] + matrix[7] * p[1] + matrix[11] * p[2] + matrix[15];
+            v.map(|v| v / w)
+        };
+        assert!(project([1., 0., 2.])[0] > 0.);
+        assert!(project([0., 1., 2.])[1] > 0.);
+        assert!(project([0., 0., 1.])[2].abs() < 1e-6);
+        assert!((project([0., 0., 100.])[2] - 1.).abs() < 1e-6);
+        let angle = 0.3f32;
+        let banked = camera_with_up(
+            [0.; 3],
+            [0., 0., 1.],
+            [angle.sin(), angle.cos(), 0.],
+            1.,
+            1.,
+            100.,
+            45.,
+        );
+        // Right-bank body up tilts east: an eastern horizon point must move up.
+        assert!(transform(banked, [1., 0., 10.])[1] > 0.);
+    }
     #[test]
     fn hierarchical_transform_order() {
         let mut scale = IDENTITY;

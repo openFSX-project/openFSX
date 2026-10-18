@@ -46,6 +46,9 @@ pub struct Parameters {
 pub struct Aircraft {
     pub title: String,
     pub model: PathBuf,
+    pub interior: Option<PathBuf>,
+    /// SI body forward/right/down coordinates, including reference datum.
+    pub eye_point: Option<[f64; 3]>,
     pub texture: PathBuf,
     pub air_path: PathBuf,
     pub parameters: Parameters,
@@ -55,6 +58,8 @@ pub struct Aircraft {
 pub struct VisualAircraft {
     pub title: String,
     pub model: PathBuf,
+    pub interior: Option<PathBuf>,
+    pub eye_point: Option<[f64; 3]>,
     pub texture: PathBuf,
 }
 fn component(value: &str) -> Result<&str, String> {
@@ -114,9 +119,44 @@ impl VisualAircraft {
         } else {
             format!("{name}.mdl")
         });
+        let interior = model_config
+            .get("models", "interior")
+            .filter(|name| !name.is_empty())
+            .map(|name| {
+                let name = component(name)?;
+                Ok::<_, String>(
+                    model_dir.join(if name.to_ascii_lowercase().ends_with(".mdl") {
+                        name.to_owned()
+                    } else {
+                        format!("{name}.mdl")
+                    }),
+                )
+            })
+            .transpose()?;
+        let eye_point = if config.get("views", "eyepoint").is_some() {
+            let datum = if config
+                .get("weight_and_balance", "reference_datum_position")
+                .is_some()
+            {
+                vector(config, "weight_and_balance", "reference_datum_position")?
+            } else {
+                [0.; 3]
+            };
+            let point = body_position(datum, vector(config, "views", "eyepoint")?);
+            if point.iter().any(|v| !v.is_finite() || v.abs() > 1000.) {
+                return Err(
+                    "Cockpit eye point exceeds the supported 1 km body-coordinate range".into(),
+                );
+            }
+            Some(point)
+        } else {
+            None
+        };
         Ok(Self {
             title,
             model,
+            interior,
+            eye_point,
             texture: folder.join(if texture.is_empty() {
                 "texture".to_owned()
             } else {
@@ -143,6 +183,8 @@ impl Aircraft {
         Ok(Self {
             title: visual.title,
             model: visual.model,
+            interior: visual.interior,
+            eye_point: visual.eye_point,
             texture: visual.texture,
             air_path,
             parameters: Parameters::from_config(&config, air.dynamics()?)?,
@@ -331,7 +373,48 @@ mod tests {
         assert_eq!(visual.title, "Original synthetic jet");
         assert_eq!(visual.model, folder.join("model.jet/synthetic.mdl"));
         assert_eq!(visual.texture, folder.join("texture.blue"));
+        assert!(visual.interior.is_none() && visual.eye_point.is_none());
         assert!(Aircraft::load(&folder, 3, false).is_err());
         fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
+    fn cockpit_references_and_eye_include_variant_model_folder_and_datum_units() {
+        let folder = std::env::temp_dir().join(format!(
+            "openfsx-cockpit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(folder.join("model.dual")).unwrap();
+        let cfg="[fltsim.2]\ntitle=Original synthetic cockpit\nmodel=dual\n[weight_and_balance]\nreference_datum_position=2,3,4\n[views]\neyepoint=-1,2,3\n";
+        fs::write(folder.join("aircraft.cfg"), cfg).unwrap();
+        fs::write(
+            folder.join("model.dual/model.cfg"),
+            "[models]\nnormal=outside.MDL\ninterior=inside\n",
+        )
+        .unwrap();
+        let visual = VisualAircraft::load(&folder, 2, false).unwrap();
+        assert_eq!(visual.interior, Some(folder.join("model.dual/inside.mdl")));
+        assert_eq!(visual.eye_point, Some([FOOT, 5. * FOOT, -7. * FOOT]));
+        for invalid in ["NaN,0,1", "1,2,3,4", "1e30,0,0"] {
+            fs::write(
+                folder.join("aircraft.cfg"),
+                cfg.replace("eyepoint=-1,2,3", &format!("eyepoint={invalid}")),
+            )
+            .unwrap();
+            assert!(VisualAircraft::load(&folder, 2, false).is_err());
+        }
+        fs::write(folder.join("aircraft.cfg"), cfg).unwrap();
+        fs::write(
+            folder.join("model.dual/model.cfg"),
+            "[models]\nnormal=outside\ninterior=../outside\n",
+        )
+        .unwrap();
+        assert!(VisualAircraft::load(&folder, 2, false).is_err());
+        let resolved = folder.canonicalize().unwrap();
+        assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+        fs::remove_dir_all(resolved).unwrap();
     }
 }

@@ -1,6 +1,13 @@
 # Engine screenshots
 
-The three C172 PNG images were captured on 17 October 2026 by the openFSX renderer,
+All GPU-rendered PNGs were rerendered on 18 October 2026 after correcting
+the projection to native left-handed Direct3D/MDLX coordinates. No ready-made
+image was mirrored or composited. Pixel bounds below describe the refreshed
+captures; initial capture dates identify the original check. The composed
+Free Flight menu window remains a historical capture made before this fix.
+
+The three C172 PNG images were first captured on 17 October 2026 and refreshed
+on 18 October 2026 by the openFSX renderer,
 using a user-installed stock C172 Blue/Gold livery at LOD 150. No FSX process
 was started. The GPU was an NVIDIA RTX 2080 using the Vulkan backend. The
 flight image uses the CFG station weights and full usable Avgas loading.
@@ -14,7 +21,7 @@ test content. The renderer is the same pipeline used by the window.
 From the repository root, with your own installation:
 
 ```powershell
-cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1" --snapshot target/c172-viewer.ppm
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1" --zoom 1.6 --snapshot target/c172-viewer.ppm
 cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --debug-hud --windows-1252 --lod 150 --seconds 10 --snapshot target/c172-flight.ppm
 cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --ground --debug-hud --windows-1252 --lod 150 --snapshot target/c172-ground.ppm
 node scripts/ppm-to-png.mjs target/c172-viewer.ppm target/c172-viewer.png
@@ -47,10 +54,10 @@ at the project owner's request.
 ## Authored elevator key inspection
 
 `c172-elevator-0.png` and `c172-elevator-100.png` are direct 960 x 720 GPU
-readbacks from the manual animation inspector, taken on 17 October 2026.
+readbacks from the manual animation inspector, refreshed on 18 October 2026.
 They use stock C172 animation group 7, LOD 150, the same bind-bounds rear camera
 and zoom 1.6. Only the selected clip/frame differs; other clips stay in bind
-pose. The two images differ within pixel bounds (258, 377) to (440, 452),
+pose. The two images differ within pixel bounds (520, 377) to (701, 451),
 with 4,000 changed RGB pixels in the tail region. This checks local key
 application, not calibrated flight response or full FSX animation parity.
 
@@ -81,8 +88,8 @@ node scripts/ppm-to-png.mjs target/c172-reference-synthetic.ppm target/c172-refe
 ```
 
 Changing only the synthetic elevator_pct from -2.5 to 30 changes clip 7 from
-frame 47.5 to 80, with 2,661 changed RGB pixels confined to bounds (257, 380)
-to (441, 445) in this backend/camera check. This checks binding isolation, not
+frame 47.5 to 80, with 2,661 changed RGB pixels confined to bounds (519, 380)
+to (702, 444) in this backend/camera check. This checks binding isolation, not
 physical accuracy. Other content, material, visibility and skinning limits
 remain. Aircraft artwork retains its respective owners' rights.
 
@@ -95,7 +102,7 @@ is set to 0 and 20 respectively using --visibility-var. The renderer evaluates
 30 of 61 model conditions and hides four draw batches in each case; other
 unavailable variables retain their encoded defaults. The resulting images
 select the solid and blurred propeller alternatives. Pixel differences are
-confined to (267,379)..(350,502). An intermediate value of 8 was also checked
+confined to (609,379)..(692,502). An intermediate value of 8 was also checked
 locally; its capture stays under ignored target. No physical RPM, spin timing
 or FSX measurement is inferred from these explicit inputs. The PNG files are
 lossless conversions from original P6 GPU readbacks, without compositing or AI.
@@ -110,7 +117,7 @@ and -40 for `GEAR CENTER STEER ANGLE#grads`; `--visibility-var` supplies 0 for
 `PROP MAX RPM PERCENT:1#percent` in both captures. The model's own XAPC
 expression resolves clip 4 to frames 20 and 180, without a hard-coded frame
 mapping. It drives four linked scene tracks. Only 516 RGB pixels differ,
-within nose-wheel bounds (342,470)..(366,502) on the tested Vulkan backend.
+within nose-wheel bounds (593,470)..(617,502) on the tested Vulkan backend.
 
 These are inspection inputs, not FSX readings, control calibration or an FSX
 comparison. Other clips retain their unavailable/unsupported states. Source
@@ -134,7 +141,7 @@ The local CFG's 22-degree center-wheel steering limit and controller values
 frames 6.111111 and 193.88889. The same steering-angle calculation supplies
 contact forces. Pause held simulation time and pose; reset returned the native
 frame to 200. The right/left images differ at 498 pixels within nose-wheel
-bounds (342,469)..(368,502) on the tested Vulkan backend. No original FSX process
+bounds (591,469)..(617,502) on the tested Vulkan backend. No original FSX process
 was required, and this is not an original-FSX motion or sign calibration.
 Other unavailable states, including propeller RPM, keep encoded defaults.
 The screenshots retain the aircraft artwork's respective owners' rights.
@@ -165,9 +172,43 @@ are visibly blank; gauges, cockpit flight selection and panel interaction
 are not implemented by this check. FSX global local-variable scope, timing
 and exact control-position parity remain unverified.
 
-Only 1,908 RGB pixels differ, within throttle bounds (512,166)..(562,222) on
+Only 1,908 RGB pixels differ, within throttle bounds (397,166)..(447,222) on
 the tested Vulkan backend. Exterior LOD-150 and an earlier obstructed-camera
 check had no visible difference and are not published as throttle evidence.
 The PNGs are lossless P6 readback conversions, without compositing or AI.
 Aircraft artwork retains its respective owners' rights. The source models,
 textures and dynamic panel data are not included in this repository.
+
+
+## Flight cockpit camera and view switching
+
+`c172-cockpit-ground.png` and `c172-cockpit-bank-right.png` are direct 960 x 720
+GPU readbacks from the `flight-view-check` example on 18 October 2026. They use
+the same flight camera and visual-resource exchange as the native application,
+with one independent physics session per scenario. The stock C172 variant
+resolves its interior through model.cfg and its body eye position through
+[views] eyepoint plus reference_datum_position, with feet-to-metres and axis
+conversion. The camera follows the loaded CG, position, pitch and bank, using
+45-degree vertical FOV, 0.01 m near clipping and 20 km far clipping. Global FSX
+camera profiles, zoom, head movement and mouse-look parity are not established.
+
+Ground starts with parking brake, zero speed and throttle. The bank capture
+follows 120 fixed steps (one second) of the shared controller's Right input,
+with 90.1 kt, approximately 300 m altitude and 15.7 degrees right bank. No OS
+input or desktop window was used. The visible world is the original openFSX
+flat test plane/runway, not FSX scenery. Interior LOD 100 has 24,842 triangles;
+seven of nine diffuse maps load. Dynamic gauge surfaces are still blank.
+The windshield, material and visibility limitations remain those of the engine.
+
+For ground, level and banked states, exterior -> cockpit -> exterior on the
+same GPU device produces byte-identical exterior P6 images with unchanged
+simulation time, position, orientation and throttle. A subsequent interior
+switch, physics/control step, geometry update and downward view also pass.
+The release viewer CLI separately rendered one-second ground and ten-second
+airborne cockpit snapshots. F9/F11 are wired but native desktop key injection
+was not performed during these checks. All published GPU captures were rerendered after correcting the former
+right-handed projection; the native menu-window capture remains historical.
+
+The published PNGs are lossless P6 conversions, without compositing or AI.
+Aircraft artwork retains its respective owners' rights. Models, textures,
+original configuration files and dynamic panel resources are not distributed.

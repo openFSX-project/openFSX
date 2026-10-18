@@ -12,8 +12,9 @@ and the nose-wheel pose. Supported XAPS/XAPC targets can use model Lag limits
 on the simulation clock; pause holds the pose and reset initializes it again.
 The current visual adapter also drives the C172 throttle expression using
 instance-local numeric data and scratch registers, and exposes the on-ground
-state. A local interior-model check verified throttle movement; this does not
-add cockpit flight selection or working gauges. It does not invent RPM or control-surface percent mappings. C172 steering
+state. A local interior-model check verified throttle movement. Cockpit flight
+selection now reads the native interior reference and configured eye point;
+gauges and panel interaction remain unimplemented. It does not invent RPM or control-surface percent mappings. C172 steering
 was checked from the shared keyboard controller through physics to offscreen GPU
 output; original-FSX motion and timing comparisons remain unverified. See the
 [viewer guide](VIEWER.md) for the reproducible local-content check.
@@ -25,6 +26,8 @@ From the repository root, with your own FSX installation under FSX:
 ```powershell
 cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --variant 0 --windows-1252 --lod 150
 ```
+
+Add --cockpit to start in the installed interior model, or press F9 during flight. F11 returns to the exterior. Model selection and eye position follow the selected variant and its CFG datum; dynamic gauge surfaces remain blank.
 
 In flight mode the positional path is an aircraft folder, not an MDL file. The selected fltsim.N entry resolves the AIR file, exterior model.cfg entry and texture folder. Variant 0 selects the Blue/Gold C172 in the verified installation. Encoding selection is explicit; omit --windows-1252 for UTF-8 CFG files.
 
@@ -53,12 +56,14 @@ takeoff-trim specification. R resets to the selected ground or airborne start.
 | Q / E | Rudder left / right |
 | Page Up / Page Down | Increase / decrease throttle |
 | F1 / F4 | Idle / full throttle |
+| F9 / F11 | Virtual cockpit / exterior chase; F9 also recenters cockpit look |
 | B | Toggle parking brake |
 | Space | Hold wheel brakes |
 | Home / End | Nose-up / nose-down elevator trim |
 | P | Pause / resume |
 | R | Reset the selected ground or airborne start |
-| Mouse wheel | Change chase-camera distance |
+| Left drag in cockpit | Look around relative to the aircraft |
+| Mouse wheel | Chase distance or cockpit vertical field of view |
 | Esc | Close window |
 
 Releasing a directional key centers that control. Throttle and trim remain at their last positions. Opposing keys cancel each other. Keyboard deflections use half the configured control range. Losing window focus or minimizing pauses the flight and clears held controls; press P to resume.
@@ -114,6 +119,12 @@ The snapshot advances the trimmed state at 120 Hz before rendering. Duration is 
 ## Model and units
 
 State uses metres, seconds, kilograms and radians. World axes are north/east/down; body axes are forward/right/down. Orientation is a normalized quaternion. A fourth-order Runge-Kutta integrator uses a 1/120-second outer step, with smaller contact steps near the ground. Desktop scheduling accumulates frame time and caps any one frame at 0.25 seconds; long stalls do not trigger unbounded catch-up.
+
+Rendering maps NED to east/up/north and uses a left-handed Direct3D projection,
+matching the native MDLX convention. The corrected camera preserves left/right
+and pilot-view bank direction; a former right-handed projection mirrored them.
+This visual correction does not change the physics integration or its control
+signs. Exterior and cockpit cameras share the same loaded-CG transform.
 
 CFG supplies maximum gross mass, empty mass and inertias, loading stations,
 tank positions and capacities, wing geometry, engine position/power, control
