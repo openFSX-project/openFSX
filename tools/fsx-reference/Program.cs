@@ -73,13 +73,19 @@ internal static class Program
         if (Double.IsNaN(value) || Double.IsInfinity(value)) throw new InvalidDataException("Non-finite reference value.");
         return value.ToString("R", CultureInfo.InvariantCulture);
     }
-    private static string Sample(byte[] packet, double elapsed, string source)
+    private static string Sample(byte[] packet, double elapsed, string source, uint expectedObject = 0)
     {
         Header(packet);
         int expected = 40 + 256 + Names.Length * 8;
-        if (packet.Length != expected || Word(packet, 8) != DataMessage || Word(packet, 12) != 1 || Word(packet, 16) != 0 ||
+        if (packet.Length != expected || Word(packet, 8) != DataMessage || Word(packet, 12) != 1 || Word(packet, 16) != expectedObject ||
             Word(packet, 20) != 1 || Word(packet, 24) != 0 || Word(packet, 36) != Names.Length + 1)
-            throw new InvalidDataException("Unexpected user-aircraft definition, flags or payload layout.");
+            throw new InvalidDataException("Unexpected user-aircraft packet: size " + packet.Length +
+                ", message " + (packet.Length >= 12 ? Word(packet, 8).ToString() : "truncated") +
+                ", request " + (packet.Length >= 16 ? Word(packet, 12).ToString() : "truncated") +
+                ", object " + (packet.Length >= 20 ? Word(packet, 16).ToString() : "truncated") +
+                ", definition " + (packet.Length >= 24 ? Word(packet, 20).ToString() : "truncated") +
+                ", flags " + (packet.Length >= 28 ? Word(packet, 24).ToString() : "truncated") +
+                ", count " + (packet.Length >= 40 ? Word(packet, 36).ToString() : "truncated"));
         int end = Array.IndexOf<byte>(packet, 0, 40, 256);
         if (end < 0) throw new InvalidDataException("Unterminated aircraft title.");
         string title = Encoding.Default.GetString(packet, 40, end - 40);
@@ -116,6 +122,7 @@ internal static class Program
             Check(request(connection, 1, 1, 0, 2, 0, 0, 0, 0), "Request local user-aircraft visual frames");
             Stopwatch clock = Stopwatch.StartNew();
             int samples = 0;
+            uint? userObject = null;
             using (FileStream file = new FileStream(output, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
             using (StreamWriter writer = new StreamWriter(file, new UTF8Encoding(false)))
             {
@@ -137,7 +144,17 @@ internal static class Program
                             throw new IOException("SimConnect exception " + Word(packet, 12) + ", send " + Word(packet, 16) + ", parameter " + Word(packet, 20));
                         }
                         if (id == 3) throw new IOException("FSX closed during reference capture.");
-                        if (id == DataMessage) { writer.WriteLine(Sample(packet, clock.Elapsed.TotalSeconds, "FSX SimConnect")); writer.Flush(); samples++; }
+                        if (id == DataMessage)
+                        {
+                            if (packet.Length < 40) throw new InvalidDataException("Truncated user-aircraft data header.");
+                            // Request object 0 is a user-aircraft alias. The response
+                            // carries the real object ID; bind it only after the whole
+                            // first packet has passed validation, then require stability.
+                            uint actualObject = userObject ?? Word(packet, 16);
+                            string line = Sample(packet, clock.Elapsed.TotalSeconds, "FSX SimConnect", actualObject);
+                            if (!userObject.HasValue) { userObject = actualObject; Console.WriteLine("Bound local user-aircraft object " + actualObject + "."); }
+                            writer.WriteLine(line); writer.Flush(); samples++;
+                        }
                     }
                     else Thread.Sleep(5);
                 }
@@ -176,6 +193,9 @@ internal static class Program
         byte[] invalid = Fixture(); invalid[24] = 1; Reject(() => Sample(invalid, 0, "synthetic"));
         invalid = Fixture(); Buffer.BlockCopy(BitConverter.GetBytes(Double.NaN), 0, invalid, 296, 8); Reject(() => Sample(invalid, 0, "synthetic"));
         invalid = Fixture(); for (int i = 40; i < 296; i++) invalid[i] = 65; Reject(() => Sample(invalid, 0, "synthetic"));
+        byte[] realId = Fixture(); Buffer.BlockCopy(BitConverter.GetBytes((uint)1),0,realId,16,4);
+        Sample(realId,0,"synthetic",1); Reject(() => Sample(realId,0,"synthetic",0));
+        Buffer.BlockCopy(BitConverter.GetBytes((uint)2),0,realId,16,4); Reject(() => Sample(realId,0,"synthetic",1));
         Console.WriteLine("PASS: original synthetic dispatch layout, numeric fields, escaped JSON, all truncations, flags, non-finite values and missing terminator. No FSX DLL or server used.");
         return 0;
     }

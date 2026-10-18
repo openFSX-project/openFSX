@@ -27,3 +27,6 @@ jobs:
       - name: Build and check independent reference reader
         shell: pwsh
         run: ./scripts/build-reference.ps1
+      - name: Build and check passive window capture
+        shell: pwsh
+        run: ./scripts/build-capture.ps1

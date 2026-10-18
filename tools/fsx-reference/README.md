@@ -38,11 +38,20 @@ paths are included in the records. Keep raw captures under ignored `target/`.
 
 The helper compiles for x86 and passes original synthetic-packet tests without
 loading FSX: expected field offsets, JSON escaping, every truncated prefix,
-invalid flags, unterminated title and non-finite numbers. On the local machine,
-the installed DLL exports resolved and SimConnect_Open returned 0x80004005
-without a running FSX server. That failure produces no reference samples and
-does not establish live ABI/data compatibility. A successful connection and
-valid live packets remain necessary before treating output as FSX evidence.
+invalid flags, unterminated title, non-finite numbers and object-ID binding.
+The request's user-aircraft alias is object 0; a response can contain a different
+real object ID. The reader binds that ID only after validating the first complete
+packet, then rejects subsequent packets for a different object.
+
+On 18 October 2026, a loaded local C172 flight returned 87 valid packets over
+five seconds and 35 over a second two-second capture. The title was
+`Cessna Skyhawk 172SP Paint1`, the actual object ID was 1, and the complete
+392-byte packets contained the title plus all 12 finite numeric readings.
+The observed baseline had neutral control readings, throttle 73.22998046875
+percent and on-ground 0. Raw records remain under ignored `target/`.
+This establishes live acquisition for that installation and sample state;
+control sweeps, angle/percentage correlation and animation calibration remain
+unverified. The tool sends no control input and does not focus the game.
 
 Function signatures, constants and packet layout were checked against the
 user-installed SimConnect SDK header. The current Microsoft
@@ -62,8 +71,6 @@ the encoded JSON during the build check. The openFSX model viewer can import
 one sample with `--reference-pose` and report the resolved animation groups;
 see the viewer documentation for commands and limits.
 
-The original FSX refused to run in the observed Remote Desktop session on
-18 October 2026. A later local launch reached the menu and SimConnect_Open succeeded, but no
-aircraft samples were returned before a flight was loaded. A loaded local FSX
-flight is still needed to establish live acquisition. No data or calibration result is inferred
-from the synthetic fixture or a failed connection.
+Earlier Remote Desktop and menu-only attempts returned no aircraft samples.
+The successful captures above required a loaded local flight. No calibration
+result is inferred from the synthetic fixture or those failed attempts.

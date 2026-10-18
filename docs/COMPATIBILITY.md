@@ -25,7 +25,8 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | BGL / scenery | Not implemented | No airport or terrain runtime |
 | XML gauges | Not implemented | Numeric read-only RPN is used for model visibility only; no gauge XML loader, local variables, events or writes |
 | DLL / GAU / SimConnect | Not implemented | Native ABI/API research required |
-| Original-FSX measurement tool | Synthetic protocol checks only | Separate x86 reader under tools/fsx-reference; original FSX refused the observed RDP session; no live capture verified or SimConnect server in openFSX |
+| Original-FSX measurement tool | Initial live acquisition | Separate x86 reader under tools/fsx-reference; loaded local C172 returned 87 valid packets over five seconds and 35 over two seconds; actual user-object ID bound after validation; control calibration and an openFSX SimConnect server remain unimplemented |
+| Passive reference screenshots | Built; game-frame verification pending | Independent Windows Graphics Capture utility under tools/fsx-capture; no activation, restoration or input; minimized game detected without restoring it |
 | Recorded pose inspection | Initial static subset | One schema-1 NDJSON sample drives available XAPS bindings; synthetic C172 pipeline checked, no live calibration or temporal lag evaluation |
 | Audio, AI, multiplayer | Not implemented | Future subsystems |
 

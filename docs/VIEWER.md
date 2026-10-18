@@ -135,8 +135,12 @@ flight in FSX and capture with:
 This reads surface angles, percentages, trim, yoke, throttle, on-ground state
 and aircraft title. It sends no control events. Record exact loading/settings
 and the input sequence alongside each local capture. Synthetic protocol checks
-pass, but no valid live capture has been established yet. A failed connection
-or an empty output is not calibration evidence. Flight mode still has no simulation-driven animation. Offline pose import is
+pass. A loaded local C172 flight returned 87 valid packets over five seconds
+and another 35 over two seconds on 18 October 2026. User-aircraft request alias
+0 resolved to actual object ID 1, which the reader validates and binds.
+This establishes baseline acquisition; control sweeps and angle/percentage
+calibration remain unverified. A failed connection or an empty output is not
+calibration evidence. Flight mode still has no simulation-driven animation. Offline pose import is
 available for supported recorded bindings, as described below.
 
 ## Inspect one captured pose
@@ -174,12 +178,30 @@ seven of 28 animation groups and renders the posed aircraft. This checks the
 C# encoder, JSON import, unit adapter, authored key evaluation and GPU path.
 It does not establish physical calibration or FSX animation parity.
 
-On 18 October 2026, the original FSX displayed a Remote Desktop restriction
-and exited in the local test session. No live reference samples were obtained.
-A subsequent local launch reached the main menu and SimConnect_Open succeeded,
-but the menu-only check returned no aircraft samples. Reference capture still
-needs a loaded FSX flight. This limitation belongs to the observed original-game startup;
-the offline openFSX pipeline above does not launch it.
+Earlier Remote Desktop and menu-only attempts returned no aircraft samples.
+The later successful captures above required a loaded local C172 flight; the
+offline openFSX pipeline does not launch FSX.
+
+## Passive reference screenshots
+
+The independent `tools/fsx-capture` Windows utility captures only the selected
+game window through Windows Graphics Capture. It never activates or restores
+the window or sends mouse/keyboard input. Leave FSX unminimized behind other
+windows; minimized windows are rejected without restoring them. Windows capture
+indicators and security policy keep their defaults; there is no desktop fallback.
+
+```powershell
+./scripts/build-capture.ps1
+./target/fsx-capture.exe --pid 12345 --list
+./target/fsx-capture.exe --pid 12345 --output target/fsx-reference.ppm
+```
+
+Replace `12345` with the running game's process ID. The build needs installed
+Visual Studio C++ tools and a Windows SDK with C++/WinRT headers. Output must
+be a new file. Local compilation and synthetic pixel/dimension checks pass;
+an actual FSX cockpit capture is still pending because the inspected game
+window was minimized. Keep original-game images under ignored `target/` as
+reference material. They are not screenshots of openFSX progress.
 
 ## Visibility inspection
 
