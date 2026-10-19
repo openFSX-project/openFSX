@@ -391,7 +391,7 @@ fn run() -> Result<(), String> {
         println!("Visibility inspector: repeat --visibility-var NAME#units#value (explicit values; no flight override)");
         println!("Pose inspector: repeat --pose-var NAME#units#value (XAPS/read-only XAPC; no flight override)");
         println!("Flight views: --cockpit starts inside; F9 virtual cockpit / recenter, F11 exterior; cockpit drag looks around, wheel changes FOV.");
-        println!("Experimental Windows C172 instruments: --native-gauges [--gauge-host path/to/fsx-gauge-host.exe]. Five native needles, ideal ISA air data; no RPM, full panel services or needle lag.");
+        println!("Experimental Windows C172 instruments: --native-gauges [--gauge-host path/to/fsx-gauge-host.exe]. Five needles plus native attitude/heading sprites, ideal ISA air data and ideal gyros; no RPM, full panel services or needle lag.");
         return Ok(());
     }
     let (mut lod, mut snapshot) = (None, None);
@@ -861,7 +861,7 @@ fn run() -> Result<(), String> {
                     .ok_or("Native gauges need the configured interior model")?;
                 gauges.apply(&frame, &interior.model, &mut interior.appearance, None)?;
             }
-            println!("Native C172 gauges: helper PID {}, sequence {}, time {}, evaluated {}; five needles, ideal ISA/English units; RPM, needle lag and full panel lifecycle remain unsupported.",gauges.pid(),frame.sequence,frame.time,frame.evaluated);
+            println!("Native C172 gauges: helper PID {}, sequence {}, time {}, evaluated {}; five needles and three attitude/heading sprites, ideal ISA/English units and ideal gyros; RPM, needle lag and full panel lifecycle remain unsupported.",gauges.pid(),frame.sequence,frame.time,frame.evaluated);
         }
     }
     if let Some(path) = snapshot {

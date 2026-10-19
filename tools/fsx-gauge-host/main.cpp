@@ -16,6 +16,7 @@
 #include <iostream>
 #include <limits>
 #include <locale>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -228,12 +229,14 @@ static std::vector<uintptr_t> elements(const Module& module, uintptr_t header) {
     return out;
 }
 
-struct FrameInput {uint64_t sequence;double time;std::array<double,3> inputs;};
-static FrameInput parse_frame(const std::string& line) {
+struct FrameInput {uint64_t sequence;double time;std::array<double,6> inputs;};
+static FrameInput parse_frame(const std::string& line, bool flight=false) {
     std::istringstream stream(line);stream.imbue(std::locale::classic());
     std::string command;FrameInput frame{};
     if (!(stream>>command>>frame.sequence>>frame.time>>frame.inputs[0]>>frame.inputs[1]>>frame.inputs[2]) || command!="frame")
         throw std::runtime_error("Expected: frame SEQUENCE SECONDS IAS_KNOTS BARO_FEET VERTICAL_SPEED_RAW");
+    if (flight && !(stream>>frame.inputs[3]>>frame.inputs[4]>>frame.inputs[5]))
+        throw std::runtime_error("Flight frames also require PITCH_DEG BANK_DEG GYRO_HEADING_DEG");
     std::string extra;if (stream>>extra) throw std::runtime_error("Trailing frame data.");
     if (!frame.sequence || !std::isfinite(frame.time) || frame.time<0. || frame.time>1e9
         || std::any_of(frame.inputs.begin(),frame.inputs.end(),[](double v){return !std::isfinite(v)||std::abs(v)>1e12;}) || frame.inputs[0]<0.)
@@ -286,67 +289,88 @@ struct Binding {
     Update callback=nullptr;
     bool previous_available=false;
     double previous=0.;
+    uint32_t kind=1,axis=0;
+    Binding(InitializedModule* owner_,const char* library_,const char* name_,uint32_t resource_,uint32_t token_,size_t input_,uint32_t kind_=1,uint32_t axis_=0)
+        :owner(owner_),library(library_),name(name_),resource(resource_),token(token_),input(input_),kind(kind_),axis(axis_) {}
     void locate() {
         const auto& module=owner->module;
         auto header=gauge(module,owner->linkage,name);
         for (auto e:elements(module,header)) {
-            if (module.word(e)==1 && module.word(e+4)==resource) {
+            if (module.word(e)==kind && module.word(e+4)==resource) {
                 if (element) throw std::runtime_error("Ambiguous stream needle.");
-                module.check(e,236);element=e;
+                module.check(e,kind==6?352:236);element=e;
             }
         }
-        if (!element || module.word(element+60)!=token) throw std::runtime_error("Native stream token binding mismatch.");
-        auto address=module.word(element+224);module.check(address,1,false,true);
-        module.check(element+72,16,true);callback=reinterpret_cast<Update>(address);
+        auto slot=60+(kind==6?axis*40:0);
+        if (!element || module.word(element+slot)!=token) throw std::runtime_error("Native stream token binding mismatch.");
+        auto address=module.word(element+(kind==6?316+axis*4:224));
+        if (kind==6 && module.word(element+slot+28)) throw std::runtime_error("Sprite source lookup callback is unsupported.");
+        if (address) module.check(address,1,false,true);
+        else if (kind!=6) throw std::runtime_error("Native needle callback is required.");
+        module.check(element+slot+12,16,true);callback=reinterpret_cast<Update>(address);
     }
     double update(double raw) {
         double old=previous_available?previous:raw;
-        std::memcpy(reinterpret_cast<void*>(element+72),&raw,8);
-        std::memcpy(reinterpret_cast<void*>(element+80),&old,8);
-        double result=0.;DWORD fault=0;
-        if (!invoke(callback,reinterpret_cast<void*>(element),&result,&fault)) throw std::runtime_error("Stream needle callback failed: "+hex(fault));
+        auto slot=60+(kind==6?axis*40:0);
+        std::memcpy(reinterpret_cast<void*>(element+slot+12),&raw,8);
+        std::memcpy(reinterpret_cast<void*>(element+slot+20),&old,8);
+        double result=raw;DWORD fault=0;
+        if (callback && !invoke(callback,reinterpret_cast<void*>(element),&result,&fault)) throw std::runtime_error("Stream element callback failed: "+hex(fault));
         if (!std::isfinite(result) || std::abs(result)>1e12) throw std::runtime_error("Invalid stream needle result.");
         previous=raw;previous_available=true;return result;
     }
 };
-static int frame_stream(const fs::path& root,Deadline& deadline) {
+static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=false) {
     InitializedModule cessna(library_path(root,"Cessna.dll"));
     InitializedModule c172(library_path(root,"Cessna172.dll"));
-    std::array<Binding,5> bindings{{
+    auto bell=flight?std::make_unique<InitializedModule>(library_path(root,"Bell_206B.dll")):nullptr;
+    std::array<Binding,14> bindings{{
         {&c172,"Cessna172.dll","Airspeed",1001,61,0},
         {&cessna,"Cessna.dll","Altimeter",1033,74,1},
         {&cessna,"Cessna.dll","Altimeter",1032,74,1},
         {&cessna,"Cessna.dll","Altimeter",1031,74,1},
-        {&cessna,"Cessna.dll","Vertical_Speed",5047,65,2}
+        {&cessna,"Cessna.dll","Vertical_Speed",5047,65,2},
+        {&cessna,"Cessna.dll","Heading_Indicator",4001,0,6,6,0},
+        {&cessna,"Cessna.dll","Heading_Indicator",4001,0,6,6,1},
+        {&cessna,"Cessna.dll","Heading_Indicator",4001,84,5,6,2},
+        {bell.get(),"Bell_206B.dll","Attitude",2004,0,6,6,0},
+        {bell.get(),"Bell_206B.dll","Attitude",2004,0,6,6,1},
+        {bell.get(),"Bell_206B.dll","Attitude",2004,80,4,6,2},
+        {bell.get(),"Bell_206B.dll","Attitude",2002,0,6,6,0},
+        {bell.get(),"Bell_206B.dll","Attitude",2002,78,3,6,1},
+        {bell.get(),"Bell_206B.dll","Attitude",2002,80,4,6,2}
     }};
-    for (auto& b:bindings) b.locate();
-    std::cout<<"{\"schema\":1,\"source\":\"native-gauge-stream\",\"kind\":\"ready\",\"pointer_bits\":32,\"pid\":"<<GetCurrentProcessId()
-        <<",\"libraries_loaded\":2,\"bindings\":5,\"panel_services\":false}"<<std::endl;
-    uint64_t sequence=0,evaluated=0;double time=-1.;std::array<double,3> inputs{};std::array<double,5> results{};
+    const size_t count=flight?14:5;const int schema=flight?2:1;
+    for (size_t i=0;i<count;++i) bindings[i].locate();
+    std::cout<<"{\"schema\":"<<schema<<",\"source\":\"native-gauge-stream\",\"kind\":\"ready\",\"pointer_bits\":32,\"pid\":"<<GetCurrentProcessId()
+        <<",\"libraries_loaded\":"<<(flight?3:2)<<",\"bindings\":"<<count<<",\"panel_services\":false}"<<std::endl;
+    uint64_t sequence=0,evaluated=0;double time=-1.;std::array<double,6> inputs{};std::array<double,14> results{};
     std::string line;
     while (true) {
         deadline.idle();bool available=line_bounded(line);deadline.active();
         if (!available || line=="quit") break;
-        auto frame=parse_frame(line);
+        auto frame=parse_frame(line,flight);
         if (frame.sequence!=sequence+1 || frame.time<time) throw std::runtime_error("Stream sequence/time must advance; reset requires a new session.");
         bool reused=frame.time==time;
         if (reused && frame.inputs!=inputs) throw std::runtime_error("Changed physics inputs at an unchanged simulation time.");
         if (!reused) {
-            for (size_t i=0;i<bindings.size();++i) results[i]=bindings[i].update(frame.inputs[bindings[i].input]);
+            for (size_t i=0;i<count;++i) results[i]=bindings[i].update(bindings[i].input<6?frame.inputs[bindings[i].input]:0.);
             ++evaluated;inputs=frame.inputs;time=frame.time;
         }
         sequence=frame.sequence;
-        std::cout<<std::setprecision(17)<<"{\"schema\":1,\"source\":\"native-gauge-stream\",\"kind\":\"frame\",\"sequence\":"<<sequence
+        std::cout<<std::setprecision(17)<<"{\"schema\":"<<schema<<",\"source\":\"native-gauge-stream\",\"kind\":\"frame\",\"sequence\":"<<sequence
             <<",\"time\":"<<time<<",\"reused\":"<<(reused?"true":"false")<<",\"frames_evaluated\":"<<evaluated<<",\"values\":[";
-        for (size_t i=0;i<bindings.size();++i) {
+        for (size_t i=0;i<count;++i) {
             auto& b=bindings[i];if (i) std::cout<<',';
             std::cout<<"{\"library\":"<<json(b.library)<<",\"gauge\":"<<json(b.name)<<",\"resource\":"<<b.resource<<",\"token\":"<<b.token
-                <<",\"raw_input\":"<<inputs[b.input]<<",\"callback_result\":"<<results[i]<<'}';
+                <<",\"raw_input\":"<<(b.input<6?inputs[b.input]:0.)<<",\"callback_result\":"<<results[i];
+            if (flight) std::cout<<",\"element_kind\":"<<b.kind<<",\"axis\":"<<b.axis<<",\"callback_called\":"<<(b.callback?"true":"false");
+            std::cout<<'}';
         }
         std::cout<<"]}"<<std::endl;
     }
-    c172.close();cessna.close();
-    std::cout<<"{\"schema\":1,\"source\":\"native-gauge-stream\",\"kind\":\"closed\",\"frames_evaluated\":"<<evaluated<<",\"modules_deinitialized\":2}"<<std::endl;
+    if (bell) bell->close();c172.close();cessna.close();
+    std::cout<<"{\"schema\":"<<schema<<",\"source\":\"native-gauge-stream\",\"kind\":\"closed\",\"frames_evaluated\":"<<evaluated<<",\"modules_deinitialized\":"<<(flight?3:2)<<"}"<<std::endl;
     return 0;
 }
 static double __stdcall synthetic(void* value) { return *static_cast<double*>(value) * 2. + 3.; }
@@ -361,7 +385,13 @@ static int self_test() {
         if (!rejected) throw std::runtime_error("Invalid raw input accepted.");
     }
     auto frame=parse_frame("frame 1 0.25 75 500 -256");
-    if (frame.sequence!=1 || frame.time!=0.25 || frame.inputs!=std::array<double,3>{75.,500.,-256.}) throw std::runtime_error("Synthetic frame protocol failed.");
+    if (frame.sequence!=1 || frame.time!=0.25 || frame.inputs!=std::array<double,6>{75.,500.,-256.,0.,0.,0.}) throw std::runtime_error("Synthetic frame protocol failed.");
+    auto flight=parse_frame("frame 1 0.25 75 500 -256 -10 -30 90",true);
+    if (flight.inputs!=std::array<double,6>{75.,500.,-256.,-10.,-30.,90.}) throw std::runtime_error("Synthetic flight protocol failed.");
+    for (const char* bad:{"frame 1 0 75 500 0","frame 1 0 75 500 0 1 2 NaN","frame 1 0 75 500 0 1 2 3 extra"}) {
+        bool rejected=false;try {parse_frame(bad,true);} catch (...) {rejected=true;}
+        if (!rejected) throw std::runtime_error("Invalid flight frame accepted.");
+    }
     for (const char* bad:{"frame 0 0 1 2 3","frame 1 -1 1 2 3","frame 1 0 -1 2 3","frame 1 0 1 2 1e99","frame 1 0 1 2 3 extra"}) {
         bool rejected=false;try {parse_frame(bad);} catch (...) {rejected=true;}
         if (!rejected) throw std::runtime_error("Invalid frame input accepted.");
@@ -376,9 +406,10 @@ int wmain(int argc, wchar_t** argv) {
         Deadline deadline;
         if (argc == 2 && std::wstring(argv[1]) == L"--self-test") return self_test();
         if (argc==3 && std::wstring(argv[1])==L"--frames") return frame_stream(argv[2],deadline);
+        if (argc==3 && std::wstring(argv[1])==L"--flight-frames") return frame_stream(argv[2],deadline,true);
         const bool sample = argc == 7 && std::wstring(argv[1]) == L"--sample";
         if (!sample && !(argc == 5 && std::wstring(argv[1]) == L"--probe"))
-            throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --self-test");
+            throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --frames FSX_ROOT | --flight-frames FSX_ROOT | --self-test");
         auto library = ascii(argv[3]); auto name = ascii(argv[4]);
         uint32_t selected_id = 0; double raw = 0.;
         if (sample) {

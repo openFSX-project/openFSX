@@ -245,12 +245,13 @@ graphics backends and platforms remain unverified.
 Add `--native-gauges --cockpit` on Windows after building the separate x86
 helper with `scripts/build-gauge-host.ps1`. Five native C172 needles consume
 ideal ISA pitot/static air data from the existing simulation: calibrated
-airspeed, standard-setting pressure altitude and vertical speed. Pause freezes
+airspeed, standard-setting pressure altitude and vertical speed. Three native
+attitude/heading sprites also consume ideal gyro orientation. Pause freezes
 callback evaluation; reset restarts the helper and clears native state. The
 local integration check covers flight-driven GPU pixels and lifecycle behavior.
 See [the viewer guide](VIEWER.md) for
 commands, assumptions and verification limits. Other instruments remain static
-or blank; FSX instrument accuracy, weather, pressure adjustment, response lag,
+or blank; gyro drift/failures and adjustment knobs are absent; FSX instrument accuracy, weather, pressure adjustment, response lag,
 panel interaction and engine RPM remain unimplemented or unverified.
 
 ## Remaining work

@@ -90,12 +90,12 @@ Texture lookup starts in the selected livery folder and follows numerically orde
 ## Native instrument boundary
 
 The optional application adapter binds five checked C172 needles to independent
-ISA air data in fsx-sim. It communicates over bounded stdio with a hidden Windows
+ISA air data in fsx-sim and three attitude/heading sprites to ideal gyro orientation. It communicates over bounded stdio with a hidden Windows
 x86 helper; original DLLs never enter the x64 viewer. The helper validates each
 native element/token/callback address, maintains module lifetime and invokes
 callbacks only when simulation time advances. Pause reuses results and rewind
 starts fresh modules. The app validates ordered response bindings and paints
-decoded bitmap needles; fsx-render updates named, dimension-checked texture
+decoded bitmap needles and authored sprite/mask pairs; fsx-render updates named, dimension-checked texture
 pixels on the existing GPU. Cached interior images remain current in exterior
 view. The headless simulation contains no process or gauge-host dependency.
 Full PANELS services, gauge lifecycle stages and broad unit/event contracts

@@ -17,6 +17,18 @@ pub const BINDINGS: [(&str, &str, i32, u32, usize); 5] = [
     ("Cessna.dll", "Altimeter", 1031, 74, 1),
     ("Cessna.dll", "Vertical_Speed", 5047, 65, 2),
 ];
+// library, gauge, bitmap, token, input index (6 = MODULE_VAR_NONE), axis, callback
+const SPRITE_BINDINGS: [(&str, &str, i32, u32, usize, u32, bool); 9] = [
+    ("Cessna.dll", "Heading_Indicator", 4001, 0, 6, 0, false),
+    ("Cessna.dll", "Heading_Indicator", 4001, 0, 6, 1, false),
+    ("Cessna.dll", "Heading_Indicator", 4001, 84, 5, 2, true),
+    ("Bell_206B.dll", "Attitude", 2004, 0, 6, 0, false),
+    ("Bell_206B.dll", "Attitude", 2004, 0, 6, 1, false),
+    ("Bell_206B.dll", "Attitude", 2004, 80, 4, 2, false),
+    ("Bell_206B.dll", "Attitude", 2002, 0, 6, 0, false),
+    ("Bell_206B.dll", "Attitude", 2002, 78, 3, 1, true),
+    ("Bell_206B.dll", "Attitude", 2002, 80, 4, 2, false),
+];
 
 #[derive(Debug, Clone)]
 pub struct NeedleValue {
@@ -33,6 +45,16 @@ pub struct Frame {
     pub reused: bool,
     pub evaluated: u64,
     pub values: Vec<NeedleValue>,
+    pub sprites: Vec<SpriteValue>,
+}
+#[derive(Debug, Clone)]
+pub struct SpriteValue {
+    pub library: String,
+    pub gauge: String,
+    pub resource: i32,
+    pub tokens: [u32; 3],
+    pub results: [f64; 3],
+    pub callbacks: [bool; 3],
 }
 fn close_number(a: f64, b: f64) -> bool {
     (a - b).abs() <= 8. * f64::EPSILON * a.abs().max(b.abs()).max(1.)
@@ -43,7 +65,7 @@ fn packet(line: &str, kind: &str) -> Result<Value, String> {
     }
     let v: Value =
         serde_json::from_str(line).map_err(|e| format!("Invalid native gauge JSON: {e}"))?;
-    if v["schema"] != 1 || v["source"] != "native-gauge-stream" || v["kind"] != kind {
+    if v["schema"] != 2 || v["source"] != "native-gauge-stream" || v["kind"] != kind {
         return Err("Unexpected native gauge response schema/source/kind".into());
     }
     Ok(v)
@@ -52,7 +74,7 @@ fn decode_frame(
     line: &str,
     sequence: u64,
     time: f64,
-    inputs: [f64; 3],
+    inputs: [f64; 6],
     reused: bool,
     evaluated: u64,
 ) -> Result<Frame, String> {
@@ -70,14 +92,17 @@ fn decode_frame(
     }
     let values = v["values"]
         .as_array()
-        .filter(|a| a.len() == BINDINGS.len())
-        .ok_or("Expected five native gauge results")?;
+        .filter(|a| a.len() == BINDINGS.len() + SPRITE_BINDINGS.len())
+        .ok_or("Expected five needle and nine sprite-axis results")?;
     let mut out = Vec::new();
     for (value, (library, gauge, resource, token, input)) in values.iter().zip(BINDINGS) {
         if value["library"] != library
             || value["gauge"] != gauge
             || value["resource"] != resource
             || value["token"] != token
+            || value["element_kind"] != 1
+            || value["axis"] != 0
+            || value["callback_called"] != true
         {
             return Err("Native gauge result binding mismatch".into());
         }
@@ -100,12 +125,55 @@ fn decode_frame(
             result,
         });
     }
+    let mut sprites = Vec::new();
+    for group in 0..3 {
+        let start = group * 3;
+        let (library, gauge, resource, ..) = SPRITE_BINDINGS[start];
+        let mut sprite = SpriteValue {
+            library: library.into(),
+            gauge: gauge.into(),
+            resource,
+            tokens: [0; 3],
+            results: [0.; 3],
+            callbacks: [false; 3],
+        };
+        for i in 0..3 {
+            let (l, g, r, token, input, axis, callback) = SPRITE_BINDINGS[start + i];
+            let value = &values[BINDINGS.len() + start + i];
+            let raw = if input == 6 { 0. } else { inputs[input] };
+            if value["library"] != l
+                || value["gauge"] != g
+                || value["resource"] != r
+                || value["token"] != token
+                || value["element_kind"] != 6
+                || value["axis"] != axis
+                || value["callback_called"] != callback
+                || !value["raw_input"]
+                    .as_f64()
+                    .is_some_and(|v| v.is_finite() && close_number(v, raw))
+            {
+                return Err("Native sprite binding/input mismatch".into());
+            }
+            let result = value["callback_result"]
+                .as_f64()
+                .filter(|v| v.is_finite() && v.abs() <= 1e12)
+                .ok_or("Invalid sprite result")?;
+            if !callback && !close_number(result, raw) {
+                return Err("Callback-free sprite axis changed its source value".into());
+            }
+            sprite.tokens[i] = token;
+            sprite.results[i] = result;
+            sprite.callbacks[i] = callback;
+        }
+        sprites.push(sprite);
+    }
     Ok(Frame {
         sequence,
         time,
         reused,
         evaluated,
         values: out,
+        sprites,
     })
 }
 
@@ -120,7 +188,7 @@ impl Process {
     fn open(helper: &Path, root: &Path) -> Result<Self, String> {
         let mut command = Command::new(helper);
         command
-            .arg("--frames")
+            .arg("--flight-frames")
             .arg(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -191,8 +259,8 @@ impl Process {
             .and_then(|n| u32::try_from(n).ok())
             .ok_or("Invalid native helper PID")?;
         if ready["pointer_bits"] != 32
-            || ready["libraries_loaded"] != 2
-            || ready["bindings"] != 5
+            || ready["libraries_loaded"] != 3
+            || ready["bindings"] != 14
             || ready["panel_services"] != false
             || pid != process.child.id()
         {
@@ -232,7 +300,7 @@ impl Process {
     fn close(&mut self, evaluated: u64) -> Result<(), String> {
         self.write("quit\n")?;
         let v = packet(&self.receive()?, "closed")?;
-        if v["modules_deinitialized"] != 2 || v["frames_evaluated"].as_u64() != Some(evaluated) {
+        if v["modules_deinitialized"] != 3 || v["frames_evaluated"].as_u64() != Some(evaluated) {
             return Err("Invalid native module teardown acknowledgement".into());
         }
         let deadline = std::time::Instant::now() + WAIT;
@@ -269,7 +337,7 @@ pub struct NativeGauges {
     process: Option<Process>,
     sequence: u64,
     evaluated: u64,
-    last: Option<(f64, [f64; 3])>,
+    last: Option<(f64, [f64; 6])>,
 }
 impl NativeGauges {
     pub fn new(helper: &Path, root: &Path) -> Result<Self, String> {
@@ -285,7 +353,7 @@ impl NativeGauges {
     pub fn pid(&self) -> u32 {
         self.process.as_ref().map(|p| p.pid).unwrap_or(0)
     }
-    pub fn update(&mut self, time: f64, inputs: [f64; 3]) -> Result<Frame, String> {
+    pub fn update(&mut self, time: f64, inputs: [f64; 6]) -> Result<Frame, String> {
         if !time.is_finite()
             || !(0. ..=1e9).contains(&time)
             || inputs.iter().any(|v| !v.is_finite() || v.abs() > 1e12)
@@ -315,8 +383,8 @@ impl NativeGauges {
             .ok_or("Native gauge session is closed")?;
         let result = (|| -> Result<Frame, String> {
             process.write(&format!(
-                "frame {sequence} {time} {} {} {}\n",
-                inputs[0], inputs[1], inputs[2]
+                "frame {sequence} {time} {} {} {} {} {} {}\n",
+                inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5]
             ))?;
             decode_frame(
                 &process.receive()?,
@@ -356,19 +424,43 @@ impl Drop for NativeGauges {
 mod tests {
     use super::*;
     fn fixture() -> Value {
-        serde_json::json!({"schema":1,"source":"native-gauge-stream","kind":"frame","sequence":1,"time":0.5,"reused":false,"frames_evaluated":1,
-            "values":BINDINGS.iter().map(|(l,g,r,t,i)|serde_json::json!({"library":l,"gauge":g,"resource":r,"token":t,"raw_input":([75.,500.,256.][*i]),"callback_result":42.})).collect::<Vec<_>>()})
+        let inputs = [75., 500., 256., -10., -30., 90.];
+        let mut values: Vec<_> = BINDINGS.iter().map(|(l,g,r,t,i)|serde_json::json!({"library":l,"gauge":g,"resource":r,"token":t,"raw_input":inputs[*i],"callback_result":42.,"element_kind":1,"axis":0,"callback_called":true})).collect();
+        values.extend(SPRITE_BINDINGS.iter().map(|(l,g,r,t,i,axis,called)| {
+            let raw = if *i == 6 {0.} else {inputs[*i]};
+            serde_json::json!({"library":l,"gauge":g,"resource":r,"token":t,"raw_input":raw,"callback_result":raw,"element_kind":6,"axis":axis,"callback_called":called})
+        }));
+        serde_json::json!({"schema":2,"source":"native-gauge-stream","kind":"frame","sequence":1,"time":0.5,"reused":false,"frames_evaluated":1,"values":values})
     }
     #[test]
     fn original_synthetic_protocol_fixture_checks_context_and_each_binding() {
         let v = fixture();
-        let f = decode_frame(&v.to_string(), 1, 0.5, [75., 500., 256.], false, 1).unwrap();
+        let f = decode_frame(
+            &v.to_string(),
+            1,
+            0.5,
+            [75., 500., 256., -10., -30., 90.],
+            false,
+            1,
+        )
+        .unwrap();
         assert_eq!(f.values.len(), 5);
         assert_eq!(f.values[4].token, 65);
+        assert_eq!(f.sprites.len(), 3);
+        assert_eq!(f.sprites[2].tokens, [0, 78, 80]);
+        assert_eq!(f.sprites[2].results, [0., -10., -30.]);
         for field in ["sequence", "time", "frames_evaluated", "reused"] {
             let mut bad = v.clone();
             bad[field] = Value::Null;
-            assert!(decode_frame(&bad.to_string(), 1, 0.5, [75., 500., 256.], false, 1).is_err());
+            assert!(decode_frame(
+                &bad.to_string(),
+                1,
+                0.5,
+                [75., 500., 256., -10., -30., 90.],
+                false,
+                1
+            )
+            .is_err());
         }
         for field in [
             "library",
@@ -377,10 +469,23 @@ mod tests {
             "token",
             "raw_input",
             "callback_result",
+            "element_kind",
+            "axis",
+            "callback_called",
         ] {
-            let mut bad = v.clone();
-            bad["values"][0][field] = Value::Null;
-            assert!(decode_frame(&bad.to_string(), 1, 0.5, [75., 500., 256.], false, 1).is_err());
+            for i in 0..14 {
+                let mut bad = v.clone();
+                bad["values"][i][field] = Value::Null;
+                assert!(decode_frame(
+                    &bad.to_string(),
+                    1,
+                    0.5,
+                    [75., 500., 256., -10., -30., 90.],
+                    false,
+                    1
+                )
+                .is_err());
+            }
         }
     }
 }

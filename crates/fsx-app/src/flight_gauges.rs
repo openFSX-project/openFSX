@@ -1,4 +1,4 @@
-//! C172 English-unit ideal-ISA binding to the isolated native update profile.
+//! C172 ideal ISA/gyro binding to the isolated native update profile.
 use crate::native_gauges::{Frame, NativeGauges, BINDINGS};
 use fsx_model::Model;
 use fsx_render::{panel, Appearance, Gpu};
@@ -47,7 +47,10 @@ impl FlightGauges {
         if bases.len() != 2 {
             return Err("Native flight profile requires the two checked C172 VC panels".into());
         }
-        for (library, gauge, ..) in BINDINGS {
+        for (library, gauge) in BINDINGS.iter().map(|b| (b.0, b.1)).chain([
+            ("Cessna.dll", "Heading_Indicator"),
+            ("Bell_206B.dll", "Attitude"),
+        ]) {
             let module = library.strip_suffix(".dll").unwrap();
             let matches = bases
                 .iter()
@@ -71,8 +74,20 @@ impl FlightGauges {
         self.native.pid()
     }
     pub fn update(&mut self, simulation: &Simulation) -> Result<Frame, String> {
-        let inputs = AirData::from_telemetry(simulation.telemetry()?)?.native_inputs();
-        self.native.update(simulation.time, inputs)
+        let telemetry = simulation.telemetry()?;
+        let air = AirData::from_telemetry(telemetry)?.native_inputs();
+        let attitude = attitude_inputs(telemetry.attitude)?;
+        self.native.update(
+            simulation.time,
+            [
+                air[0],
+                air[1],
+                air[2],
+                attitude[0],
+                attitude[1],
+                attitude[2],
+            ],
+        )
     }
     pub fn apply(
         &self,
@@ -82,12 +97,73 @@ impl FlightGauges {
         mut gpu: Option<&mut Gpu>,
     ) -> Result<(), String> {
         let mut drawn = 0;
+        let mut sprites_drawn = 0;
         for (index, base) in &self.bases {
             let p = &self.config.panels[*index];
             let Kind::VirtualCockpit { texture } = &p.kind else {
                 unreachable!()
             };
             let mut preview = base.clone();
+            for value in &frame.sprites {
+                let module = value
+                    .library
+                    .strip_suffix(".dll")
+                    .ok_or("Invalid sprite library")?
+                    .to_ascii_lowercase();
+                let Some(placement) = p.gauges.iter().find(|g| {
+                    g.module.eq_ignore_ascii_case(&module)
+                        && g.name.eq_ignore_ascii_case(&value.gauge)
+                }) else {
+                    continue;
+                };
+                let library = self
+                    .libraries
+                    .get(&module)
+                    .ok_or("Missing sprite library")?;
+                let gauge = library.gauge(&value.gauge)?;
+                let descriptor = gauge
+                    .elements
+                    .iter()
+                    .find(|e| e.kind == 6 && e.resource_id == value.resource)
+                    .and_then(|e| e.sprite.as_ref())
+                    .ok_or("Missing sprite descriptor")?;
+                for i in 0..3 {
+                    if descriptor.axes[i].token != value.tokens[i]
+                        || descriptor.axes[i].update_callback_rva.is_some() != value.callbacks[i]
+                        || descriptor.axes[i].source_callback_rva.is_some()
+                    {
+                        return Err("Sprite binding differs from installed metadata".into());
+                    }
+                }
+                panel::paint_sprite(
+                    &mut preview,
+                    p,
+                    placement,
+                    library,
+                    value.resource,
+                    1033,
+                    value.results,
+                )?;
+                sprites_drawn += 1;
+            }
+            // The C172 attitude foreground uses neutral bars plus two fixed images.
+            // Its adjustable bars, failure state and pitch knob are not simulated.
+            for placement in &p.gauges {
+                if placement.module.eq_ignore_ascii_case("bell_206b")
+                    && placement.name.eq_ignore_ascii_case("Attitude")
+                {
+                    for resource in [2013, 2001, 12007] {
+                        panel::paint_fixed_layer(
+                            &mut preview,
+                            p,
+                            placement,
+                            &self.libraries["bell_206b"],
+                            resource,
+                            1033,
+                        )?;
+                    }
+                }
+            }
             for value in &frame.values {
                 let module = value
                     .library
@@ -147,12 +223,45 @@ impl FlightGauges {
             }
             appearance.bind_image(texture, preview.image)?;
         }
-        if drawn != 5 {
-            return Err("Native flight profile did not draw all five bound needles".into());
+        if drawn != 5 || sprites_drawn != 3 {
+            return Err(
+                "Native flight profile did not draw all five needles and three sprites".into(),
+            );
         }
         Ok(())
     }
     pub fn close(&mut self) -> Result<(), String> {
         self.native.close()
+    }
+}
+
+/// Ideal gyro adapter: simulator body angles are nose-up/right-bank positive;
+/// legacy gauge pitch/bank use nose-down/left-bank positive. No drift/magnetism.
+fn attitude_inputs(attitude: [f64; 3]) -> Result<[f64; 3], String> {
+    if attitude.iter().any(|v| !v.is_finite()) {
+        return Err("Invalid instrument attitude".into());
+    }
+    Ok([
+        -attitude[1].to_degrees(),
+        -attitude[0].to_degrees(),
+        attitude[2].to_degrees().rem_euclid(360.),
+    ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn ideal_gyro_units_signs_and_heading_wrap() {
+        let v = attitude_inputs([
+            30f64.to_radians(),
+            10f64.to_radians(),
+            (-90f64).to_radians(),
+        ])
+        .unwrap();
+        for (actual, expected) in v.into_iter().zip([-10., -30., 270.]) {
+            assert!((actual - expected).abs() < 1e-10);
+        }
+        assert!(attitude_inputs([0., f64::NAN, 0.]).is_err());
     }
 }

@@ -29,8 +29,9 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | BGL / scenery | Not implemented | No airport or terrain runtime |
 | XML gauges | Not implemented | Numeric model expressions support bounded local animation data, not a gauge XML loader or shared panel-variable contract; no host events, SimVar writes or native gauge execution |
 | Native gauge DLL/GAU files | Read-only metadata and bitmap subset | x86 PE32 Linkage, FS800/900/1000 header prefixes, encoded element graphs and localized resources; bitmap decoding and static root inspection, no DLL loading or callbacks |
-| Native needle update functions | Isolated Windows x86 diagnostic and opt-in C172 stream | Five stock DLL load probes and 18 explicit raw-input callback samples; persistent ModuleInit/ModuleDeinit lifetime, five checked air-data bindings, pause reuse and reset restart; no PANELS services or full gauge lifecycle |
+| Native needle update functions | Isolated Windows x86 diagnostic and opt-in C172 stream | Five stock DLL load probes and 18 explicit raw-input callback samples; persistent ModuleInit/ModuleDeinit lifetime, five air-data needles and three gyro sprites, pause reuse and reset restart; no PANELS services or full gauge lifecycle |
 | Native needle artwork | Recorded-value inspection and five live C172 needles | Six original bitmap needles in the offscreen inspector; opt-in flight airspeed/VSI/three altimeter hands update existing GPU textures; authored pivots/tables, no lag, full panel behavior or default flight integration |
+| Native gyro sprites | Opt-in C172 heading card and two attitude sprites | Native token-78/84 callbacks and direct bank readings, authored masks/scales and neutral fixed layers; no drift, failures, magnetic variation, adjustment controls or FSX filtering verification |
 | Native gauge hosting / SimConnect server | Not implemented | Callback/API implementation and behavior comparisons remain required |
 | Original-FSX measurement tool | Initial live acquisition | Separate x86 reader under tools/fsx-reference; loaded local C172 returned 87 valid packets over five seconds and 35 over two seconds; actual user-object ID bound after validation; control calibration and an openFSX SimConnect server remain unimplemented |
 | Passive reference screenshots | openFSX menu verified | Independent Windows Graphics Capture utility under tools/fsx-capture; 1024x738 menu and native 3D preview captured with foreground unchanged and no activation, restoration or input; original-FSX cockpit still unverified |
@@ -45,7 +46,7 @@ fresh module initialization after reset. Initial/reset cockpit pixels matched
 exactly. With fixed camera and geometry the moving native needles changed
 1,706 RGB bytes. The ground result matched the 0.00136 kt residual physics
 velocity. Inputs use ideal ISA air data rather than weather or instrument-error
-models; original-FSX instrument comparisons and live window input with this
+models; the extended gyro check changed 12,161 RGB bytes and passed the same pause/reset/view gates. Original-FSX instrument comparisons and live window input with this
 option remain unverified. See [the porting checkpoint](PORTING.md) and
 [reproduction instructions](VIEWER.md).
 

@@ -69,8 +69,10 @@ fn run() -> Result<(), String> {
 
     // Exercise the GPU COPY_DST path while keeping geometry and camera fixed.
     flight.key(KeyCode::ArrowDown, true);
+    flight.key(KeyCode::ArrowRight, true);
     flight.key(KeyCode::F4, true);
     let mut changed = false;
+    let mut sprite_changed = [false; 3];
     for _ in 0..120 {
         flight.advance(fsx_sim::flight::STEP)?;
         let frame = gauges.update(&flight.simulation)?;
@@ -83,6 +85,13 @@ fn run() -> Result<(), String> {
             .iter()
             .zip(&frame.values)
             .any(|(a, b)| (a.result - b.result).abs() > 1e-6);
+        for (i, (a, b)) in first.sprites.iter().zip(&frame.sprites).enumerate() {
+            sprite_changed[i] |= a
+                .results
+                .iter()
+                .zip(b.results)
+                .any(|(a, b)| (a - b).abs() > 1e-6);
+        }
         gauges.apply(
             &frame,
             &current.model,
@@ -91,8 +100,13 @@ fn run() -> Result<(), String> {
         )?;
     }
     flight.key(KeyCode::ArrowDown, false);
+    flight.key(KeyCode::ArrowRight, false);
     flight.key(KeyCode::F4, false);
     ensure(changed, "Native readings did not respond to flight state")?;
+    ensure(
+        sprite_changed.into_iter().all(|v| v),
+        "Not all three gyro sprites responded to flight",
+    )?;
     let active = output.join("c172-native-live-fixed-camera.ppm");
     gpu.snapshot(&orbit, &active)?;
     let initial_pixels = std::fs::read(&baseline).map_err(|e| e.to_string())?;
@@ -169,6 +183,14 @@ fn run() -> Result<(), String> {
             .all(|(a, b)| a.result == b.result),
         "Reset changed initial native results",
     )?;
+    ensure(
+        first
+            .sprites
+            .iter()
+            .zip(&reset.sprites)
+            .all(|(a, b)| a.results == b.results),
+        "Reset changed initial gyro sprite results",
+    )?;
     current.update(&flight)?;
     gpu.update_geometry(&current.geometry)?;
     gpu.model_matrix = flight.model_matrix();
@@ -202,6 +224,7 @@ fn run() -> Result<(), String> {
     ground_gauges.close()?;
     let report = serde_json::json!({"schema":1,"source":"openfsx-native-gauge-flight-check",
         "forward_frames":121,"paused_reuses":10,"changed_rgb_bytes":changed_bytes,
+        "flight_driven_sprites":3,
         "reset_restarted_helper":true,"reset_pixels_identical":true,"view_pixels_identical":true,
         "ground_airspeed_knots":ground_airspeed,"full_panel_services":false,"fsx_parity_validated":false});
     std::fs::write(output.join("report.json"), report.to_string()).map_err(|e| e.to_string())?;

@@ -384,7 +384,7 @@ build directory. Use `--gauge-host PATH` to select it explicitly. This option
 requires Windows, flight mode, textures and the checked C172 VC placements.
 It does not enable instruments in the menu's FLY NOW launch path.
 
-A persistent, hidden x86 process loads the installed Cessna/Cessna172 DLLs,
+A persistent, hidden x86 process loads the installed Cessna/Cessna172/Bell_206B DLLs,
 calls ModuleInit once and updates the airspeed, vertical-speed and three
 altimeter needles. The independent flight model supplies ideal ISA calibrated
 airspeed in knots, pressure altitude in feet at the standard pressure setting,
@@ -395,10 +395,22 @@ not modeled. The renderer paints native needle bitmaps over decoded static
 panel artwork using authored pivots and curves, and updates the existing GPU
 textures without replacing scene geometry.
 
+The same option draws the native heading card and both attitude sprites with
+the original RES_ID+1 masks and foreground artwork. Ideal gyro pitch/bank and
+local heading come from the aircraft orientation; legacy inputs are nose-down
+and left-bank positive. Original token-78 pitch and token-84 heading callbacks
+run in the helper; bank axes use their encoded direct source. Authored scales
+apply once, with rotation before texture scaling and source translation.
+Pixels use nearest-neighbor sampling of the installed source bitmap. RGB zero
+in a mask preserves the preceding layer, RGB (1,1,1) opens the moving texture,
+and other colors draw stationary foreground. Reticle and adjustment artwork
+use neutral authored placement. This ideal gyro profile has no magnetic
+variation, drift, failures, erection dynamics or knob adjustment.
+
 Callbacks run only when simulation time advances. Pause reuses results; a
 backward clock reset closes/deinitializes the old modules and starts a fresh
 helper. F9/F11 preserve the latest interior textures, including updates while
-viewing the exterior. Normal exit deinitializes both modules; protocol errors,
+viewing the exterior. Normal exit deinitializes all three modules; protocol errors,
 disconnects and callback timeouts terminate the helper and report failure.
 
 Run the installed-content integration check in a new output directory:
@@ -415,11 +427,32 @@ ground airspeed was 0.00136 kt, matching residual physics velocity. These are
 openFSX consistency checks, not recorded FSX instrument comparisons. Native
 window input with this option has not been rechecked.
 
-RPM, attitude and heading instruments, moving faces, digital text, XML gauges,
-needle lag, interaction and the full PANELS/gauge lifecycle remain unsupported.
+The extended integration check subsequently passed all three flight-driven
+sprites, 121 forward frames and ten pause reuses. Frozen camera/geometry pixels
+changed in 12,161 RGB bytes during combined pitch/roll input; reset and view
+round trips retained identical expected pixels. A separate explicit-artwork
+check saves level, nose-up/down, right-bank and east-heading images:
+
+```powershell
+cargo run --locked -p fsx-render --example native-sprite-check -- ./FSX target/native-sprite-local
+```
+
+Visual inspection confirmed that nose-up lowers the horizon, right bank tilts
+it left, and heading 90 places E under the top index. Local source art is 84/93
+pixels wide; openFSX samples those bitmaps directly, without a 256-pixel runtime
+texture conversion. FSX filtering and subpixel placement remain unverified.
+
+RPM, other moving faces, digital text, XML gauges, needle lag, interaction and
+the full PANELS/gauge lifecycle remain unsupported.
 Static root artwork can display fixed or empty regions for those instruments;
 it must not be treated as operational telemetry. Native DLL code remains in
 the separate helper; the x64 renderer does not load it.
+
+Research references: [gauge API](https://prepar3d.com/SDKv4/sdk/panels_and_user_interface/gauges/references/gauges_api_overview.html),
+[published ABI declarations](https://prepar3d.com/SDKv4/sdk/panels_and_user_interface/gauges/references/gauges.html)
+and [gauge artwork conventions](https://www.prepar3d.org/SDKv4/sdk/panels_and_user_interface/panels/panel_and_gauge_artwork.html).
+These later SDK references informed independent readers and rendering;
+local FSX resources and synthetic tests establish the checked subset.
 
 ## Passive reference screenshots
 

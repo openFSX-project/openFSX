@@ -229,12 +229,64 @@ pub struct Element {
     pub kind: u32,
     pub resource_id: i32,
     pub position: [i32; 2],
-    /// Authored needle-bitmap pivot (OFS); distinct from runtime reference fields.
+    /// Authored OFS: needle bitmap pivot, or sprite texture-center position in the gauge.
     pub offset: [i32; 2],
     pub image_flags: u32,
     /// Successor RVAs in the authored next-list order, not spatial transform parenting.
     pub children: Vec<u32>,
     pub needle: Option<Needle>,
+    pub sprite: Option<Sprite>,
+}
+#[derive(Debug, Clone)]
+pub struct SpriteAxis {
+    pub token: u32,
+    pub scale: f64,
+    pub source_callback_rva: Option<u32>,
+    pub update_callback_rva: Option<u32>,
+}
+#[derive(Debug, Clone)]
+pub struct Sprite {
+    /// X, Y, rotation; stored numeric source slots are deliberately not interpreted.
+    pub axes: [SpriteAxis; 3],
+    pub texture_scale: [f64; 2],
+}
+
+fn callback_rva(pe: &Pe<'_>, pointer: u32) -> Result<Option<u32>> {
+    if pointer == 0 {
+        return Ok(None);
+    }
+    let rva = pe.pointer_rva(pointer)?;
+    pe.slice(rva, 1)?;
+    Ok(Some(rva))
+}
+fn sprite(pe: &Pe<'_>, rva: u32) -> Result<Sprite> {
+    // Independently read x86, four-byte-packed ABI fields; no SDK structures linked.
+    let b = pe.slice(rva, 352)?;
+    let axis = |i: usize| -> Result<SpriteAxis> {
+        let start = 60 + i * 40;
+        let scale = f64_at(b, start + 32)?;
+        if scale.abs() > 65536. {
+            return Err("Sprite source scale exceeds bounds".into());
+        }
+        Ok(SpriteAxis {
+            token: u32_at(b, start)?,
+            scale,
+            source_callback_rva: callback_rva(pe, u32_at(b, start + 28)?)?,
+            update_callback_rva: callback_rva(pe, u32_at(b, 316 + i * 4)?)?,
+        })
+    };
+    let texture_scale = [180, 184]
+        .map(|offset| f32::from_le_bytes(b[offset..offset + 4].try_into().unwrap()) as f64);
+    if texture_scale
+        .iter()
+        .any(|s| !s.is_finite() || s.abs() > 65536.)
+    {
+        return Err("Non-finite or oversized sprite texture scale".into());
+    }
+    Ok(Sprite {
+        axes: [axis(0)?, axis(1)?, axis(2)?],
+        texture_scale,
+    })
 }
 #[derive(Debug, Clone)]
 pub struct NeedlePoint {
@@ -439,6 +491,11 @@ fn elements(pe: &Pe<'_>, roots: &[u32]) -> Result<Vec<Element>> {
             } else {
                 None
             },
+            sprite: if u32_at(b, 0)? == 6 {
+                Some(sprite(pe, rva)?)
+            } else {
+                None
+            },
         });
     }
     Ok(output)
@@ -639,6 +696,40 @@ impl GaugeLibrary {
 mod tests {
     use super::*;
     const BASE: u32 = 0x400000;
+    #[test]
+    fn sprite_fields_and_callback_addresses_are_bounded() {
+        let mut b = fixture();
+        rword(&mut b, 0x1500, 6);
+        for (offset, token, scale) in [(60, 0, 1.), (100, 78, 1.1764705882352942), (140, 80, -1.)] {
+            rword(&mut b, 0x1500 + offset, token);
+            let p = at(0x1500 + offset + 32);
+            b[p..p + 8].copy_from_slice(&f64::to_le_bytes(scale));
+        }
+        rword(&mut b, 0x1500 + 180, 1f32.to_bits());
+        rword(&mut b, 0x1500 + 184, 0.5f32.to_bits());
+        rword(&mut b, 0x1500 + 320, BASE + 0x1800);
+        let lib = GaugeLibrary::parse(b.clone(), false).unwrap();
+        let e = &lib.gauges[0].elements[1];
+        assert!(e.needle.is_none());
+        let s = e.sprite.as_ref().unwrap();
+        assert_eq!(s.axes[1].token, 78);
+        assert_eq!(s.axes[2].scale, -1.);
+        assert_eq!(s.axes[1].update_callback_rva, Some(0x1800));
+        assert_eq!(s.texture_scale, [1., 0.5]);
+        for (offset, value) in [
+            (180, f32::NAN.to_bits()),
+            (184, f32::INFINITY.to_bits()),
+            (88, u32::MAX),
+            (320, u32::MAX),
+        ] {
+            let mut bad = b.clone();
+            rword(&mut bad, 0x1500 + offset, value);
+            assert!(GaugeLibrary::parse(bad, false).is_err());
+        }
+        let p = at(0x1500 + 132);
+        b[p..p + 8].copy_from_slice(&f64::NAN.to_le_bytes());
+        assert!(GaugeLibrary::parse(b, false).is_err());
+    }
     #[test]
     fn native_needle_fields_and_table_pointer_bounds() {
         let mut b = fixture();

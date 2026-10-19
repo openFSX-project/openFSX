@@ -88,9 +88,33 @@ quit/EOF calls ModuleDeinit and acknowledges two deinitialized modules.
 The watchdog is idle while waiting for input and active during native work;
 the Rust parent independently bounds response and shutdown waits.
 
-The viewer's opt-in `--native-gauges` adapter supplies flight data and renders
-this limited profile. See [the viewer guide](../../docs/VIEWER.md) and run the
+The original `--frames` schema-1 profile remains available for five-needle
+inspection. The viewer uses the extended profile below. See
+[the viewer guide](../../docs/VIEWER.md) and run the
 `native-gauge-flight-check` example for installed-content regression evidence.
+
+### Extended flight profile
+
+`--flight-frames FSX_ROOT` uses schema 2 and adds Bell_206B, the Cessna heading
+card and the two Bell attitude sprites used by C172's virtual cockpit. Each
+request appends legacy pitch degrees (nose down positive), bank degrees (left
+positive) and ideal gyro heading degrees:
+
+```text
+frame 1 0 90 984 0 -10 -30 90
+frame 2 0 90 984 0 -10 -30 90
+quit
+```
+
+Ready/closed report three modules. Frames contain 14 ordered values: five
+needle results followed by X/Y/rotation for heading 4001, attitude outer 2004
+and attitude inner 2002. Results also identify `element_kind`, `axis` (0 X,
+1 Y, 2 rotation) and `callback_called`. Two additional native callbacks handle
+heading rotation (token 84) and attitude pitch (token 78). Other sprite axes
+preserve explicit source readings; MODULE_VAR_NONE supplies zero. Bank uses
+token 80. Source-lookup callbacks are rejected. Author scales stay in the
+renderer and apply once. The parent validates every axis binding, callback
+presence and input echo. Pause/reset/timeouts follow the original contract.
 
 ## What this does not establish
 
@@ -99,7 +123,8 @@ import services are supplied; the protocol reports panel_services=false. Gauge
 query/install/initialize/update/generate/draw/kill stages, panel service callbacks,
 shared variable lifetime, failure systems, rendering and simulator events remain
 unimplemented. Default flight mode has no operational native gauges; the opt-in
-flight profile implements only the five explicitly checked needle bindings.
+flight profile implements five checked needle bindings and three gyro sprites.
+Gyro drift/failures, magnetic variation and adjustment controls remain absent.
 Callback return values may represent a reading or an angle depending on the
 native element's authored mapping; this tool does not guess that interpretation.
 

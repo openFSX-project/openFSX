@@ -57,7 +57,7 @@ Flight mode starts at 90 kt and 300 m with solved initial trim. Add **--cockpit*
 
 On Windows, build `scripts/build-gauge-host.ps1` and add **--native-gauges**
 to opt into five live C172 needles: airspeed, vertical speed and three altimeter
-hands. A separate x86 process executes the checked installed callbacks; ideal
+hands, plus the native attitude and heading sprites. A separate x86 process executes the checked installed callbacks; ideal
 ISA flight data drives existing GPU panel textures. Other instruments remain
 static or blank. Pause/reset and view changes have local integration checks;
 full panel services, response lag and FSX instrument parity remain ahead. See
