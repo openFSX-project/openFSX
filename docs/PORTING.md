@@ -5,6 +5,28 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 19 October 2026
 
+After `cb787c4`, GaugeString now evaluates bounded literal/string output,
+read-only A:/P: conditions, nested if/else/end and default/alternate color spans.
+Selected aircraft variants retain their authored atc_id, including an explicitly
+empty value; missing IDs are not invented from titles. Writes, local/shared
+gauge state, loops and unsupported formats fail explicitly.
+
+`xml-gauge-check` evaluates the installed plaque's original XML with the actual
+variant registration and explicitly synthetic time-of-day/panel-light inputs.
+Variants 0/1/2/5 passed all six combinations each: 24 rows under
+`target/xml-gauge-check-01/variants.ndjson`, with eight alternate-color results.
+The interpreter never reparses returned registration text as executable markup.
+130 workspace test executions with all features pass, including four new
+synthetic string tests and expanded variant-selection/bounds checks.
+
+The plaque is still omitted from flight rendering. The next stage needs typed
+GaugeText visual properties, an explicit font source/default-font decision,
+text rasterization and VC placement with day/night/registration image checks.
+No font metrics or real-FSX text-rasterization parity is established by the
+successful expression evaluation. Original-FSX acquisition remains deferred.
+
+### Previous completed CAB/XML decoding stage
+
 Current HEAD before this stage: `3cf4387`. The goal remains active. The user
 deferred original-FSX reference acquisition and asked to continue independently.
 The attempted local FSX launch was canceled at Windows consent; no live capture
@@ -23,7 +45,7 @@ match Windows Expand byte for byte (6,353 decoded bytes), checked by the new
 tests cover archive/XML truncation, checksum corruption, dictionary dependency,
 declared output bounds, reserve fields, unsafe paths, unsupported compression,
 entities, nesting and malformed documents. The 126 workspace test executions
-with all features pass. This stage does not yet draw the plaque: GaugeString,
+with all features pass. That stage did not yet draw the plaque: GaugeString,
 ATC-ID binding, fonts and daytime/nighttime text colors are the next work.
 
 ### Previous completed instrument/reference stage

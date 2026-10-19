@@ -334,8 +334,9 @@ attributes, text and unknown nodes, resolves predefined/numeric entities and
 requires an AceXML document with one SimGauge.Gauge. DTDs, external entities,
 processing instructions and unsupported encodings fail. Image Name references
 resolve within the XML member's directory; ArtDirectory never opens a path on
-the host. This is structural decoding, with no GaugeString evaluation, typed
-visual-element interpretation, bitmap night-selection policy or font rendering.
+the host. Structural decoding does not interpret typed visual elements, select
+night bitmaps or render fonts. The separate script layer provides the bounded
+GaugeString subset below; it does not make decoded visual elements functional.
 
 ```powershell
 cargo run -- inspect-cabinet "./FSX/Gauges/n_number_plaque.cab"
@@ -349,6 +350,39 @@ Locally the XML and both C172 plaque BMP members (6,353 decoded bytes) matched
 Windows Expand exactly. Tests use independent synthetic archives, scripts and
 image names, including a second DEFLATE block that requires the first block's
 dictionary. No installed XML, bitmap or compressed original member is committed.
+
+## GaugeString evaluation subset
+
+The independent script layer compiles literal UTF-8 text, a single read-only
+A: string lookup followed by %!s!, numeric A:/P: conditions followed by
+%{if}/%{else}/%{end}, percent escaping, standard newline/tab/return/backslash
+escapes and the observed default/alternate color commands. Values are emitted
+as colored text spans, not reparsed markup. Numeric lookups receive separate
+namespace/name/units; indexed A: names cannot alias P: names. Unknown or
+non-finite values fail, and inactive branches do not resolve their variables.
+
+Source is bounded to 16 KiB, 2,048 string parts, nesting 32 and 8 KiB of output.
+Numeric subexpressions retain the existing RPN stack/instruction limits. The
+ordinary model RPN compiler still rejects P: reads; GaugeString does not enable
+model-local writes, events, shared panel variables or host callbacks. Numeric
+formatting, general string arithmetic, loops, case, alternate fonts and other
+escape codes remain unsupported. Literal whitespace is preserved; full FSX
+indentation/wrapping rules and rendered text metrics remain unverified.
+The conditional/format syntax is described in the
+[XML gauge SDK reference](https://www.prepar3d.com/SDKv2/LearningCenter/simobjects/panels_and_gauges/creating_xml_gauges.html);
+the clr2/default mapping is checked against the installed plaque's expression,
+not a live FSX pixel comparison.
+
+Aircraft/VisualAircraft expose optional selected-variant atc_id (at most 256
+bytes, without control characters), preserving explicit emptiness and absence.
+This is authored configuration, not a user-edited flight/save-game registration
+or a live SimConnect reading. The integration checker below requires an
+explicit expected ID and six synthetic time-of-day/light cases; it writes no
+aircraft configuration and does not launch FSX.
+
+```powershell
+cargo run -p fsx-app --example xml-gauge-check -- FSX/Gauges/n_number_plaque.cab n_number_plaque.xml FSX/SimObjects/Airplanes/C172 0 G-BAFM
+```
 
 ## Reference NDJSON
 

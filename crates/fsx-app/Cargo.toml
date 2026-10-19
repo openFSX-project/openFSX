@@ -9,6 +9,7 @@ fsx-vehicle.workspace = true
 fsx-sim.workspace = true
 fsx-model.workspace = true
 fsx-geometry.workspace = true
+fsx-script.workspace = true
 serde_json.workspace = true
 fsx-render = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }

@@ -15,7 +15,7 @@ There are no placeholder crates for unimplemented scenery, gauges or APIs.
 | --- | --- | --- |
 | fsx-cfg | CFG parsing and explicit code-page decoding | None |
 | fsx-geometry | Matrices, camera math and double-precision rigid orientation | None |
-| fsx-script | Bounded numeric RPN and optional model-local data | None |
+| fsx-script | Bounded numeric RPN, read-only GaugeString and optional model-local data | None |
 | fsx-model | MDLX geometry, materials, scene graph, authored keys and visibility | fsx-geometry, fsx-script |
 | fsx-texture | DDS top-mip and BI_RGB bitmap decoding, texture.cfg fallback lookup | None |
 | fsx-vehicle | CFG/AIR data, static loading, contacts, panel placements, native gauge metadata and CAB/ACE XML documents | fsx-cfg, fsx-geometry |

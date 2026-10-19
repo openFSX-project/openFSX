@@ -1,5 +1,6 @@
-//! Independent bounded numeric RPN. Optional in-memory model locals; no host events.
+//! Bounded numeric RPN and GaugeString evaluation. Optional in-memory model locals; no host events.
 use std::collections::BTreeMap;
+pub mod gauge_string;
 const MAX_SOURCE: usize = 16 * 1024;
 const MAX_OPS: usize = 4096;
 const MAX_DEPTH: usize = 32;
@@ -120,6 +121,7 @@ struct Parser<'a> {
     offset: usize,
     count: usize,
     allow_locals: bool,
+    allow_panel: bool,
     needs_locals: bool,
 }
 impl<'a> Parser<'a> {
@@ -178,8 +180,11 @@ impl<'a> Parser<'a> {
                     .ok_or("Missing RPN variable namespace")?;
                 let local_read = prefix.eq_ignore_ascii_case("L") && self.allow_locals;
                 let local_write = prefix.eq_ignore_ascii_case(">L") && self.allow_locals;
-                if !prefix.eq_ignore_ascii_case("A") && !local_read && !local_write {
-                    return Err(if self.allow_locals {
+                let panel = prefix.eq_ignore_ascii_case("P") && self.allow_panel;
+                if !prefix.eq_ignore_ascii_case("A") && !local_read && !local_write && !panel {
+                    return Err(if self.allow_panel {
+                        "Only read-only A: and P: variables are supported in GaugeString conditions"
+                    } else if self.allow_locals {
                         "Only A: reads and model-local L: reads/writes are supported"
                     } else {
                         "Only read-only A: variables are supported"
@@ -204,6 +209,10 @@ impl<'a> Parser<'a> {
                     } else {
                         Op::LocalWrite(name.into(), units.into())
                     }
+                } else if panel {
+                    // NUL cannot occur in source, so this internal key cannot
+                    // alias an A: variable (including indexed names with colons).
+                    Op::Variable(format!("\0P:{name}"), units.into())
                 } else {
                     Op::Variable(name.into(), units.into())
                 }
@@ -230,7 +239,7 @@ impl<'a> Parser<'a> {
                     "==" => Op::Binary(Binary::Eq),
                     "!=" => Op::Binary(Binary::Ne),
                     "and" => Op::Binary(Binary::And),
-                    "or" => Op::Binary(Binary::Or),
+                    "or" | "||" => Op::Binary(Binary::Or),
                     "abs" => Op::Unary(Unary::Abs),
                     "/-/" => Op::Unary(Unary::Neg),
                     "!" => Op::Unary(Unary::Not),
@@ -275,14 +284,14 @@ impl<'a> Parser<'a> {
 }
 impl Program {
     pub fn compile(source: &str) -> Result<Self, String> {
-        Self::compile_mode(source, false)
+        Self::compile_mode(source, false, false)
     }
     /// Allows only caller-owned L: data and per-evaluation numeric registers.
     /// Aircraft writes, events, native calls and all other namespaces still fail.
     pub fn compile_with_locals(source: &str) -> Result<Self, String> {
-        Self::compile_mode(source, true)
+        Self::compile_mode(source, true, false)
     }
-    fn compile_mode(source: &str, allow_locals: bool) -> Result<Self, String> {
+    fn compile_mode(source: &str, allow_locals: bool, allow_panel: bool) -> Result<Self, String> {
         if source.len() > MAX_SOURCE || !source.is_ascii() || source.contains('\0') {
             return Err("RPN source must be ASCII, without NUL, and at most 16 KiB".into());
         }
@@ -291,6 +300,7 @@ impl Program {
             offset: 0,
             count: 0,
             allow_locals,
+            allow_panel,
             needs_locals: false,
         };
         let ops = parser.block(0, false)?;

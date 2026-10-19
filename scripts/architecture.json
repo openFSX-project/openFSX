@@ -8,6 +8,6 @@
   "fsx-sim": { "path": "crates/fsx-sim", "dependencies": ["fsx-vehicle", "fsx-geometry"], "headless": true },
   "fsx-render": { "path": "crates/fsx-render", "dependencies": ["fsx-geometry", "fsx-model", "fsx-texture", "fsx-vehicle", "fsx-sim"] },
   "fsx-ui": { "path": "crates/fsx-ui", "dependencies": ["fsx-cfg", "fsx-model", "fsx-vehicle", "fsx-render"] },
-  "fsx-app": { "path": "crates/fsx-app", "dependencies": ["fsx-geometry", "fsx-model", "fsx-vehicle", "fsx-sim", "fsx-render", "fsx-ui"] },
+  "fsx-app": { "path": "crates/fsx-app", "dependencies": ["fsx-geometry", "fsx-model", "fsx-vehicle", "fsx-sim", "fsx-render", "fsx-ui", "fsx-script"] },
   "fsx-check": { "path": "tools/fsx-check", "dependencies": ["fsx-cfg", "fsx-model", "fsx-vehicle", "fsx-sim"], "headless": true }
 }

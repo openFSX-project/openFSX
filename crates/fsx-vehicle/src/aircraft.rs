@@ -45,6 +45,7 @@ pub struct Parameters {
 #[derive(Debug)]
 pub struct Aircraft {
     pub title: String,
+    pub registration: Option<String>,
     pub model: PathBuf,
     pub interior: Option<PathBuf>,
     /// SI body forward/right/down coordinates, including reference datum.
@@ -58,6 +59,8 @@ pub struct Aircraft {
 #[derive(Debug)]
 pub struct VisualAircraft {
     pub title: String,
+    /// Authored atc_id for the selected variant; no title-derived fallback.
+    pub registration: Option<String>,
     pub model: PathBuf,
     pub interior: Option<PathBuf>,
     pub eye_point: Option<[f64; 3]>,
@@ -102,6 +105,13 @@ impl VisualAircraft {
             .ok_or("Selected aircraft variant has no title")?
             .to_owned();
         let model = component(config.get(&section, "model").unwrap_or(""))?;
+        let registration = config.get(&section, "atc_id").map(str::to_owned);
+        if registration
+            .as_ref()
+            .is_some_and(|v| v.len() > 256 || v.chars().any(char::is_control))
+        {
+            return Err("Aircraft atc_id exceeds 256 bytes or contains control characters".into());
+        }
         let texture = component(config.get(&section, "texture").unwrap_or(""))?;
         let panel = component(config.get(&section, "panel").unwrap_or(""))?;
         let model_dir = folder.join(if model.is_empty() {
@@ -158,6 +168,7 @@ impl VisualAircraft {
         };
         Ok(Self {
             title,
+            registration,
             model,
             interior,
             eye_point,
@@ -193,6 +204,7 @@ impl Aircraft {
         let air = AirFile::load(&air_path)?;
         Ok(Self {
             title: visual.title,
+            registration: visual.registration,
             model: visual.model,
             interior: visual.interior,
             eye_point: visual.eye_point,
@@ -386,6 +398,19 @@ mod tests {
         assert_eq!(visual.model, folder.join("model.jet/synthetic.mdl"));
         assert_eq!(visual.texture, folder.join("texture.blue"));
         assert_eq!(visual.panel, folder.join("panel.ifr/panel.cfg"));
+        assert_eq!(visual.registration, None);
+        for registration in ["SYN-42", "", "ТЕСТ-7"] {
+            let cfg = Config::parse(&format!("[fltsim.0]\natc_id=WRONG\n[fltsim.3]\ntitle=Own\nmodel=jet\natc_id={registration}\n")).unwrap();
+            let visual = VisualAircraft::from_config(&folder, 3, false, &cfg).unwrap();
+            assert_eq!(visual.registration.as_deref(), Some(registration));
+        }
+        for registration in ["x".repeat(257), "x\0y".into()] {
+            let cfg = Config::parse(&format!(
+                "[fltsim.3]\ntitle=Own\nmodel=jet\natc_id={registration}\n"
+            ))
+            .unwrap();
+            assert!(VisualAircraft::from_config(&folder, 3, false, &cfg).is_err());
+        }
         for value in ["../outside", "C:\\outside", "/outside", ".."] {
             let cfg = Config::parse(&format!("[fltsim.3]\ntitle=Own\npanel={value}\n")).unwrap();
             assert!(VisualAircraft::from_config(&folder, 3, false, &cfg).is_err());

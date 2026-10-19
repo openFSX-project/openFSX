@@ -711,6 +711,7 @@ dependencies = [
  "fsx-geometry",
  "fsx-model",
  "fsx-render",
+ "fsx-script",
  "fsx-sim",
  "fsx-ui",
  "fsx-vehicle",
