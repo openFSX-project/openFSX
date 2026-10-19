@@ -20,6 +20,7 @@ mod flight_gauges;
 mod flight_pose;
 mod flight_view;
 mod native_gauges;
+#[allow(dead_code)] // Shared with the bounded offline reference-gauge replay example.
 mod reference_pose;
 struct App {
     visual: flight_view::Visual,

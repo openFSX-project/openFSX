@@ -306,6 +306,49 @@ calibration remain unverified. A failed connection or an empty output is not
 calibration evidence. Flight mode has an initial center-steering binding; control-surface mapping remains uncalibrated. Offline pose import is
 available for supported recorded bindings, as described below.
 
+## Recorded instrument indications
+
+The separate reference reader accepts `--instruments` to add 32 air-data,
+gyro, clock, loading, engine and instrument-state readings to the existing
+12 controls in one response packet. This schema-2 live request is not yet
+verified against a running FSX. Default schema-1 capture remains available.
+
+```powershell
+./scripts/build-reference.ps1
+./target/fsx-reference.exe --fsx ./FSX --output target/fsx-instruments.ndjson --seconds 30 --instruments
+```
+
+Load the matching C172 variant-0 flight first and record its settings. Source
+labels alone do not prove a file's authenticity. To validate or replay a schema-2
+recording through the checked C172 native panel profile:
+
+```powershell
+cargo run --locked -p fsx-app --features viewer --example reference-gauge-replay -- --validate target/fsx-instruments.ndjson
+./scripts/build-gauge-host.ps1
+cargo run --locked -p fsx-app --features viewer --example reference-gauge-replay -- ./FSX target/fsx-instruments.ndjson target/reference-gauge-replay
+```
+
+Replay streams bounded records and preserves the absolute simulator clock's
+pause/rewind behavior independently of wall time. It uses actual recorded IAS,
+indicated altitude, VSI and gyro readings as native inputs. Failed/caged or
+adjusted instruments and changing values on an unchanged simulator clock are
+not supported by this profile. Real-source titles must match the loaded variant.
+Schema-2 files can also supply the existing `--reference-pose` inspector, with
+explicit unit conversions and their original source/title labels.
+
+Available stateless model-animation bindings also consume recorded control and
+instrument variables; unsupported expressions and positive lag remain omitted.
+The new output directory contains fixed-camera first/last images, per-frame
+native callback results and an explicitly non-parity diagnostic report. ISA,
+body/gyro and pressure differences describe assumptions to check against future
+real data. Aircraft trajectory, lag and complete instrument state are not replayed.
+
+The C# synthetic fixture passed the Rust validator and native render path. A
+five-record synthetic sequence exercised one pause reuse and one rewind/helper
+restart; its 600 fpm reading returned 600.0000192 through the native VSI callback.
+No original FSX process was running during this check. See the measurement
+tool's repository README for the complete schema and native-profile limits.
+
 ## Inspect one captured pose
 
 ```powershell
@@ -313,7 +356,8 @@ cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects
 ```
 
 The sample index is zero-based. Import validates schema 1, the selected row's
-12 finite values, aircraft title, time and source label. Files are limited to
+12 finite control values, aircraft title, time and source label. Schema 2 additionally
+requires its 32 finite instrument fields and object/index metadata. Files are limited to
 64 MiB, rows to 16 KiB and indexes to fewer than 100,000. The window title and
 console identify the declared source and sample. Use the matching aircraft MDL;
 the tool prints the recorded title but cannot prove that it matches an arbitrary

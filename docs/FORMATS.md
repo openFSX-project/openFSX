@@ -314,6 +314,33 @@ shared variables, events or rendering. Its raw return values need the element's
 authored mapping before they can drive a renderer. No instrument/FSX parity is
 claimed by an isolated successful function call.
 
+## Reference NDJSON
+
+The separate x86 recorder keeps schema 1 for title/elapsed time and 12 control
+readings. Optional schema 2 adds unsigned 32-bit `object_id`/`sample_index` and
+32 named instrument/flight-state readings under `instruments`, all in explicitly
+requested units. A single title-plus-44-double SimConnect definition produces
+a 648-byte packet. Names containing DEGREES do not imply the default API unit;
+the recorder requests degrees, feet, knots and feet per minute explicitly.
+
+Readers bound files to 64 MiB, rows to 16 KiB and recordings to 100,000 samples.
+Schema 2 requires every known field, finite values within magnitude 1e12,
+valid failure enums/bools, and nonnegative simulator time/rate. Sequential replay
+requires contiguous indices, monotonic elapsed wall time and consistent source,
+aircraft title and user-object ID. Simulator time can pause or rewind. An
+absolute clock rewind starts a new native session even when normalized time was
+already zero. Metadata labels are not proof of a capture's authenticity.
+
+The native replay adapter consumes measured indicated airspeed/altitude, VSI
+and gyro indications directly. It does not substitute true speed, MSL altitude,
+body attitude or ideal ISA values. It explicitly reports/rejects instrument states
+outside the current healthy, neutral native profile. Available stateless model
+bindings also consume recorded variables; unsupported/lagged groups stay omitted.
+ISA/weather and body/gyro differences are diagnostic output without a parity
+verdict. The extended request still needs live original-FSX acquisition checks.
+
+See [the viewer guide](VIEWER.md) for capture, validator and replay commands.
+
 ## MDLX visibility subset
 
 VISL contains packed VISS/VINS/VISC/VINC string chunks, bounded to 16 KiB per

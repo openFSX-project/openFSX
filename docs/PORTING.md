@@ -5,37 +5,44 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 19 October 2026
 
-Commit `e2eceb5` completed five flight-driven C172 needles. The current stage
-adds the original heading card and two attitude sprites with their authored
-source scales, callback readings, stationary mask artwork and neutral reticle.
-The helper's schema-2 `--flight-frames` mode maintains three modules and 14
-ordered axis/needle results; original schema-1 `--frames` inspection still works.
-Native code remains isolated from the x64 renderer.
+Commits `e2eceb5` and `09b44c5` completed the current opt-in C172 panel:
+five live air-data needles plus the native heading card/two attitude sprites.
+The current stage adds optional reference schema 2: 12 control readings and
+32 instrument/clock/loading/state readings in one 648-byte SimConnect packet.
+Default schema-1 capture and pose import remain supported.
 
-The native sprite reader validates four-byte-packed x86 fields, callback RVAs
-and finite scales. The renderer distinguishes transparent RGB zero, aperture
-RGB (1,1,1) and opaque foreground; it rotates before nonuniform scaling and
-source translation. Original bitmap dimensions are used directly. Synthetic
-checks cover mask semantics, clipping, rotation direction, transform order,
-bounded metadata and all 14 protocol result bindings.
+The recorder's extended live request is not yet verified against a running
+original FSX. The build emits original synthetic fixtures; schema-2 C#/Rust
+interoperability is checked without game files in the Windows CI workflow.
+The sequential reader validates bounds, field set, source/title/object,
+contiguous indices and elapsed wall time. Absolute simulator time is kept
+separate and can pause/rewind.
 
-The installed-content `native-gauge-flight-check` passed 121 forward frames,
-three changing gyro sprites, ten paused reuses, view preservation and helper
-restart with identical initial/reset pixels. Local outputs are under ignored
-`target/native-sprite-flight-01/`, including `report.json` and seven PPMs.
-The fixed camera/geometry comparison changed 12,161 RGB bytes during pitch/roll
-input. `native-sprite-check` outputs under `target/native-sprite-03/` were
-visually inspected at level, nose-up/down, right-bank and east-heading states.
-Original bitmaps and derived local inspection images remain excluded from Git.
+`reference-gauge-replay` feeds recorded IAS, indicated altitude, VSI and gyro
+readings directly to the native C172 profile. Available stateless model bindings
+also use recorded controls/variables. It normalizes simulator time and explicitly
+restarts native state after rewinds, including rewinds from normalized time zero.
+Failed/caged/adjusted instruments or changed native inputs on a paused clock are
+outside the checked replay profile. ISA/body/gyro differences are diagnostic
+output only; aircraft trajectory and full instrument behavior are not replayed.
 
-The older five-library/18-callback diagnostic also passes. Full instructions,
-references and assumptions are in [the viewer guide](VIEWER.md).
+Local evidence: `target/reference-protocol-check-03/` contains a C#-derived
+five-row synthetic sequence and malformed-case checks. Native replay under
+`target/reference-instrument-replay-sequence-02/` passed five rows, one paused
+reuse and one clock rewind with a new helper PID. The native VSI returned
+600.0000192 for the recorded 600 fpm input. First/last fixed-camera images were
+rendered and local images inspected. Raw resources/recordings remain ignored.
 
-Validation: 107 passing workspace test executions with all features; release
-viewer build and airborne/ground snapshots; helper ABI/protocol self-test;
-architecture, formatting and generated-site checks. Extended stream checks
-reject missing gyro fields, changing attitude on a paused clock and rewinds.
-No helper process remained after the checks.
+The existing live-flight gauge check remains available; instructions and known
+limits are in [the viewer guide](VIEWER.md) and [format notes](FORMATS.md).
+
+Validation: 120 passing workspace test executions with all features; both C#
+schema self-tests and C#/Rust protocol regressions; release viewer/replay builds,
+release schema-2 pose import and five-row native replay. The existing 121-frame
+live-flight gauge check also passed pause/reset/view preservation unchanged.
+Architecture, formatting and generated documentation checks pass locally.
+The CI workflow is configured for the synthetic protocol gate; no remote CI
+run or extended real-FSX acquisition is claimed by this local checkpoint.
 
 One initial debug render exited with Windows STATUS_INVALID_HANDLE during GPU
 startup; subsequent debug integration and both release snapshots passed. The
@@ -44,9 +51,9 @@ all GPU startup paths have been established.
 
 ## Next acceptance work
 
-1. Extend the reference reader to capture instrument air data and gyro values,
-   then compare the live profile with recorded original-FSX flight states and
-   cockpit images. No original FSX process was running during this stage.
+1. Verify the schema-2 request against a loaded original-FSX C172 flight, then
+   compare recorded indications and cockpit images. No original FSX process
+   was running during this stage. Record exact weather/loading/realism settings.
 2. Add authored temporal response only after establishing the native lag contract.
 3. Validate gyro filtering/placement and add drift, failures and adjustment
    controls; extend other moving faces. Model engine/propeller state before

@@ -41,5 +41,10 @@ test = true
 name = "native-gauge-flight-check"
 required-features = ["viewer"]
 
+[[example]]
+name = "reference-gauge-replay"
+required-features = ["viewer"]
+test = true
+
 [dev-dependencies]
 fsx-vehicle = { workspace = true, features = ["test-support"] }

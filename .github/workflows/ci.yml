@@ -27,6 +27,9 @@ jobs:
       - name: Build and check independent reference reader
         shell: pwsh
         run: ./scripts/build-reference.ps1
+      - name: Check C# to Rust instrument reference protocol without game files
+        shell: pwsh
+        run: ./scripts/check-reference-protocol.ps1 -OutputDirectory target/reference-protocol-ci
       - name: Build and check passive window capture
         shell: pwsh
         run: ./scripts/build-capture.ps1

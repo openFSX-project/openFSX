@@ -353,6 +353,14 @@ impl NativeGauges {
     pub fn pid(&self) -> u32 {
         self.process.as_ref().map(|p| p.pid).unwrap_or(0)
     }
+    pub fn restart(&mut self) -> Result<(), String> {
+        self.close()?;
+        self.process = Some(Process::open(&self.helper, &self.root)?);
+        self.sequence = 0;
+        self.evaluated = 0;
+        self.last = None;
+        Ok(())
+    }
     pub fn update(&mut self, time: f64, inputs: [f64; 6]) -> Result<Frame, String> {
         if !time.is_finite()
             || !(0. ..=1e9).contains(&time)
@@ -362,11 +370,7 @@ impl NativeGauges {
             return Err("Invalid simulation time or native gauge inputs".into());
         }
         if self.last.is_some_and(|(t, _)| time < t) {
-            self.close()?;
-            self.process = Some(Process::open(&self.helper, &self.root)?);
-            self.sequence = 0;
-            self.evaluated = 0;
-            self.last = None;
+            self.restart()?;
         }
         let reused = self.last.is_some_and(|(t, _)| t == time);
         if reused && self.last.unwrap().1 != inputs {

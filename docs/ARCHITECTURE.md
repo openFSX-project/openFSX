@@ -101,6 +101,20 @@ view. The headless simulation contains no process or gauge-host dependency.
 Full PANELS services, gauge lifecycle stages and broad unit/event contracts
 remain future work.
 
+## Reference measurement boundary
+
+The independent x86 C# reader can optionally request 12 controls and 32
+instrument/flight-state datums in a single SimConnect response. Schema-2 NDJSON
+preserves absolute simulator time, wall time, aircraft title, user-object ID,
+sequence and explicit unit choices. The application streams these records with
+size/count/identity checks; existing schema-1 pose import remains supported.
+Offline gauge replay feeds recorded indications to the isolated native host,
+normalizes simulation time and starts fresh native state after rewinds. Its
+fixed-camera images and assumption-labeled ISA/gyro differences establish a
+reproduction/diagnostic path, not flight-physics or instrument parity. CI validates
+C# serialization against the Rust reader without game files. No original client
+or measurement dependency enters the headless simulation.
+
 ## Milestones and acceptance criteria
 
 1. **Inventory.** CFG encodings, external SimObjects roots and actionable errors. Current coverage is titles in the standard Airplanes directory.

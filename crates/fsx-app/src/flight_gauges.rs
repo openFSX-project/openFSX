@@ -73,11 +73,18 @@ impl FlightGauges {
     pub fn pid(&self) -> u32 {
         self.native.pid()
     }
+    #[allow(dead_code)] // Explicit clock epochs are used by the offline recording consumer.
+    pub fn restart(&mut self) -> Result<(), String> {
+        self.native.restart()
+    }
+    pub fn update_inputs(&mut self, time: f64, inputs: [f64; 6]) -> Result<Frame, String> {
+        self.native.update(time, inputs)
+    }
     pub fn update(&mut self, simulation: &Simulation) -> Result<Frame, String> {
         let telemetry = simulation.telemetry()?;
         let air = AirData::from_telemetry(telemetry)?.native_inputs();
         let attitude = attitude_inputs(telemetry.attitude)?;
-        self.native.update(
+        self.update_inputs(
             simulation.time,
             [
                 air[0],

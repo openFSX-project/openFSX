@@ -64,6 +64,12 @@ full panel services, response lag and FSX instrument parity remain ahead. See
 [live instrument instructions](docs/VIEWER.md)
 and the [porting checkpoint](docs/PORTING.md).
 
+The independent reference reader now has an optional 32-field instrument
+profile and a bounded offline C172 replay tool. Synthetic C# → Rust → native
+callback → render checks pass, including simulation-clock pause and rewind.
+Extended acquisition from a running FSX and quantitative parity comparisons
+remain unverified. See [reference instructions](tools/fsx-reference/README.md).
+
 With --ground, **B** toggles the parking brake, **F4/F1** select full/idle power,
 and **Space** holds wheel brakes. The same simulation continues through wheel
 contact and liftoff. Run `cargo run -- takeoff-check "./FSX/SimObjects/Airplanes/C172" --windows-1252` for the documented parking, braking and departure checks.
