@@ -37,5 +37,9 @@ name = "native-needle-check"
 required-features = ["viewer"]
 test = true
 
+[[example]]
+name = "native-gauge-flight-check"
+required-features = ["viewer"]
+
 [dev-dependencies]
 fsx-vehicle = { workspace = true, features = ["test-support"] }

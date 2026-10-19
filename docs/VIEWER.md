@@ -370,6 +370,57 @@ Earlier Remote Desktop and menu-only attempts returned no aircraft samples.
 The later successful captures above required a loaded local C172 flight; the
 offline openFSX pipeline does not launch FSX.
 
+## Experimental live native C172 needles
+
+Windows flight mode can opt into the five checked native needle bindings:
+
+```powershell
+./scripts/build-gauge-host.ps1
+cargo run --locked -p fsx-app --features viewer --bin openfsx-viewer -- ./FSX/SimObjects/Airplanes/C172 --fly --cockpit --native-gauges --windows-1252
+```
+
+The helper defaults to `fsx-gauge-host.exe` beside the viewer or in its parent
+build directory. Use `--gauge-host PATH` to select it explicitly. This option
+requires Windows, flight mode, textures and the checked C172 VC placements.
+It does not enable instruments in the menu's FLY NOW launch path.
+
+A persistent, hidden x86 process loads the installed Cessna/Cessna172 DLLs,
+calls ModuleInit once and updates the airspeed, vertical-speed and three
+altimeter needles. The independent flight model supplies ideal ISA calibrated
+airspeed in knots, pressure altitude in feet at the standard pressure setting,
+and vertical speed in the legacy 1/256 m/s token units. This assumes subsonic
+flow and local ISA height between 0 and 11,000 m; unsupported data fails
+explicitly. Instrument errors, weather and adjustable pressure settings are
+not modeled. The renderer paints native needle bitmaps over decoded static
+panel artwork using authored pivots and curves, and updates the existing GPU
+textures without replacing scene geometry.
+
+Callbacks run only when simulation time advances. Pause reuses results; a
+backward clock reset closes/deinitializes the old modules and starts a fresh
+helper. F9/F11 preserve the latest interior textures, including updates while
+viewing the exterior. Normal exit deinitializes both modules; protocol errors,
+disconnects and callback timeouts terminate the helper and report failure.
+
+Run the installed-content integration check in a new output directory:
+
+```powershell
+cargo run --locked -p fsx-app --features viewer --example native-gauge-flight-check -- ./FSX target/native-gauge-flight-local
+```
+
+On 19 October 2026 the local RTX 2080/Vulkan check passed 121 forward frames,
+ten paused result reuses, dynamic GPU texture updates, exterior/interior round
+trips, helper restart and identical initial/reset pixels. With the camera and
+geometry fixed, flight-driven needles changed 1,706 RGB bytes. The settled
+ground airspeed was 0.00136 kt, matching residual physics velocity. These are
+openFSX consistency checks, not recorded FSX instrument comparisons. Native
+window input with this option has not been rechecked.
+
+RPM, attitude and heading instruments, moving faces, digital text, XML gauges,
+needle lag, interaction and the full PANELS/gauge lifecycle remain unsupported.
+Static root artwork can display fixed or empty regions for those instruments;
+it must not be treated as operational telemetry. Native DLL code remains in
+the separate helper; the x64 renderer does not load it.
+
 ## Passive reference screenshots
 
 The independent `tools/fsx-capture` Windows utility captures only the selected

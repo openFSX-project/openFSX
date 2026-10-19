@@ -87,6 +87,20 @@ The renderer uses a depth buffer, diffuse DDS maps, material RGB fallback and fa
 
 Texture lookup starts in the selected livery folder and follows numerically ordered texture.cfg fallback entries, with cycle detection and a directory limit. DDS is decoded on the CPU to RGBA8 before GPU upload. Only referenced diffuse textures are loaded; non-diffuse maps are not mistakenly treated as albedo. Missing or unsupported files produce diagnostics and a material-color fallback.
 
+## Native instrument boundary
+
+The optional application adapter binds five checked C172 needles to independent
+ISA air data in fsx-sim. It communicates over bounded stdio with a hidden Windows
+x86 helper; original DLLs never enter the x64 viewer. The helper validates each
+native element/token/callback address, maintains module lifetime and invokes
+callbacks only when simulation time advances. Pause reuses results and rewind
+starts fresh modules. The app validates ordered response bindings and paints
+decoded bitmap needles; fsx-render updates named, dimension-checked texture
+pixels on the existing GPU. Cached interior images remain current in exterior
+view. The headless simulation contains no process or gauge-host dependency.
+Full PANELS services, gauge lifecycle stages and broad unit/event contracts
+remain future work.
+
 ## Milestones and acceptance criteria
 
 1. **Inventory.** CFG encodings, external SimObjects roots and actionable errors. Current coverage is titles in the standard Airplanes directory.

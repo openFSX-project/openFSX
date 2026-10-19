@@ -6,6 +6,7 @@ use fsx_vehicle::{
 };
 use std::collections::BTreeMap;
 
+#[derive(Clone)]
 pub struct Preview {
     pub image: Image,
     pub drawn_roots: usize,

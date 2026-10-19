@@ -12,7 +12,7 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | MDLX | Partial | Packed chunks, VERT, INDE, PART, LOD, static TRAN/AMAP/SCEN |
 | Native viewer | Experimental | Diffuse textured geometry, approximate alpha blending; manual native-key inspection |
 | MDLX animation keys | Initial runtime binding subset | ANIB/XANI/XANS/XANK and SGAL; XAPS/XAPC, bounded instance-local data/registers, simulation-clock Lag and automatic center steering/throttle; control-surface percent mappings, RPM, Standard autoplay and full FSX timing remain unverified or unimplemented |
-| Cockpit flight view | Initial native-interior subset | Variant model.cfg interior and CFG eyepoint, attached pitch/bank camera, F9/F11 selection and existing-device resource exchange; offscreen ground/air/bank and release CLI checked; native key input, FSX camera definitions/FOV parity, dynamic gauges and panel interaction remain unverified or unimplemented |
+| Cockpit flight view | Initial native-interior subset | Variant model.cfg interior and CFG eyepoint, attached pitch/bank camera, F9/F11 selection and existing-device resource exchange; offscreen ground/air/bank and release CLI checked; native key input, FSX camera definitions/FOV parity, default gauges and panel interaction remain unimplemented; opt-in five-needle C172 profile below |
 | panel.cfg | Read-only placement subset | Variant-selected panel path, Window/VCockpit indices, titles, gauge references/coordinates/optional dimensions/parameters and case-insensitive model texture bindings; backgrounds, aliases, layout behavior and gauge execution remain unimplemented |
 | MDLX visibility | Initial read-only subset | VISL VISS/VINS/VISC/VINC and SGVL; numeric RPN, A-variable lookup and inherited draw masks; unsupported or unavailable conditions use encoded defaults |
 | Skinned MDLX parts | Omitted with a count | No bone deformation |
@@ -29,8 +29,8 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | BGL / scenery | Not implemented | No airport or terrain runtime |
 | XML gauges | Not implemented | Numeric model expressions support bounded local animation data, not a gauge XML loader or shared panel-variable contract; no host events, SimVar writes or native gauge execution |
 | Native gauge DLL/GAU files | Read-only metadata and bitmap subset | x86 PE32 Linkage, FS800/900/1000 header prefixes, encoded element graphs and localized resources; bitmap decoding and static root inspection, no DLL loading or callbacks |
-| Native needle update functions | Isolated Windows x86 diagnostic | Five stock DLL load probes and 18 explicit raw-input callback samples; native ModuleInit/ModuleDeinit calls, no PANELS services, full gauge lifecycle, unit bindings or flight integration |
-| Native needle artwork | Offscreen recorded-value inspection | Six original bitmap needles use native callback results, authored background/bitmap pivots and table interpolation; three snapshots checked; no timing/lag, live token binding or default flight integration |
+| Native needle update functions | Isolated Windows x86 diagnostic and opt-in C172 stream | Five stock DLL load probes and 18 explicit raw-input callback samples; persistent ModuleInit/ModuleDeinit lifetime, five checked air-data bindings, pause reuse and reset restart; no PANELS services or full gauge lifecycle |
+| Native needle artwork | Recorded-value inspection and five live C172 needles | Six original bitmap needles in the offscreen inspector; opt-in flight airspeed/VSI/three altimeter hands update existing GPU textures; authored pivots/tables, no lag, full panel behavior or default flight integration |
 | Native gauge hosting / SimConnect server | Not implemented | Callback/API implementation and behavior comparisons remain required |
 | Original-FSX measurement tool | Initial live acquisition | Separate x86 reader under tools/fsx-reference; loaded local C172 returned 87 valid packets over five seconds and 35 over two seconds; actual user-object ID bound after validation; control calibration and an openFSX SimConnect server remain unimplemented |
 | Passive reference screenshots | openFSX menu verified | Independent Windows Graphics Capture utility under tools/fsx-capture; 1024x738 menu and native 3D preview captured with foreground unchanged and no activation, restoration or input; original-FSX cockpit still unverified |
@@ -38,6 +38,16 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | Audio, AI, multiplayer | Not implemented | Future subsystems |
 
 ## Local evidence
+
+On 19 October 2026 the opt-in C172 flight integration passed 121 forward frames,
+ten paused result reuses, dynamic GPU texture updates, view round trips and
+fresh module initialization after reset. Initial/reset cockpit pixels matched
+exactly. With fixed camera and geometry the moving native needles changed
+1,706 RGB bytes. The ground result matched the 0.00136 kt residual physics
+velocity. Inputs use ideal ISA air data rather than weather or instrument-error
+models; original-FSX instrument comparisons and live window input with this
+option remain unverified. See [the porting checkpoint](PORTING.md) and
+[reproduction instructions](VIEWER.md).
 
 On 18 October 2026, `inspect-panel` read the installed C172 variant-0 configuration: six 2D windows with 147 placements and two virtual-cockpit panels with 29 placements. Both native interior texture names matched their configured panels case-insensitively. A321 (17 VC placements) and B747 (28 VC placements) also matched both configured textures. These are configuration/model checks, not instrument rendering or behavior validation. C208B inspection rejects its installed `pixel_size=512,512s` value; FSX's handling of that malformed value has not been measured. No installation file was corrected or included in the repository.
 

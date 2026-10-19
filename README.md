@@ -53,7 +53,16 @@ Drag to orbit, scroll to zoom, use arrow keys to rotate, press **R** to reset an
 
 The CFG inspector reads `title` values from `[fltsim.N]` under `SimObjects/Airplanes`. `--windows-1252` explicitly selects that code page for every file; omit it for ASCII/UTF-8 installations. Encodings are not guessed. The presence of `fsx.exe` checks directory structure, not license ownership. Neither tool launches FSX or modifies its installation.
 
-Flight mode starts at 90 kt and 300 m with solved initial trim. Add **--cockpit** to start inside the configured native interior; **F9/F11** select cockpit/exterior without resetting physics. The eye point follows CFG datum and aircraft attitude; gauges remain blank. Use **Down/Up** to pull/push, **Left/Right** to bank, **Q/E** for rudder, **Page Up/Down** for throttle, **Home/End** for trim, **P** to pause and **R** to reset. Add **--debug-hud** for the optional experimental on-screen panel. It reports true airspeed, height, vertical speed, local heading, throttle, trim, attitude and status. The ground is original test geometry. Read the [flight guide](docs/FLIGHT.md) for the actual data subset, approximation choices, controls and observed results. Flight behavior has not been validated against recorded FSX trajectories.
+Flight mode starts at 90 kt and 300 m with solved initial trim. Add **--cockpit** to start inside the configured native interior; **F9/F11** select cockpit/exterior without resetting physics. The eye point follows CFG datum and aircraft attitude; default gauges remain blank. Use **Down/Up** to pull/push, **Left/Right** to bank, **Q/E** for rudder, **Page Up/Down** for throttle, **Home/End** for trim, **P** to pause and **R** to reset. Add **--debug-hud** for the optional experimental on-screen panel. It reports true airspeed, height, vertical speed, local heading, throttle, trim, attitude and status. The ground is original test geometry. Read the [flight guide](docs/FLIGHT.md) for the actual data subset, approximation choices, controls and observed results. Flight behavior has not been validated against recorded FSX trajectories.
+
+On Windows, build `scripts/build-gauge-host.ps1` and add **--native-gauges**
+to opt into five live C172 needles: airspeed, vertical speed and three altimeter
+hands. A separate x86 process executes the checked installed callbacks; ideal
+ISA flight data drives existing GPU panel textures. Other instruments remain
+static or blank. Pause/reset and view changes have local integration checks;
+full panel services, response lag and FSX instrument parity remain ahead. See
+[live instrument instructions](docs/VIEWER.md)
+and the [porting checkpoint](docs/PORTING.md).
 
 With --ground, **B** toggles the parking brake, **F4/F1** select full/idle power,
 and **Space** holds wheel brakes. The same simulation continues through wheel

@@ -240,6 +240,19 @@ delivered window input, simulation response and visible telemetry changes.
 Sustained physical keyboard holds, controller hardware, other aircraft,
 graphics backends and platforms remain unverified.
 
+## Experimental native instruments
+
+Add `--native-gauges --cockpit` on Windows after building the separate x86
+helper with `scripts/build-gauge-host.ps1`. Five native C172 needles consume
+ideal ISA pitot/static air data from the existing simulation: calibrated
+airspeed, standard-setting pressure altitude and vertical speed. Pause freezes
+callback evaluation; reset restarts the helper and clears native state. The
+local integration check covers flight-driven GPU pixels and lifecycle behavior.
+See [the viewer guide](VIEWER.md) for
+commands, assumptions and verification limits. Other instruments remain static
+or blank; FSX instrument accuracy, weather, pressure adjustment, response lag,
+panel interaction and engine RPM remain unimplemented or unverified.
+
 ## Remaining work
 
 Recorded reference flights and quantitative comparison, fuel consumption and configurable loading, engine/propeller tables, broader ground handling and landing validation, control-surface animation, cockpit instruments, audio and controller hardware. MDLX skinning/visibility and generated registration decals remain viewer limitations. No BGL terrain, geographic navigation or add-on API compatibility is implied by this local flight test.

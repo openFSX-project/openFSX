@@ -58,13 +58,48 @@ raised structured exception. It validates the 32-bit ABI, exception reporting,
 input limits and JSON escaping without loading game files. Windows CI runs that
 self-test; installed-library checks run only against the user's local content.
 
+## Persistent frame mode
+
+`--frames FSX_ROOT` keeps the checked Cessna/Cessna172 libraries and five needle
+bindings alive for an explicit input stream. It accepts ordinary and Windows
+verbatim canonical installation paths. Each request is an ASCII line:
+
+```text
+frame 1 0 90 984.251968503937 0
+frame 2 0 90 984.251968503937 0
+frame 3 0.01 89 985 256
+quit
+```
+
+Fields are sequence, simulation seconds, airspeed knots, pressure altitude feet
+and vertical speed in 1/256 m/s. Sequence starts at 1 and increments exactly;
+time is nonnegative, finite and nondecreasing. Equal time requires identical
+inputs and reuses callback results. A rewind requires a new process. Time is
+limited to 1e9 seconds, inputs to finite magnitudes <=1e12 and airspeed must be
+nonnegative. Requests and responses are bounded (1 KiB / 16 KiB).
+
+Schema-1 source `native-gauge-stream` emits `ready`, `frame` and `closed` JSON
+lines. Ready identifies PID, 32-bit pointers, two loaded modules, five bindings
+and `panel_services=false`. Frames identify sequence/time, `reused`, cumulative
+`frames_evaluated` and ordered binding/input/result records. The Rust adapter
+validates every response and the actual child PID. Current/previous source slots
+advance only with new simulation time. ModuleInit runs once per loaded module;
+quit/EOF calls ModuleDeinit and acknowledges two deinitialized modules.
+The watchdog is idle while waiting for input and active during native work;
+the Rust parent independently bounds response and shutdown waits.
+
+The viewer's opt-in `--native-gauges` adapter supplies flight data and renders
+this limited profile. See [the viewer guide](../../docs/VIEWER.md) and run the
+`native-gauge-flight-check` example for installed-content regression evidence.
+
 ## What this does not establish
 
 This is an isolated update-call diagnostic, not a complete gauge host. No PANELS
 import services are supplied; the protocol reports panel_services=false. Gauge
 query/install/initialize/update/generate/draw/kill stages, panel service callbacks,
 shared variable lifetime, failure systems, rendering and simulator events remain
-unimplemented. The normal flight mode still has no operational native gauges.
+unimplemented. Default flight mode has no operational native gauges; the opt-in
+flight profile implements only the five explicitly checked needle bindings.
 Callback return values may represent a reading or an angle depending on the
 native element's authored mapping; this tool does not guess that interpretation.
 

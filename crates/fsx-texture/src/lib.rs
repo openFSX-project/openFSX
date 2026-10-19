@@ -12,7 +12,7 @@ type Result<T> = std::result::Result<T, String>;
 const MAX_FILE: u64 = 256 * 1024 * 1024;
 pub const MAX_DIMENSION: u32 = 4096;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Image {
     pub width: u32,
     pub height: u32,

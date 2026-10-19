@@ -16,8 +16,10 @@ use winit::{
     window::Window,
 };
 mod desktop_flight;
+mod flight_gauges;
 mod flight_pose;
 mod flight_view;
+mod native_gauges;
 mod reference_pose;
 struct App {
     visual: flight_view::Visual,
@@ -40,6 +42,7 @@ struct App {
     debug_hud: bool,
     reference_label: Option<String>,
     visibility_nodes: Option<Vec<bool>>,
+    gauges: Option<flight_gauges::FlightGauges>,
 }
 impl App {
     fn select_view(&mut self, cockpit: bool) -> Result<(), String> {
@@ -120,6 +123,21 @@ impl App {
                     gpu.update_geometry(&geometry)?;
                 }
                 self.visual.geometry = geometry;
+            }
+            if let Some(gauges) = &mut self.gauges {
+                let frame = gauges.update(&flight.simulation)?;
+                if !frame.reused {
+                    if self.cockpit {
+                        gauges.apply(
+                            &frame,
+                            &self.visual.model,
+                            &mut self.visual.appearance,
+                            self.gpu.as_mut(),
+                        )?;
+                    } else if let Some(interior) = &mut self.alternate {
+                        gauges.apply(&frame, &interior.model, &mut interior.appearance, None)?;
+                    }
+                }
             }
             flight_view::camera(
                 flight,
@@ -373,6 +391,7 @@ fn run() -> Result<(), String> {
         println!("Visibility inspector: repeat --visibility-var NAME#units#value (explicit values; no flight override)");
         println!("Pose inspector: repeat --pose-var NAME#units#value (XAPS/read-only XAPC; no flight override)");
         println!("Flight views: --cockpit starts inside; F9 virtual cockpit / recenter, F11 exterior; cockpit drag looks around, wheel changes FOV.");
+        println!("Experimental Windows C172 instruments: --native-gauges [--gauge-host path/to/fsx-gauge-host.exe]. Five native needles, ideal ISA air data; no RPM, full panel services or needle lag.");
         return Ok(());
     }
     let (mut lod, mut snapshot) = (None, None);
@@ -380,6 +399,8 @@ fn run() -> Result<(), String> {
     let (mut fly, mut variant, mut windows_1252, mut seconds) = (false, 0u32, false, 0f64);
     let mut ground = false;
     let mut cockpit = false;
+    let mut native_gauges_enabled = false;
+    let mut gauge_host = None;
     let mut menu = false;
     let mut debug_hud = false;
     let mut animation = None;
@@ -392,6 +413,12 @@ fn run() -> Result<(), String> {
     let mut pose_values: Vec<(String, String, f64)> = Vec::new();
     while let Some(arg) = args.next() {
         match arg.to_str() {
+            Some("--native-gauges") => native_gauges_enabled = true,
+            Some("--gauge-host") => {
+                gauge_host = Some(PathBuf::from(
+                    args.next().ok_or("Expected native gauge helper path")?,
+                ))
+            }
             Some("--visibility-var" | "--pose-var") => {
                 let values = if arg == "--pose-var" {
                     &mut pose_values
@@ -515,6 +542,8 @@ fn run() -> Result<(), String> {
     }
     if menu {
         if fly
+            || native_gauges_enabled
+            || gauge_host.is_some()
             || cockpit
             || ground
             || snapshot.is_some()
@@ -542,6 +571,11 @@ fn run() -> Result<(), String> {
         {
             return Err("The FSX menu host currently requires Windows".into());
         }
+    }
+    if (native_gauges_enabled && (!fly || !cfg!(windows) || no_textures))
+        || (gauge_host.is_some() && !native_gauges_enabled)
+    {
+        return Err("--native-gauges requires Windows --fly with textures; --gauge-host requires --native-gauges".into());
     }
     let aircraft = if fly {
         Some(Aircraft::load(&path, variant, windows_1252)?)
@@ -693,7 +727,7 @@ fn run() -> Result<(), String> {
         .parent()
         .and_then(Path::parent)
         .map(|path| path.join("texture"));
-    let appearance = Appearance::load(
+    let mut appearance = Appearance::load(
         &model,
         &geometry,
         if no_textures {
@@ -752,6 +786,38 @@ fn run() -> Result<(), String> {
     } else {
         None
     };
+    let mut gauges = if native_gauges_enabled {
+        let aircraft = aircraft
+            .as_ref()
+            .ok_or("Native gauges require an aircraft")?;
+        let canonical = path.canonicalize().map_err(|e| e.to_string())?;
+        let root = canonical
+            .ancestors()
+            .find(|p| p.join("fsx.exe").is_file() && p.join("Gauges").is_dir())
+            .ok_or("Native gauges require an aircraft inside the explicit FSX installation")?;
+        let helper = if let Some(helper) = gauge_host {
+            helper
+        } else {
+            let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+            let folder = executable.parent().ok_or("No executable directory")?;
+            let sibling = folder.join("fsx-gauge-host.exe");
+            if sibling.is_file() {
+                sibling
+            } else {
+                folder
+                    .parent()
+                    .ok_or("No build directory")?
+                    .join("fsx-gauge-host.exe")
+            }
+        };
+        Some(flight_gauges::FlightGauges::new(
+            root,
+            &aircraft.panel,
+            &helper,
+        )?)
+    } else {
+        None
+    };
     let mut flight = aircraft
         .map(|a| {
             if ground {
@@ -785,6 +851,18 @@ fn run() -> Result<(), String> {
         if let Some(alternate) = &mut alternate {
             alternate.update(flight)?;
         }
+        if let Some(gauges) = &mut gauges {
+            let frame = gauges.update(&flight.simulation)?;
+            if cockpit {
+                gauges.apply(&frame, &model, &mut appearance, None)?;
+            } else {
+                let interior = alternate
+                    .as_mut()
+                    .ok_or("Native gauges need the configured interior model")?;
+                gauges.apply(&frame, &interior.model, &mut interior.appearance, None)?;
+            }
+            println!("Native C172 gauges: helper PID {}, sequence {}, time {}, evaluated {}; five needles, ideal ISA/English units; RPM, needle lag and full panel lifecycle remain unsupported.",gauges.pid(),frame.sequence,frame.time,frame.evaluated);
+        }
     }
     if let Some(path) = snapshot {
         let mut gpu = block_on(Gpu::new(
@@ -807,7 +885,11 @@ fn run() -> Result<(), String> {
                 None
             };
         }
-        return gpu.snapshot(&orbit, &path);
+        gpu.snapshot(&orbit, &path)?;
+        if let Some(gauges) = &mut gauges {
+            gauges.close()?;
+        }
+        return Ok(());
     }
     let mut app = App {
         visual: flight_view::Visual {
@@ -835,11 +917,15 @@ fn run() -> Result<(), String> {
         debug_hud,
         reference_label,
         visibility_nodes,
+        gauges,
     };
     EventLoop::new()
         .map_err(|e| e.to_string())?
         .run_app(&mut app)
         .map_err(|e| e.to_string())?;
+    if let Some(gauges) = &mut app.gauges {
+        gauges.close()?;
+    }
     app.error.map_or(Ok(()), Err)
 }
 fn main() -> std::process::ExitCode {

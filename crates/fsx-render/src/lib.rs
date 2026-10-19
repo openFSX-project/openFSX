@@ -265,6 +265,8 @@ pub struct Gpu {
     depth: wgpu::TextureView,
     material_layout: wgpu::BindGroupLayout,
     material_binds: Vec<wgpu::BindGroup>,
+    textures: Vec<Option<wgpu::Texture>>,
+    texture_names: Vec<String>,
     draws: Vec<GpuDraw>,
     pub model_matrix: Mat4,
     flight: bool,
@@ -279,6 +281,8 @@ struct UploadedScene {
     vertex: wgpu::Buffer,
     materials: Vec<wgpu::BindGroup>,
     draws: Vec<GpuDraw>,
+    textures: Vec<Option<wgpu::Texture>>,
+    texture_names: Vec<String>,
 }
 struct GpuDraw {
     visible: bool,
@@ -527,6 +531,8 @@ impl Gpu {
             depth,
             material_layout,
             material_binds: scene.materials,
+            textures: scene.textures,
+            texture_names: scene.texture_names,
             draws: scene.draws,
             model_matrix: math::IDENTITY,
             flight,
@@ -590,17 +596,22 @@ impl Gpu {
                     depth_or_array_layers: 1,
                 },
             );
-            texture.create_view(&Default::default())
+            texture
         };
-        let white = upload(&Image {
+        let white_texture = upload(&Image {
             width: 1,
             height: 1,
             rgba: vec![255; 4],
         });
-        let views = appearance
+        let white = white_texture.create_view(&Default::default());
+        let textures = appearance
             .images
             .iter()
             .map(|image| image.as_ref().map(upload))
+            .collect::<Vec<_>>();
+        let views = textures
+            .iter()
+            .map(|texture| texture.as_ref().map(|t| t.create_view(&Default::default())))
             .collect::<Vec<_>>();
         let mut material_binds = Vec::new();
         let mut materials = appearance.materials.clone();
@@ -748,6 +759,8 @@ impl Gpu {
             vertex,
             materials: material_binds,
             draws,
+            textures,
+            texture_names: appearance.texture_names.clone(),
         })
     }
     /// Replace model resources without recreating the device, surface or flight state.
@@ -766,9 +779,59 @@ impl Gpu {
         )?;
         self.vertex = scene.vertex;
         self.material_binds = scene.materials;
+        self.textures = scene.textures;
+        self.texture_names = scene.texture_names;
         self.draws = scene.draws;
         self.aircraft_vertices = geometry.vertices.len();
         self.aircraft_draws = geometry.batches.len();
+        Ok(())
+    }
+    /// Replace pixels in an already-uploaded texture, retaining geometry/material bindings.
+    pub fn update_image(&mut self, name: &str, image: &Image) -> Result<(), String> {
+        let matches: Vec<_> = self
+            .texture_names
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.eq_ignore_ascii_case(name))
+            .map(|(i, _)| i)
+            .collect();
+        if matches.len() != 1 {
+            return Err("Dynamic image needs one current scene texture slot".into());
+        }
+        let texture = self.textures[matches[0]]
+            .as_ref()
+            .ok_or("Dynamic texture must be initialized before GPU upload")?;
+        if image.width == 0
+            || image.height == 0
+            || image.width > texture::MAX_DIMENSION
+            || image.height > texture::MAX_DIMENSION
+            || texture.width() != image.width
+            || texture.height() != image.height
+            || image.rgba.len() != image.width as usize * image.height as usize * 4
+        {
+            return Err(
+                "Dynamic image dimensions or RGBA extent differ from the uploaded texture".into(),
+            );
+        }
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: Default::default(),
+                aspect: wgpu::TextureAspect::All,
+            },
+            &image.rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(image.width * 4),
+                rows_per_image: Some(image.height),
+            },
+            wgpu::Extent3d {
+                width: image.width,
+                height: image.height,
+                depth_or_array_layers: 1,
+            },
+        );
         Ok(())
     }
     pub fn update_geometry(&mut self, geometry: &Geometry) -> Result<(), String> {

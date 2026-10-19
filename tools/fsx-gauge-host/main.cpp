@@ -4,6 +4,8 @@
 #include <windows.h>
 #include <psapi.h>
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -12,6 +14,8 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <limits>
+#include <locale>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -83,19 +87,24 @@ class Deadline {
     HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     HANDLE started = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     std::thread thread;
+    std::atomic<ULONGLONG> expires{GetTickCount64()+5000};
 public:
     Deadline() {
         if (!done || !started) throw std::runtime_error("Cannot create the helper timeout events.");
         thread = std::thread([this] {
             SetEvent(started);
-            if (WaitForSingleObject(done, 5000) != WAIT_OBJECT_0) {
-                std::cerr << "Native gauge helper timed out; terminating this helper only.\n";
-                std::cerr.flush(); TerminateProcess(GetCurrentProcess(), 124);
+            while (WaitForSingleObject(done, 25) == WAIT_TIMEOUT) {
+                if (GetTickCount64() >= expires.load()) {
+                    std::cerr << "Native gauge helper timed out; terminating this helper only.\n";
+                    std::cerr.flush(); TerminateProcess(GetCurrentProcess(), 124);
+                }
             }
         });
         // Start the watchdog before any vendor DLL can hold the Windows loader lock.
         if (WaitForSingleObject(started, 5000) != WAIT_OBJECT_0) TerminateProcess(GetCurrentProcess(), 124);
     }
+    void active() {expires.store(GetTickCount64()+5000);}
+    void idle() {expires.store(std::numeric_limits<ULONGLONG>::max());}
     ~Deadline() { SetEvent(done); thread.join(); CloseHandle(started); CloseHandle(done); }
 };
 struct Module {
@@ -162,7 +171,9 @@ static fs::path library_path(const fs::path& root, const std::string& library) {
     for (const auto* name : {"Cessna.dll", "Cessna172.dll", "Cessna182s.dll", "Bell_206B.dll", "Bendix_king_radio.dll"})
         allowed |= equal_ascii(library, name);
     if (!allowed) throw std::runtime_error("This probe is limited to the five checked stock C172 gauge DLLs.");
-    if (!fs::is_regular_file(root / "fsx.exe") || !fs::is_directory(root / "SimObjects/Airplanes"))
+    // Rust canonicalize supplies a verbatim (\\?\) Windows path. In that
+    // namespace forward slashes are literal, so append each component separately.
+    if (!fs::is_regular_file(root / "fsx.exe") || !fs::is_directory(root / "SimObjects" / "Airplanes"))
         throw std::runtime_error("Expected an explicit local FSX installation root.");
     auto folder = fs::canonical(root / "Gauges");
     auto path = fs::canonical(folder / library);
@@ -216,6 +227,128 @@ static std::vector<uintptr_t> elements(const Module& module, uintptr_t header) {
     }
     return out;
 }
+
+struct FrameInput {uint64_t sequence;double time;std::array<double,3> inputs;};
+static FrameInput parse_frame(const std::string& line) {
+    std::istringstream stream(line);stream.imbue(std::locale::classic());
+    std::string command;FrameInput frame{};
+    if (!(stream>>command>>frame.sequence>>frame.time>>frame.inputs[0]>>frame.inputs[1]>>frame.inputs[2]) || command!="frame")
+        throw std::runtime_error("Expected: frame SEQUENCE SECONDS IAS_KNOTS BARO_FEET VERTICAL_SPEED_RAW");
+    std::string extra;if (stream>>extra) throw std::runtime_error("Trailing frame data.");
+    if (!frame.sequence || !std::isfinite(frame.time) || frame.time<0. || frame.time>1e9
+        || std::any_of(frame.inputs.begin(),frame.inputs.end(),[](double v){return !std::isfinite(v)||std::abs(v)>1e12;}) || frame.inputs[0]<0.)
+        throw std::runtime_error("Invalid native frame sequence, time or numeric inputs.");
+    return frame;
+}
+static bool line_bounded(std::string& line) {
+    line.clear();char c;
+    while (std::cin.get(c)) {
+        if (c=='\n') return true;
+        if (c=='\r') continue;
+        if (c<32 || static_cast<unsigned char>(c)>=127 || line.size()>=512) throw std::runtime_error("Frame input must be bounded ASCII.");
+        line+=c;
+    }
+    return !line.empty();
+}
+class InitializedModule {
+public:
+    Module module;
+    uintptr_t linkage;
+    bool initialized=false;
+    explicit InitializedModule(const fs::path& path):module(path),linkage(module.symbol("Linkage")) {
+        module.check(linkage,24);
+        auto init=module.word(linkage+4);
+        if (!init || !module.word(linkage+8)) throw std::runtime_error("Stream profile requires native ModuleInit/ModuleDeinit callbacks.");
+        if (init) {
+            module.check(init,1,false,true);DWORD fault=0;
+            if (!invoke_module(reinterpret_cast<ModuleCall>(init),&fault)) throw std::runtime_error("Stream ModuleInit failed: "+hex(fault));
+            initialized=true;
+        }
+    }
+    void close() {
+        if (!initialized) return;
+        initialized=false;auto deinit=module.word(linkage+8);
+        if (deinit) {
+            module.check(deinit,1,false,true);DWORD fault=0;
+            if (!invoke_module(reinterpret_cast<ModuleCall>(deinit),&fault)) throw std::runtime_error("Stream ModuleDeinit failed: "+hex(fault));
+        }
+    }
+    ~InitializedModule() {try {close();} catch (const std::exception& e) {std::cerr<<e.what()<<'\n';}}
+};
+struct Binding {
+    InitializedModule* owner;
+    const char* library;
+    const char* name;
+    uint32_t resource;
+    uint32_t token;
+    size_t input;
+    uintptr_t element=0;
+    Update callback=nullptr;
+    bool previous_available=false;
+    double previous=0.;
+    void locate() {
+        const auto& module=owner->module;
+        auto header=gauge(module,owner->linkage,name);
+        for (auto e:elements(module,header)) {
+            if (module.word(e)==1 && module.word(e+4)==resource) {
+                if (element) throw std::runtime_error("Ambiguous stream needle.");
+                module.check(e,236);element=e;
+            }
+        }
+        if (!element || module.word(element+60)!=token) throw std::runtime_error("Native stream token binding mismatch.");
+        auto address=module.word(element+224);module.check(address,1,false,true);
+        module.check(element+72,16,true);callback=reinterpret_cast<Update>(address);
+    }
+    double update(double raw) {
+        double old=previous_available?previous:raw;
+        std::memcpy(reinterpret_cast<void*>(element+72),&raw,8);
+        std::memcpy(reinterpret_cast<void*>(element+80),&old,8);
+        double result=0.;DWORD fault=0;
+        if (!invoke(callback,reinterpret_cast<void*>(element),&result,&fault)) throw std::runtime_error("Stream needle callback failed: "+hex(fault));
+        if (!std::isfinite(result) || std::abs(result)>1e12) throw std::runtime_error("Invalid stream needle result.");
+        previous=raw;previous_available=true;return result;
+    }
+};
+static int frame_stream(const fs::path& root,Deadline& deadline) {
+    InitializedModule cessna(library_path(root,"Cessna.dll"));
+    InitializedModule c172(library_path(root,"Cessna172.dll"));
+    std::array<Binding,5> bindings{{
+        {&c172,"Cessna172.dll","Airspeed",1001,61,0},
+        {&cessna,"Cessna.dll","Altimeter",1033,74,1},
+        {&cessna,"Cessna.dll","Altimeter",1032,74,1},
+        {&cessna,"Cessna.dll","Altimeter",1031,74,1},
+        {&cessna,"Cessna.dll","Vertical_Speed",5047,65,2}
+    }};
+    for (auto& b:bindings) b.locate();
+    std::cout<<"{\"schema\":1,\"source\":\"native-gauge-stream\",\"kind\":\"ready\",\"pointer_bits\":32,\"pid\":"<<GetCurrentProcessId()
+        <<",\"libraries_loaded\":2,\"bindings\":5,\"panel_services\":false}"<<std::endl;
+    uint64_t sequence=0,evaluated=0;double time=-1.;std::array<double,3> inputs{};std::array<double,5> results{};
+    std::string line;
+    while (true) {
+        deadline.idle();bool available=line_bounded(line);deadline.active();
+        if (!available || line=="quit") break;
+        auto frame=parse_frame(line);
+        if (frame.sequence!=sequence+1 || frame.time<time) throw std::runtime_error("Stream sequence/time must advance; reset requires a new session.");
+        bool reused=frame.time==time;
+        if (reused && frame.inputs!=inputs) throw std::runtime_error("Changed physics inputs at an unchanged simulation time.");
+        if (!reused) {
+            for (size_t i=0;i<bindings.size();++i) results[i]=bindings[i].update(frame.inputs[bindings[i].input]);
+            ++evaluated;inputs=frame.inputs;time=frame.time;
+        }
+        sequence=frame.sequence;
+        std::cout<<std::setprecision(17)<<"{\"schema\":1,\"source\":\"native-gauge-stream\",\"kind\":\"frame\",\"sequence\":"<<sequence
+            <<",\"time\":"<<time<<",\"reused\":"<<(reused?"true":"false")<<",\"frames_evaluated\":"<<evaluated<<",\"values\":[";
+        for (size_t i=0;i<bindings.size();++i) {
+            auto& b=bindings[i];if (i) std::cout<<',';
+            std::cout<<"{\"library\":"<<json(b.library)<<",\"gauge\":"<<json(b.name)<<",\"resource\":"<<b.resource<<",\"token\":"<<b.token
+                <<",\"raw_input\":"<<inputs[b.input]<<",\"callback_result\":"<<results[i]<<'}';
+        }
+        std::cout<<"]}"<<std::endl;
+    }
+    c172.close();cessna.close();
+    std::cout<<"{\"schema\":1,\"source\":\"native-gauge-stream\",\"kind\":\"closed\",\"frames_evaluated\":"<<evaluated<<",\"modules_deinitialized\":2}"<<std::endl;
+    return 0;
+}
 static double __stdcall synthetic(void* value) { return *static_cast<double*>(value) * 2. + 3.; }
 static double __stdcall synthetic_fault(void*) { RaiseException(0xe0420001, 0, 0, nullptr); return 0.; }
 static int self_test() {
@@ -227,6 +360,12 @@ static int self_test() {
         bool rejected = false; try { number(bad); } catch (...) { rejected = true; }
         if (!rejected) throw std::runtime_error("Invalid raw input accepted.");
     }
+    auto frame=parse_frame("frame 1 0.25 75 500 -256");
+    if (frame.sequence!=1 || frame.time!=0.25 || frame.inputs!=std::array<double,3>{75.,500.,-256.}) throw std::runtime_error("Synthetic frame protocol failed.");
+    for (const char* bad:{"frame 0 0 1 2 3","frame 1 -1 1 2 3","frame 1 0 -1 2 3","frame 1 0 1 2 1e99","frame 1 0 1 2 3 extra"}) {
+        bool rejected=false;try {parse_frame(bad);} catch (...) {rejected=true;}
+        if (!rejected) throw std::runtime_error("Invalid frame input accepted.");
+    }
     std::cout << "{\"schema\":1,\"source\":\"synthetic\",\"pointer_bits\":32,\"stdcall_result\":11,\"exception_contained\":true,\"game_loaded\":false}\n";
     return 0;
 }
@@ -236,6 +375,7 @@ int wmain(int argc, wchar_t** argv) {
     try {
         Deadline deadline;
         if (argc == 2 && std::wstring(argv[1]) == L"--self-test") return self_test();
+        if (argc==3 && std::wstring(argv[1])==L"--frames") return frame_stream(argv[2],deadline);
         const bool sample = argc == 7 && std::wstring(argv[1]) == L"--sample";
         if (!sample && !(argc == 5 && std::wstring(argv[1]) == L"--probe"))
             throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --self-test");
