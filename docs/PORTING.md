@@ -5,6 +5,29 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 19 October 2026
 
+Current HEAD before this stage: `3cf4387`. The goal remains active. The user
+deferred original-FSX reference acquisition and asked to continue independently.
+The attempted local FSX launch was canceled at Windows consent; no live capture
+was obtained. Only ignored scenario/config copies were prepared, and the source
+user configuration SHA-256 was unchanged (`target/reference-fsx-live-01/`).
+
+The next XML-panel stage now has a bounded stored/MSZIP CAB reader and a
+read-only ACE XML tree decoder in fsx-vehicle. It handles reserved archive fields,
+cross-block DEFLATE history and contained image references. The CLI command
+`inspect-cabinet` inspects these documents; ArtDirectory is never followed.
+Unknown nodes remain visible in the tree rather than becoming supported elements.
+
+Local independent evidence: all three original n_number_plaque.cab resources
+match Windows Expand byte for byte (6,353 decoded bytes), checked by the new
+`cabinet-verify` example against `target/cabinet-reference-01/`. Six synthetic
+tests cover archive/XML truncation, checksum corruption, dictionary dependency,
+declared output bounds, reserve fields, unsafe paths, unsupported compression,
+entities, nesting and malformed documents. The 126 workspace test executions
+with all features pass. This stage does not yet draw the plaque: GaugeString,
+ATC-ID binding, fonts and daytime/nighttime text colors are the next work.
+
+### Previous completed instrument/reference stage
+
 Commits `e2eceb5` and `09b44c5` completed the current opt-in C172 panel:
 five live air-data needles plus the native heading card/two attitude sprites.
 The current stage adds optional reference schema 2: 12 control readings and
@@ -51,16 +74,20 @@ all GPU startup paths have been established.
 
 ## Next acceptance work
 
-1. Verify the schema-2 request against a loaded original-FSX C172 flight, then
-   compare recorded indications and cockpit images. No original FSX process
-   was running during this stage. Record exact weather/loading/realism settings.
-2. Add authored temporal response only after establishing the native lag contract.
-3. Validate gyro filtering/placement and add drift, failures and adjustment
+1. Continue the plaque from CAB/ACE structural decoding to bounded GaugeString
+   evaluation, configured ATC ID, font selection and actual VC-texture rendering.
+   Verify synthetic day/night/registration cases and preserve the native gauges.
+   XML loading alone must not remove the unsupported-rendering diagnostic.
+2. When the user resumes original-FSX acquisition, verify schema 2 against a
+   loaded C172 flight and compare indications/cockpit images with exact
+   weather/loading/realism settings. Acquisition is currently deferred.
+3. Add authored temporal response only after establishing the native lag contract.
+4. Validate gyro filtering/placement and add drift, failures and adjustment
    controls; extend other moving faces. Model engine/propeller state before
    treating tachometer input as telemetry.
-4. Implement XML gauges, digital text, interaction and PANELS services as tested
+5. Extend XML gauges, digital text, interaction and PANELS services as tested
    subsets. Do not present decoded static artwork as functional readings.
-5. Continue reference flight validation, broader aircraft dynamics, airport/BGL
+6. Continue reference flight validation, broader aircraft dynamics, airport/BGL
    scenery and menu parity. See [compatibility](COMPATIBILITY.md) for current gaps.
 
 Keep this checkpoint current at each completed stage so interrupted work can

@@ -314,6 +314,42 @@ shared variables, events or rendering. Its raw return values need the element's
 authored mapping before they can drive a renderer. No instrument/FSX parity is
 claimed by an isolated successful function call.
 
+## CAB and ACE XML gauge documents
+
+The read-only vehicle layer accepts single-cabinet version 1.3 archives with
+stored or MSZIP folders. Compressed input and total decoded folder bytes are
+each bounded to 64 MiB; file/folder tables to 8,192 entries. MSZIP resets its
+DEFLATE state per block while preserving the preceding folder dictionary.
+Declared block sizes, optional checksums, metadata/data ranges and overlapping
+folders are checked. Header/folder/data reserve areas are supported. Offsets
+are limited to the declared cabinet prefix; appended bytes are not interpreted
+or trusted as a certificate. Chained/split cabinets, Quantum and LZX fail explicitly.
+Names use normalized relative keys with ambiguous/case-colliding names rejected;
+non-UTF-8 names require explicit Windows-1252 unless marked UTF-8 by CAB metadata.
+These boundaries follow the [Microsoft cabinet format](https://download.microsoft.com/download/4/D/A/4DA14F27-B4EF-4170-A6E6-5B1EF85B1BAA/%5BMS-CAB%5D.pdf)
+and [MSZIP specification](https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-mci/27f0a9bf-9567-4e40-ad66-6ae9ab9d2786).
+
+ACE XML parsing is bounded to 1 MiB, 8,192 nodes and depth 64. It retains
+attributes, text and unknown nodes, resolves predefined/numeric entities and
+requires an AceXML document with one SimGauge.Gauge. DTDs, external entities,
+processing instructions and unsupported encodings fail. Image Name references
+resolve within the XML member's directory; ArtDirectory never opens a path on
+the host. This is structural decoding, with no GaugeString evaluation, typed
+visual-element interpretation, bitmap night-selection policy or font rendering.
+
+```powershell
+cargo run -- inspect-cabinet "./FSX/Gauges/n_number_plaque.cab"
+# Optional independent byte comparison; expanded files remain under ignored target/.
+New-Item -ItemType Directory -Force target/cabinet-reference | Out-Null
+expand.exe FSX/Gauges/n_number_plaque.cab '-F:*' target/cabinet-reference
+cargo run -p fsx-vehicle --example cabinet-verify -- FSX/Gauges/n_number_plaque.cab target/cabinet-reference
+```
+
+Locally the XML and both C172 plaque BMP members (6,353 decoded bytes) matched
+Windows Expand exactly. Tests use independent synthetic archives, scripts and
+image names, including a second DEFLATE block that requires the first block's
+dictionary. No installed XML, bitmap or compressed original member is committed.
+
 ## Reference NDJSON
 
 The separate x86 recorder keeps schema 1 for title/elapsed time and 12 control

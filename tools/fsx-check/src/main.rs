@@ -82,6 +82,38 @@ fn gauge_report(path: &Path, windows_1252: bool) -> Result<(), String> {
     Ok(())
 }
 
+fn cabinet_report(path: &Path, windows_1252: bool) -> Result<(), String> {
+    let cabinet = fsx_vehicle::cabinet::Cabinet::load(path, windows_1252)?;
+    println!(
+        "{}: {} CAB resources",
+        path.display(),
+        cabinet.entries().len()
+    );
+    for entry in cabinet.entries() {
+        println!("  {} | {} bytes", entry.name, entry.size());
+        if entry.name.to_ascii_lowercase().ends_with(".xml") {
+            let document = fsx_vehicle::xml_gauge::GaugeDocument::from_cabinet(
+                &cabinet,
+                &entry.name,
+                windows_1252,
+            )?;
+            println!(
+                "    ACE gauge {:?} | {} direct elements",
+                document.gauge().attributes.get("id"),
+                document.gauge().children.len()
+            );
+            for image in document.image_resources(&entry.name)? {
+                println!(
+                    "    image {image} | {} bytes",
+                    cabinet.resource(&image)?.len()
+                );
+            }
+        }
+    }
+    println!("Read-only stored/MSZIP and ACE XML resources; no extraction, script execution or XML rendering.");
+    Ok(())
+}
+
 fn panel_report(folder: &Path, windows_1252: bool) -> Result<(), String> {
     use fsx_vehicle::{
         aircraft::VisualAircraft,
@@ -403,6 +435,17 @@ fn inspect(root: &Path, windows_1252: bool) -> Result<(), String> {
 fn main() -> ExitCode {
     let args: Vec<_> = env::args_os().skip(1).collect();
     if (args.len() == 2 || (args.len() == 3 && args[2] == "--windows-1252"))
+        && args[0] == "inspect-cabinet"
+    {
+        return match cabinet_report(Path::new(&args[1]), args.len() == 3) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if (args.len() == 2 || (args.len() == 3 && args[2] == "--windows-1252"))
         && args[0] == "inspect-gauges"
     {
         return match gauge_report(Path::new(&args[1]), args.len() == 3) {
@@ -509,7 +552,7 @@ fn main() -> ExitCode {
     if !(args.len() == 2 || (args.len() == 3 && args[2] == "--windows-1252"))
         || args[0] != "inspect"
     {
-        eprintln!("Usage:\n  openfsx inspect <FSX folder> [--windows-1252]\n  openfsx inspect-model <model.mdl>\n  openfsx inspect-gauges <library.dll> [--windows-1252]\n  openfsx inspect-panel <aircraft folder> [--windows-1252]\n  openfsx inspect-aircraft <aircraft folder> [--windows-1252]\n  openfsx flight-check <aircraft folder> [--windows-1252]\n  openfsx takeoff-check <aircraft folder> [--windows-1252]\nFor the experimental model viewer, build package fsx-app with --features viewer (binary openfsx-viewer).");
+        eprintln!("Usage:\n  openfsx inspect <FSX folder> [--windows-1252]\n  openfsx inspect-model <model.mdl>\n  openfsx inspect-gauges <library.dll> [--windows-1252]\n  openfsx inspect-cabinet <gauges.cab> [--windows-1252]\n  openfsx inspect-panel <aircraft folder> [--windows-1252]\n  openfsx inspect-aircraft <aircraft folder> [--windows-1252]\n  openfsx flight-check <aircraft folder> [--windows-1252]\n  openfsx takeoff-check <aircraft folder> [--windows-1252]\nFor the experimental model viewer, build package fsx-app with --features viewer (binary openfsx-viewer).");
         return ExitCode::from(2);
     }
     match inspect(Path::new(&args[1]), args.len() == 3) {

@@ -39,6 +39,9 @@ cargo run -- inspect-panel "./FSX/SimObjects/Airplanes/C172" --windows-1252
 # Inspect a native gauge library as data; no DLL loading or execution.
 cargo run -- inspect-gauges "./FSX/Gauges/Cessna172.dll" --windows-1252
 
+# Decode CAB resources and inspect ACE XML/image references without executing scripts.
+cargo run -- inspect-cabinet "./FSX/Gauges/n_number_plaque.cab"
+
 # Open the experimental native viewer.
 cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172/model/cessna172sp.mdl" --lod 150 --texture-dir "./FSX/SimObjects/Airplanes/C172/texture.1"
 
