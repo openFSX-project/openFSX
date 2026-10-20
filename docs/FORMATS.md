@@ -340,7 +340,7 @@ processing instructions and unsupported encodings fail. Image Name references
 resolve within the XML member's directory; ArtDirectory never opens a path on
 the host. Structural decoding alone does not make visual elements functional.
 The typed text-gauge reader separately accepts a static background plus
-translated GaugeText, dimensions, optional FontFace, FontHeight, alignment,
+translated GaugeText, parented Element Visibility, dimensions, optional FontFace, FontHeight, alignment,
 transparent text and default/alternate COLORREF colors (0xBBGGRR). Unsupported
 visual properties and duplicate scalar properties fail explicitly. A small
 named-color subset and hexadecimal values are accepted. Root translation,
@@ -429,8 +429,30 @@ cargo run -p fsx-app --features viewer --example xml-numeric-render-check -- FSX
 ```
 
 This command renders independently authored synthetic COM/altitude/VSI/heading
-text using an explicitly selected installed background/font. It does not add
+text using an explicitly selected installed background/font. Five states check
+powered/hidden/restored text with synthetic electrical/avionics input values.
+It does not add
 operational radio, engine or flight-variable bindings to the aircraft.
+
+## XML element visibility subset
+
+Element Visibility accepts a plain, bounded numeric RPN source. Parent/child
+conditions remain separate nodes, with at most 8,192 nodes and 1 MiB total
+condition source in the renderer. Each node is compiled before evaluation;
+parents must precede children. Expressions use the shared GaugeExpression A:/P:
+read-only resolver, preserving namespace/name/units and model-mode isolation.
+Nonzero finite values show the element; zero hides it. A hidden parent hides all
+descendants and skips their lookups, while a parent's result is shared across
+its text children. Active unresolved values, malformed graphs or non-finite
+results return an error. Hidden text emits an empty span list and no glyphs;
+its GaugeString syntax is still checked. Authored ordering between a parent's
+GaugeText and nested Elements is preserved.
+
+The [Element SDK reference](https://www.prepar3d.com/SDKv2/LearningCenter/simobjects/panels_and_gauges/creating_xml_gauges.html)
+defines Visibility as an optional numeric script. This subset does not implement
+Lua, macros, shared locals, hidden update events or native lifecycle services.
+Synthetic visibility/read-count/pixel tests are not an original-FSX electrical
+or hidden-update comparison.
 
 Aircraft/VisualAircraft expose optional selected-variant atc_id (at most 256
 bytes, without control characters), preserving explicit emptiness and absence.

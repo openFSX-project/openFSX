@@ -2,6 +2,7 @@
 //! FontHeight is currently interpreted as pixels per em; FSX/GDI metrics and
 //! default-font selection require reference validation.
 use fontdue::{Font, FontSettings};
+use fsx_script::gauge_expression::GaugeExpression;
 use fsx_script::gauge_string::{Color, GaugeString, Span};
 use fsx_texture::Image;
 use fsx_vehicle::{
@@ -17,6 +18,53 @@ pub struct RenderedText {
     pub image: Image,
     pub spans: Vec<Vec<Span>>,
     pub explicit_default_font: bool,
+    pub visible: Vec<bool>,
+}
+
+fn visible_elements(
+    gauge: &TextGauge,
+    mut numeric: impl FnMut(char, &str, &str) -> Option<f64>,
+) -> Result<Vec<bool>, String> {
+    if gauge.visibility.len() > 8192
+        || gauge
+            .visibility
+            .iter()
+            .fold(0usize, |sum, v| sum.saturating_add(v.source.len()))
+            > 1024 * 1024
+    {
+        return Err("XML visibility exceeds node/source budget".into());
+    }
+    let expressions = gauge
+        .visibility
+        .iter()
+        .map(|v| GaugeExpression::compile(&v.source))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut values = Vec::new();
+    for (index, (node, expression)) in gauge.visibility.iter().zip(&expressions).enumerate() {
+        let parent = match node.parent {
+            Some(parent) if parent < index => values[parent],
+            Some(_) => return Err("XML visibility graph must be parent-before-child".into()),
+            None => true,
+        };
+        values.push(
+            parent
+                && expression
+                    .evaluate(&mut numeric)
+                    .map_err(|e| format!("XML Visibility: {e:?}"))?
+                    != 0.,
+        );
+    }
+    gauge
+        .texts
+        .iter()
+        .map(|t| match t.visibility {
+            Some(index) => values
+                .get(index)
+                .copied()
+                .ok_or_else(|| "XML text has an invalid visibility reference".into()),
+            None => Ok(true),
+        })
+        .collect()
 }
 fn background_image(gauge: &TextGauge, cabinet: &Cabinet, member: &str) -> Result<Image, String> {
     if gauge.alpha && gauge.transparent {
@@ -87,9 +135,19 @@ impl GaugeFont {
         mut string: impl FnMut(&str) -> Option<String>,
     ) -> Result<RenderedText, String> {
         let mut image = background_image(gauge, cabinet, member)?;
+        let programs = gauge
+            .texts
+            .iter()
+            .map(|text| GaugeString::compile(&text.source))
+            .collect::<Result<Vec<_>, _>>()?;
+        let visible = visible_elements(gauge, &mut numeric)?;
         let mut all_spans = Vec::new();
         let mut explicit_default_font = false;
-        for text in &gauge.texts {
+        for ((text, program), &is_visible) in gauge.texts.iter().zip(&programs).zip(&visible) {
+            if !is_visible {
+                all_spans.push(Vec::new());
+                continue;
+            }
             if let Some(face) = &text.font_face {
                 if !self.name().is_some_and(|n| n.eq_ignore_ascii_case(face)) {
                     return Err(format!(
@@ -110,7 +168,7 @@ impl GaugeFont {
             {
                 return Err("Invalid XML text layout bounds".into());
             }
-            let spans = GaugeString::compile(&text.source)?
+            let spans = program
                 .evaluate(&mut numeric, &mut string)
                 .map_err(|e| format!("{e:?}"))?;
             let mut glyphs = Vec::new();
@@ -205,6 +263,7 @@ impl GaugeFont {
             image,
             spans: all_spans,
             explicit_default_font,
+            visible,
         })
     }
 }
@@ -233,6 +292,71 @@ pub(crate) fn source_over(target: &mut [u8], color: [u8; 3], coverage: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn visibility_caches_parents_short_circuits_descendants_and_rejects_bad_graphs() {
+        let text = |visibility| fsx_vehicle::xml_text::TextElement {
+            position: [0.; 2],
+            size: [1; 2],
+            font_face: None,
+            font_height: 1.,
+            horizontal: Align::Start,
+            vertical: Align::Start,
+            color: [255; 3],
+            alternate: None,
+            source: "unused".into(),
+            visibility,
+        };
+        let mut gauge = TextGauge {
+            size: [1; 2],
+            background: "unused.bmp".into(),
+            transparent: false,
+            alpha: false,
+            texts: vec![text(Some(1)), text(Some(0)), text(Some(0)), text(None)],
+            visibility: vec![
+                fsx_vehicle::xml_text::Visibility {
+                    parent: None,
+                    source: "(A:power, bool)".into(),
+                },
+                fsx_vehicle::xml_text::Visibility {
+                    parent: Some(0),
+                    source: "(P:mode, enum) 1 ==".into(),
+                },
+            ],
+        };
+        let mut reads = 0;
+        let hidden = visible_elements(&gauge, |ns, name, units| {
+            reads += 1;
+            assert_eq!((ns, name, units), ('A', "power", "bool"));
+            Some(0.)
+        })
+        .unwrap();
+        assert_eq!(hidden, [false, false, false, true]);
+        assert_eq!(reads, 1);
+        let mut power_reads = 0;
+        assert_eq!(
+            visible_elements(&gauge, |ns, name, units| match (ns, name, units) {
+                ('A', "power", "bool") => {
+                    power_reads += 1;
+                    Some(1.)
+                }
+                ('P', "mode", "enum") => Some(0.),
+                _ => None,
+            })
+            .unwrap(),
+            [false, true, true, true]
+        );
+        assert_eq!(power_reads, 1);
+        assert!(visible_elements(&gauge, |_, _, _| None).is_err());
+        assert!(visible_elements(&gauge, |_, _, _| Some(f64::NAN)).is_err());
+        gauge.visibility[0].parent = Some(1);
+        assert!(visible_elements(&gauge, |_, _, _| Some(1.)).is_err());
+        gauge.visibility[0].parent = None;
+        gauge.texts[0].visibility = Some(999);
+        assert!(visible_elements(&gauge, |_, _, _| Some(1.)).is_err());
+        gauge.texts[0].visibility = Some(1);
+        gauge.visibility[1].source = "(>A:write, number)".into();
+        assert!(visible_elements(&gauge, |_, _, _| Some(0.)).is_err());
+    }
     #[test]
     fn xml_alpha_background_preserves_channels_through_cabinet_and_panel() {
         fn put(b: &mut [u8], at: usize, n: u32) {

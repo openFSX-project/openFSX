@@ -5,6 +5,29 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 20 October 2026
 
+After `93233bb`, translated XML text elements accept bounded read-only Visibility
+expressions. Decoding retains parent-before-child condition nodes and authored
+text/child drawing order. Rendering evaluates each condition once per state;
+a hidden ancestor skips descendant lookups and text evaluation. Invalid,
+unavailable or non-finite active conditions fail explicitly. String syntax is
+compiled even for hidden text, so unsupported markup is not silently accepted.
+
+The numeric raster checker now covers five synthetic states: two powered
+baselines, an avionics-hidden row, all rows hidden by the parent, and restored
+power. Hidden providers intentionally withhold unused values, and the report
+records read names/visibility. Restoring power restores identical pixels;
+the two original powered baselines remain byte-identical. Images were inspected
+under `target/xml-visibility-render-01/`. These conditions use synthetic power
+inputs and do not implement the aircraft's electrical system.
+
+145 all-feature workspace test executions pass, including shared A:/P: numeric
+expression boundaries, parent/child graph checks, lazy lookups and drawing-order
+coverage. Actual FSX hidden-gauge update/lifecycle semantics and visibility
+side effects remain unverified; writes/shared locals/events are unsupported.
+Original-FSX acquisition remains deferred and the full 1:1 goal stays active.
+
+### Previous completed explicit-alpha stage
+
 After `2f5045b`, XML Image Alpha=True selects explicit 32-bit BI_RGB BGRA
 decoding. Ordinary BMP/DIB decoding does not reinterpret unused high bytes as
 opacity. Zero/partial/full alpha survive CAB -> typed XML -> image -> authored

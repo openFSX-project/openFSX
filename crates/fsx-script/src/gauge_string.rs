@@ -1,7 +1,8 @@
 //! Bounded, read-only GaugeString subset: literal text, A: strings, numeric
 //! A:/P: conditions, if/else/end, percent escaping and default/alternate colors.
+use crate::gauge_expression::GaugeExpression;
 use crate::gauge_format::{Format, Kind};
-use crate::{EvalError, Program, MAX_DEPTH, MAX_SOURCE};
+use crate::{EvalError, MAX_DEPTH, MAX_SOURCE};
 
 const MAX_OUTPUT: usize = 8192;
 const MAX_PARTS: usize = 2048;
@@ -24,32 +25,14 @@ pub struct GaugeString {
 enum Part {
     Literal(String),
     StringVariable(String, Format),
-    Numeric(Program, Format),
+    Numeric(GaugeExpression, Format),
     Color(Color),
-    If(Program, Vec<Part>, Vec<Part>),
+    If(GaugeExpression, Vec<Part>, Vec<Part>),
 }
 struct Parser<'a> {
     source: &'a str,
     offset: usize,
     count: usize,
-}
-
-fn evaluate_numeric(
-    program: &Program,
-    numeric: &mut impl FnMut(char, &str, &str) -> Option<f64>,
-) -> Result<f64, EvalError> {
-    program
-        .evaluate(|name, units| match name.strip_prefix("\0P:") {
-            Some(name) => numeric('P', name, units),
-            None => numeric('A', name, units),
-        })
-        .map_err(|error| match error {
-            EvalError::Unavailable { variable, units } => EvalError::Unavailable {
-                variable: variable.strip_prefix('\0').unwrap_or(&variable).to_owned(),
-                units,
-            },
-            other => other,
-        })
 }
 
 impl Parser<'_> {
@@ -121,11 +104,11 @@ impl Parser<'_> {
                         }
                         Part::StringVariable(name.to_owned(), format)
                     } else {
-                        Part::Numeric(Program::compile_mode(&expression, false, true)?, format)
+                        Part::Numeric(GaugeExpression::compile(&expression)?, format)
                     }
                 } else if tail.starts_with("%{if}") {
                     self.offset += 5;
-                    let program = Program::compile_mode(&expression, false, true)?;
+                    let program = GaugeExpression::compile(&expression)?;
                     let (yes, terminator) = self.block(depth + 1)?;
                     let no = if terminator == Some("else") {
                         let (no, end) = self.block(depth + 1)?;
@@ -227,14 +210,14 @@ impl GaugeString {
                         })?)?
                     }
                     Part::Numeric(program, format) => {
-                        format.number(evaluate_numeric(program, numeric)?)?
+                        format.number(program.evaluate(&mut *numeric)?)?
                     }
                     Part::Color(value) => {
                         *color = *value;
                         continue;
                     }
                     Part::If(program, yes, no) => {
-                        let condition = evaluate_numeric(program, numeric)?;
+                        let condition = program.evaluate(&mut *numeric)?;
                         run(
                             if condition != 0. { yes } else { no },
                             color,
@@ -278,6 +261,7 @@ impl GaugeString {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Program;
     fn formatted(source: &str) -> String {
         GaugeString::compile(source)
             .unwrap()

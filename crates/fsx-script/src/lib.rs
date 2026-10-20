@@ -1,5 +1,6 @@
 //! Bounded numeric RPN and GaugeString evaluation. Optional in-memory model locals; no host events.
 use std::collections::BTreeMap;
+pub mod gauge_expression;
 mod gauge_format;
 pub mod gauge_string;
 const MAX_SOURCE: usize = 16 * 1024;
@@ -184,7 +185,7 @@ impl<'a> Parser<'a> {
                 let panel = prefix.eq_ignore_ascii_case("P") && self.allow_panel;
                 if !prefix.eq_ignore_ascii_case("A") && !local_read && !local_write && !panel {
                     return Err(if self.allow_panel {
-                        "Only read-only A: and P: variables are supported in GaugeString expressions"
+                        "Only read-only A: and P: variables are supported in gauge expressions"
                     } else if self.allow_locals {
                         "Only A: reads and model-local L: reads/writes are supported"
                     } else {

@@ -19,6 +19,12 @@ pub struct TextElement {
     pub color: [u8; 3],
     pub alternate: Option<[u8; 3]>,
     pub source: String,
+    pub visibility: Option<usize>,
+}
+#[derive(Debug)]
+pub struct Visibility {
+    pub parent: Option<usize>,
+    pub source: String,
 }
 #[derive(Debug)]
 pub struct TextGauge {
@@ -27,6 +33,8 @@ pub struct TextGauge {
     pub transparent: bool,
     pub alpha: bool,
     pub texts: Vec<TextElement>,
+    /// Parent-before-child conditions, evaluated once per rendered state.
+    pub visibility: Vec<Visibility>,
 }
 type Result<T> = std::result::Result<T, String>;
 
@@ -157,79 +165,114 @@ impl TextGauge {
             transparent,
             alpha,
             texts: Vec::new(),
+            visibility: Vec::new(),
         };
-        fn element(node: &Element, origin: [f32; 2], output: &mut Vec<TextElement>) -> Result<()> {
-            allowed(node, &["FloatPosition", "GaugeText", "Element"], &["id"])?;
+        fn element(
+            node: &Element,
+            origin: [f32; 2],
+            parent_visibility: Option<usize>,
+            output: &mut Vec<TextElement>,
+            visibility: &mut Vec<Visibility>,
+        ) -> Result<()> {
+            allowed(
+                node,
+                &["FloatPosition", "GaugeText", "Element", "Visibility"],
+                &["id"],
+            )?;
+            let active_visibility = if let Some(source) = value(node, "Visibility")? {
+                if source.is_empty() || source.len() > 16 * 1024 {
+                    return Err("Invalid XML Visibility source bounds".into());
+                }
+                visibility.push(Visibility {
+                    parent: parent_visibility,
+                    source: source.to_owned(),
+                });
+                Some(visibility.len() - 1)
+            } else {
+                parent_visibility
+            };
             let offset = pair(value(node, "FloatPosition")?.unwrap_or("0,0"))?;
             let position = [origin[0] + offset[0], origin[1] + offset[1]];
             if position.iter().any(|v| v.abs() > 4096.) {
                 return Err("XML accumulated translation exceeds bounds".into());
             }
-            if let Some(text) = node.child("GaugeText")? {
-                allowed(
-                    text,
-                    &[
-                        "FontFace",
-                        "FontColor",
-                        "FontHeight",
-                        "GaugeString",
-                        "HorizontalAlign",
-                        "VerticalAlign",
-                        "Size",
-                        "Transparent",
-                        "AlternateColor",
-                    ],
-                    &["id"],
-                )?;
-                if !boolean(text, "Transparent")? {
-                    return Err("Opaque GaugeText background is unsupported".into());
+            node.child("GaugeText")?; // Reject ambiguous scalar duplicates.
+            for child in &node.children {
+                if child.name == "GaugeText" {
+                    let text = child;
+                    allowed(
+                        text,
+                        &[
+                            "FontFace",
+                            "FontColor",
+                            "FontHeight",
+                            "GaugeString",
+                            "HorizontalAlign",
+                            "VerticalAlign",
+                            "Size",
+                            "Transparent",
+                            "AlternateColor",
+                        ],
+                        &["id"],
+                    )?;
+                    if !boolean(text, "Transparent")? {
+                        return Err("Opaque GaugeText background is unsupported".into());
+                    }
+                    let font_height = value(text, "FontHeight")?
+                        .ok_or("GaugeText needs FontHeight")?
+                        .parse::<f32>()
+                        .map_err(|_| "Invalid FontHeight")?;
+                    if !font_height.is_finite() || !(1. ..=256.).contains(&font_height) {
+                        return Err("FontHeight outside 1..256".into());
+                    }
+                    let alternate = text
+                        .child("AlternateColor")?
+                        .map(|alt| {
+                            allowed(alt, &["FontColor"], &["id"])?;
+                            color(value(alt, "FontColor")?.ok_or("AlternateColor lacks FontColor")?)
+                        })
+                        .transpose()?;
+                    let font_face = value(text, "FontFace")?.map(str::to_owned);
+                    if font_face.as_ref().is_some_and(|v| {
+                        v.is_empty() || v.len() > 128 || v.chars().any(char::is_control)
+                    }) {
+                        return Err("Invalid XML font face".into());
+                    }
+                    // Preserve authored string whitespace; visual-property values trim.
+                    let source = text
+                        .child("GaugeString")?
+                        .ok_or("GaugeText lacks GaugeString")?;
+                    if !source.attributes.is_empty() || !source.children.is_empty() {
+                        return Err("GaugeString must be plain text".into());
+                    }
+                    output.push(TextElement {
+                        position,
+                        size: size(text)?,
+                        font_face,
+                        font_height,
+                        horizontal: align(text, "HorizontalAlign")?,
+                        vertical: align(text, "VerticalAlign")?,
+                        color: color(
+                            value(text, "FontColor")?.ok_or("GaugeText needs FontColor")?,
+                        )?,
+                        alternate,
+                        source: source.text.clone(),
+                        visibility: active_visibility,
+                    });
+                } else if child.name == "Element" {
+                    element(child, position, active_visibility, output, visibility)?;
                 }
-                let font_height = value(text, "FontHeight")?
-                    .ok_or("GaugeText needs FontHeight")?
-                    .parse::<f32>()
-                    .map_err(|_| "Invalid FontHeight")?;
-                if !font_height.is_finite() || !(1. ..=256.).contains(&font_height) {
-                    return Err("FontHeight outside 1..256".into());
-                }
-                let alternate = text
-                    .child("AlternateColor")?
-                    .map(|alt| {
-                        allowed(alt, &["FontColor"], &["id"])?;
-                        color(value(alt, "FontColor")?.ok_or("AlternateColor lacks FontColor")?)
-                    })
-                    .transpose()?;
-                let font_face = value(text, "FontFace")?.map(str::to_owned);
-                if font_face.as_ref().is_some_and(|v| {
-                    v.is_empty() || v.len() > 128 || v.chars().any(char::is_control)
-                }) {
-                    return Err("Invalid XML font face".into());
-                }
-                // Preserve authored string whitespace; visual-property values trim.
-                let source = text
-                    .child("GaugeString")?
-                    .ok_or("GaugeText lacks GaugeString")?;
-                if !source.attributes.is_empty() || !source.children.is_empty() {
-                    return Err("GaugeString must be plain text".into());
-                }
-                output.push(TextElement {
-                    position,
-                    size: size(text)?,
-                    font_face,
-                    font_height,
-                    horizontal: align(text, "HorizontalAlign")?,
-                    vertical: align(text, "VerticalAlign")?,
-                    color: color(value(text, "FontColor")?.ok_or("GaugeText needs FontColor")?)?,
-                    alternate,
-                    source: source.text.clone(),
-                });
-            }
-            for child in node.children.iter().filter(|c| c.name == "Element") {
-                element(child, position, output)?;
             }
             Ok(())
         }
         for child in gauge.children.iter().filter(|n| n.name == "Element") {
-            element(child, [0.; 2], &mut result.texts)?;
+            element(
+                child,
+                [0.; 2],
+                None,
+                &mut result.texts,
+                &mut result.visibility,
+            )?;
         }
         if result.texts.is_empty() {
             return Err("XML text gauge has no GaugeText".into());
@@ -241,6 +284,46 @@ impl TextGauge {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn visibility_is_parented_shared_and_preserves_authored_draw_order() {
+        let text = |s: &str| {
+            format!("<GaugeText><Size>8,8</Size><FontHeight>6</FontHeight><FontColor>White</FontColor><GaugeString>{s}</GaugeString><Transparent>True</Transparent></GaugeText>")
+        };
+        let xml = format!(
+            r#"<SimBase.Document Type="AceXML"><SimGauge.Gauge><Size>20,20</Size><Image Name="own.bmp"/><Element><Visibility>(A:power, bool)</Visibility><Element><Visibility>(P:mode, enum) 1 ==</Visibility>{}</Element>{}<Element>{}</Element></Element><Element>{}</Element></SimGauge.Gauge></SimBase.Document>"#,
+            text("child-first"),
+            text("parent-second"),
+            text("sibling-third"),
+            text("independent-fourth")
+        );
+        let document = GaugeDocument::parse(xml.as_bytes(), false).unwrap();
+        let gauge = TextGauge::from_document(&document).unwrap();
+        assert_eq!(
+            gauge
+                .texts
+                .iter()
+                .map(|t| t.source.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "child-first",
+                "parent-second",
+                "sibling-third",
+                "independent-fourth"
+            ]
+        );
+        assert_eq!(
+            gauge.texts.iter().map(|t| t.visibility).collect::<Vec<_>>(),
+            [Some(1), Some(0), Some(0), None]
+        );
+        assert_eq!(gauge.visibility[0].parent, None);
+        assert_eq!(gauge.visibility[1].parent, Some(0));
+        for value in ["", "1</Visibility><Visibility>0", "<Script>1</Script>"] {
+            let bad = xml.replacen("(A:power, bool)", value, 1);
+            assert!(GaugeDocument::parse(bad.as_bytes(), false)
+                .and_then(|d| TextGauge::from_document(&d))
+                .is_err());
+        }
+    }
     #[test]
     fn explicit_image_alpha_is_separate_from_black_key_and_luminosity() {
         for (properties, valid, alpha) in [
