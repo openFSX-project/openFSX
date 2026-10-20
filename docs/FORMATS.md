@@ -180,7 +180,11 @@ Dimensions are bounded to 4096, files to 256 MiB and palettes to 256 entries.
 Missing palette indices, overlapping BMP offsets, truncated rows and invalid
 declared extents fail. BMP file trailers outside bfSize are ignored. BI_RGB
 biSizeImage may be zero; otherwise it must cover the required rows and fit in
-the payload. RLE, bitfields, 1/16/32-bit pixels, extended headers, alpha and color
+the payload. The separate `Image::bmp_alpha` mode requires 32-bit BI_RGB file
+pixels and preserves their explicit BGRA alpha, including fully transparent
+nonblack pixels. It is selected only by the gauge's Alpha property; reserved
+palette bytes and ordinary DIB high bytes are not guessed to be opacity.
+RLE, bitfields, 1/16-bit pixels, extended headers, native DIB alpha and color
 profiles remain unsupported. The [Windows bitmap reference](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapinfoheader)
 documents these structures; the implementation uses no GDI calls.
 
@@ -366,6 +370,21 @@ Locally the XML and both C172 plaque BMP members (6,353 decoded bytes) matched
 Windows Expand exactly. Tests use independent synthetic archives, scripts and
 image names, including a second DEFLATE block that requires the first block's
 dictionary. No installed XML, bitmap or compressed original member is committed.
+
+The typed background reader also accepts explicit Image Alpha=True, selecting
+the separate 32-bit BI_RGB BGRA decoder. Ordinary BMP/DIB decoding never guesses
+opacity from a reserved byte. Partial coverage reaches panel composition as
+straight alpha. Alpha plus black-key Transparent=True is rejected while its
+precedence is unverified. Luminous is not accepted as Alpha: the SDK describes
+inverse-alpha illumination with panel [Color] values, which is a separate
+lighting contract still unimplemented. See the
+[Image property reference](https://www.prepar3d.com/SDKv2/LearningCenter/simobjects/panels_and_gauges/creating_xml_gauges.html).
+
+PanelConfig retains optional [Color] Day, Night and Luminous values as RGB byte
+triplets, without inventing defaults for absent keys. Unknown color directives
+and the unimplemented application remain diagnostic. Parsing these values does
+not dim/tint existing aircraft images and does not imply automatic _night.bmp
+selection. Such selection and global illumination need separate evidence.
 
 ## GaugeString evaluation subset
 

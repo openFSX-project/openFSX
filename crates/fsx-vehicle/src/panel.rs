@@ -40,10 +40,31 @@ pub struct Panel {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct LightingColors {
+    pub day: Option<[u8; 3]>,
+    pub night: Option<[u8; 3]>,
+    pub luminous: Option<[u8; 3]>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct PanelConfig {
     pub panels: Vec<Panel>,
+    /// Authored RGB lighting bounds; decoding does not apply a lighting model.
+    pub colors: LightingColors,
     /// Unsupported directives are retained as diagnostics rather than interpreted.
     pub unsupported: Vec<String>,
+}
+
+fn rgb(text: &str) -> Result<[u8; 3], String> {
+    let fields: Vec<_> = text.split(',').map(str::trim).collect();
+    if fields.len() != 3 {
+        return Err("Panel RGB color requires three bytes".into());
+    }
+    let mut color = [0; 3];
+    for (i, field) in fields.iter().enumerate() {
+        color[i] = field.parse().map_err(|_| "Invalid panel RGB byte")?;
+    }
+    Ok(color)
 }
 
 fn indexed(name: &str, prefix: &str) -> Option<u32> {
@@ -206,12 +227,29 @@ impl PanelConfig {
         }
         let mut result = Self {
             panels: Vec::new(),
+            colors: LightingColors {
+                day: cfg.get("color", "day").map(rgb).transpose()?,
+                night: cfg.get("color", "night").map(rgb).transpose()?,
+                luminous: cfg.get("color", "luminous").map(rgb).transpose()?,
+            },
             unsupported: Vec::new(),
         };
         let mut seen = BTreeSet::new();
         let mut textures = BTreeSet::new();
         let mut gauge_count = 0;
         for (section, values) in cfg.sections() {
+            if section == "color" {
+                result
+                    .unsupported
+                    .push("[color] lighting application".into());
+                for key in values
+                    .keys()
+                    .filter(|key| !["day", "night", "luminous"].contains(&key.as_str()))
+                {
+                    result.unsupported.push(format!("[color] {key}"));
+                }
+                continue;
+            }
             let (virtual_cockpit, index) = if let Some(index) = indexed(section, "vcockpit") {
                 (true, index)
             } else if let Some(index) = indexed(section, "window") {
@@ -283,6 +321,38 @@ impl PanelConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn authored_lighting_colors_are_rgb_optional_and_checked() {
+        let panel = PanelConfig::parse("[Color]\nDay=12,34,56\nNight=1,2,3\nLuminous=201,64,64\nFuture=1\n[VCockpit01]\ntexture=$Own\n").unwrap();
+        assert_eq!(
+            panel.colors,
+            LightingColors {
+                day: Some([12, 34, 56]),
+                night: Some([1, 2, 3]),
+                luminous: Some([201, 64, 64])
+            }
+        );
+        assert!(panel
+            .unsupported
+            .contains(&"[color] lighting application".into()));
+        assert!(panel.unsupported.contains(&"[color] future".into()));
+        assert_eq!(
+            PanelConfig::parse("[Window00]\nsize_mm=1,1\n")
+                .unwrap()
+                .colors,
+            LightingColors {
+                day: None,
+                night: None,
+                luminous: None
+            }
+        );
+        for value in ["256,0,0", "-1,0,0", "1.0,2,3", "1,2", "1,2,3,4", "NaN,2,3"] {
+            assert!(
+                PanelConfig::parse(&format!("[Color]\nNight={value}\n")).is_err(),
+                "{value}"
+            );
+        }
+    }
     #[test]
     fn native_layout_and_parameters_preserve_units_case_order_and_optional_sizes() {
         let c = PanelConfig::parse("[Window Titles]\nWindow02=Original synthetic panel\n[Window02]\nsize_mm=640\ngauge09=Test!Lamp, -2,4\ngauge01=Test!Dial,2,3,40,,alpha,beta\n[VCockpit01]\ntexture=$Own\nsize_mm=512,256\npixel_size=1024,0\nbackground_color=1,2,255\ngauge00=Test!Needle,8,9,20,30\n").unwrap();

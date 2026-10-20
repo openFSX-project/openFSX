@@ -12,7 +12,7 @@ fn short(b: &[u8], offset: usize) -> Result<u16> {
     Ok(u16::from_le_bytes(range(b, offset, 2)?.try_into().unwrap()))
 }
 
-fn decode(b: &[u8], pixel_offset: Option<usize>) -> Result<Image> {
+fn decode(b: &[u8], pixel_offset: Option<usize>, explicit_alpha: bool) -> Result<Image> {
     if b.len() as u64 > MAX_FILE || word(b, 0)? != 40 || short(b, 12)? != 1 {
         return Err("Expected a bounded 40-byte BITMAPINFOHEADER with one plane".into());
     }
@@ -26,8 +26,16 @@ fn decode(b: &[u8], pixel_offset: Option<usize>) -> Result<Image> {
     {
         return Err("Bitmap dimensions must be between 1 and 4096".into());
     }
-    if ![4, 8, 24].contains(&bits) || word(b, 16)? != 0 {
-        return Err("Only uncompressed BI_RGB 4/8/24-bit bitmaps are supported".into());
+    if (explicit_alpha && bits != 32)
+        || (!explicit_alpha && ![4, 8, 24].contains(&bits))
+        || word(b, 16)? != 0
+    {
+        return Err(if explicit_alpha {
+            "Explicit BMP alpha needs uncompressed 32-bit BI_RGB"
+        } else {
+            "Ordinary BMP needs uncompressed BI_RGB 4/8/24-bit data"
+        }
+        .into());
     }
     let colors = word(b, 32)? as usize;
     let colors = if colors == 0 && bits <= 8 {
@@ -58,7 +66,10 @@ fn decode(b: &[u8], pixel_offset: Option<usize>) -> Result<Image> {
         let source_y = if height > 0 { rows - 1 - y } else { y };
         let row = &source[source_y * stride..(source_y + 1) * stride];
         for x in 0..width {
-            let color = if bits == 24 {
+            let color = if bits == 32 {
+                let p = x * 4;
+                [row[p + 2], row[p + 1], row[p], row[p + 3]]
+            } else if bits == 24 {
                 let p = x * 3;
                 [row[p + 2], row[p + 1], row[p], 255]
             } else {
@@ -86,10 +97,18 @@ fn decode(b: &[u8], pixel_offset: Option<usize>) -> Result<Image> {
 impl Image {
     /// Packed native RT_BITMAP resource: no BITMAPFILEHEADER and no implicit transparency.
     pub fn dib(b: &[u8]) -> Result<Self> {
-        decode(b, None)
+        decode(b, None, false)
     }
     /// Ordinary BMP file. Reserved palette bytes are not an alpha channel.
     pub fn bmp(b: &[u8]) -> Result<Self> {
+        Self::bmp_mode(b, false)
+    }
+    /// Explicit gauge Alpha mode: 32-bit BI_RGB BGRA, straight alpha.
+    /// The high byte is not treated as alpha by ordinary bmp()/dib().
+    pub fn bmp_alpha(b: &[u8]) -> Result<Self> {
+        Self::bmp_mode(b, true)
+    }
+    fn bmp_mode(b: &[u8], explicit_alpha: bool) -> Result<Self> {
         if b.len() as u64 > MAX_FILE || range(b, 0, 2)? != b"BM" {
             return Err("Expected a bounded BMP file".into());
         }
@@ -99,13 +118,51 @@ impl Image {
             return Err("Invalid BMP file size / pixel offset".into());
         }
         let b = range(b, 0, size)?;
-        decode(&b[14..], Some(offset - 14))
+        decode(&b[14..], Some(offset - 14), explicit_alpha)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_bgra_alpha_preserves_zero_partial_and_opaque_values() {
+        let dib = fixture(
+            32,
+            2,
+            -2,
+            &[],
+            &[
+                30, 20, 10, 0, 60, 50, 40, 128, 90, 80, 70, 255, 120, 110, 100, 1,
+            ],
+        );
+        let mut bmp = vec![0; 14];
+        bmp[..2].copy_from_slice(b"BM");
+        bmp.extend_from_slice(&dib);
+        let length = bmp.len() as u32;
+        put(&mut bmp, 2, length);
+        put(&mut bmp, 10, 54);
+        assert_eq!(
+            Image::bmp_alpha(&bmp).unwrap().rgba,
+            [10, 20, 30, 0, 40, 50, 60, 128, 70, 80, 90, 255, 100, 110, 120, 1]
+        );
+        assert!(Image::bmp(&bmp).is_err());
+        assert!(Image::dib(&dib).is_err());
+        for n in 0..bmp.len() {
+            assert!(Image::bmp_alpha(&bmp[..n]).is_err(), "truncated {n}");
+        }
+        let mut bottom = bmp.clone();
+        put(&mut bottom, 22, 2);
+        assert_eq!(
+            Image::bmp_alpha(&bottom).unwrap().rgba[..8],
+            [70, 80, 90, 255, 100, 110, 120, 1]
+        );
+        for bits in [4u16, 8, 24] {
+            let mut bad = bmp.clone();
+            bad[28..30].copy_from_slice(&bits.to_le_bytes());
+            assert!(Image::bmp_alpha(&bad).is_err());
+        }
+    }
     fn put(b: &mut [u8], p: usize, value: u32) {
         b[p..p + 4].copy_from_slice(&value.to_le_bytes());
     }

@@ -19,7 +19,7 @@ This page records observed behavior, not a promise that existing add-ons will wo
 | MDL8, MDL9, P3D | Unsupported | Explicit format error |
 | DDS diffuse maps | Partial | DXT1/3/5 and masked 32-bit RGB, top mip only; up to 4096 pixels per dimension |
 | Texture lookup | Partial | Selected folder and ordered texture.cfg fallback graph; ASCII case-insensitive file lookup |
-| BMP / native bitmap resources | Partial | BITMAPINFOHEADER BI_RGB 4/8/24-bit, palettes, row padding, top/down orientation and BMP pixel offsets; no RLE, bitfields, extended headers or bitmap alpha |
+| BMP / native bitmap resources | Partial | Ordinary BI_RGB 4/8/24-bit plus explicit XML Alpha mode for 32-bit BGRA BMP files; palettes, padding, orientation and pixel offsets. Native DIB alpha, RLE, bitfields, extended headers and Luminous application remain unsupported |
 | Advanced materials | Not implemented | No bump, specular, reflection or emissive maps |
 | Static panel artwork inspection | Separate offscreen example | 28 C172 root images bound to the two native VC textures; no moving layers, needles, digital values, XML, interaction or automatic flight-mode panel loading |
 | Flight dynamics / AIR | Initial airborne subset | Legacy 1101/0404/0473; modern overrides explicitly rejected; approximate engine |

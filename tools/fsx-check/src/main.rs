@@ -121,6 +121,10 @@ fn panel_report(folder: &Path, windows_1252: bool) -> Result<(), String> {
     };
     let aircraft = VisualAircraft::load(folder, 0, windows_1252)?;
     let config = PanelConfig::load(&aircraft.panel, windows_1252)?;
+    println!(
+        "Authored panel lighting RGB {:?}; lighting application remains unsupported",
+        config.colors
+    );
     println!("{} | {}", aircraft.title, aircraft.panel.display());
     let mut modules = std::collections::BTreeMap::<String, usize>::new();
     for panel in &config.panels {
@@ -184,7 +188,7 @@ fn panel_report(folder: &Path, windows_1252: bool) -> Result<(), String> {
         }
     }
     println!(
-        "{} unsupported layout/background directives; no gauge code was loaded or executed.",
+        "{} unsupported panel directives/behaviors; no gauge code was loaded or executed.",
         config.unsupported.len()
     );
     Ok(())

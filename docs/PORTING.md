@@ -5,6 +5,30 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 20 October 2026
 
+After `2f5045b`, XML Image Alpha=True selects explicit 32-bit BI_RGB BGRA
+decoding. Ordinary BMP/DIB decoding does not reinterpret unused high bytes as
+opacity. Zero/partial/full alpha survive CAB -> typed XML -> image -> authored
+panel composition, checked using independent synthetic resources and exact
+expected pixels. Combined Alpha/black-key transparency fails until validated;
+Luminous remains distinct and unsupported rather than becoming opacity.
+
+PanelConfig now retains optional authored [Color] Day/Night/Luminous RGB values,
+with byte-range checks and diagnostics for unimplemented lighting application.
+The local C172 inspector reports the installed values directly. These metadata
+are prerequisites for lighting, not a lighting model. The SDK documents an
+inverse-alpha luminous mask and panel colors; it does not establish automatic
+_night.bmp selection for this loader. No suffix substitution was guessed.
+
+142 all-feature workspace test executions pass, including four new cases for
+BGRA/truncation/orientation, typed Alpha behavior, exact composition and authored
+color metadata. Actual FSX night selection, blending/dimming, Bright/Luminous
+behavior and time-of-day/panel-light services still need implementation and
+reference evidence. The current flight plaque stays in its daylight profile.
+The existing two numeric/daytime raster cases also remained byte-identical
+after the alpha change (`target/xml-alpha-day-regression-01/`).
+
+### Previous completed numeric-text stage
+
 After `6d0a1c9`, GaugeString additionally supports bounded numeric d/f output
 and width-formatted A: strings. Numeric expressions retain explicit A:/P:
 namespace and units. Integer output rounds, preserves sign and supports space/

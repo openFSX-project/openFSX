@@ -25,6 +25,7 @@ pub struct TextGauge {
     pub size: [u32; 2],
     pub background: String,
     pub transparent: bool,
+    pub alpha: bool,
     pub texts: Vec<TextElement>,
 }
 type Result<T> = std::result::Result<T, String>;
@@ -79,12 +80,12 @@ fn size(node: &Element) -> Result<[u32; 2]> {
     }
     Ok(result.map(|v| v as u32))
 }
-fn transparent(node: &Element) -> Result<bool> {
-    match value(node, "Transparent")? {
+fn boolean(node: &Element, key: &str) -> Result<bool> {
+    match value(node, key)? {
         Some(v) if v.eq_ignore_ascii_case("true") => Ok(true),
         Some(v) if v.eq_ignore_ascii_case("false") => Ok(false),
         None => Ok(false),
-        _ => Err("Invalid XML Transparent property".into()),
+        _ => Err(format!("Invalid XML boolean property {key}")),
     }
 }
 fn align(node: &Element, field: &str) -> Result<Align> {
@@ -136,7 +137,14 @@ impl TextGauge {
         let image = gauge
             .child("Image")?
             .ok_or("XML text gauge needs a background Image")?;
-        allowed(image, &["Transparent"], &["id", "Name"])?;
+        allowed(image, &["Transparent", "Alpha"], &["id", "Name"])?;
+        let alpha = boolean(image, "Alpha")?;
+        let transparent = boolean(image, "Transparent")?;
+        if alpha && transparent {
+            return Err(
+                "Combined XML Alpha and black transparency require reference validation".into(),
+            );
+        }
         let background = image
             .attributes
             .get("Name")
@@ -146,7 +154,8 @@ impl TextGauge {
         let mut result = Self {
             size: size(gauge)?,
             background,
-            transparent: transparent(image)?,
+            transparent,
+            alpha,
             texts: Vec::new(),
         };
         fn element(node: &Element, origin: [f32; 2], output: &mut Vec<TextElement>) -> Result<()> {
@@ -172,7 +181,7 @@ impl TextGauge {
                     ],
                     &["id"],
                 )?;
-                if !transparent(text)? {
+                if !boolean(text, "Transparent")? {
                     return Err("Opaque GaugeText background is unsupported".into());
                 }
                 let font_height = value(text, "FontHeight")?
@@ -232,6 +241,35 @@ impl TextGauge {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_image_alpha_is_separate_from_black_key_and_luminosity() {
+        for (properties, valid, alpha) in [
+            ("", true, false),
+            ("<Alpha>True</Alpha>", true, true),
+            (
+                "<Alpha>False</Alpha><Transparent>True</Transparent>",
+                true,
+                false,
+            ),
+            (
+                "<Alpha>True</Alpha><Transparent>True</Transparent>",
+                false,
+                false,
+            ),
+            ("<Alpha>maybe</Alpha>", false, false),
+            ("<Luminous>True</Luminous>", false, false),
+        ] {
+            let xml = format!(
+                r#"<SimBase.Document Type="AceXML"><SimGauge.Gauge><Size>10,10</Size><Image Name="own.bmp">{properties}</Image><Element><GaugeText><Size>8,8</Size><FontHeight>6</FontHeight><FontColor>White</FontColor><GaugeString>X</GaugeString><Transparent>True</Transparent></GaugeText></Element></SimGauge.Gauge></SimBase.Document>"#
+            );
+            let doc = GaugeDocument::parse(xml.as_bytes(), false).unwrap();
+            let typed = TextGauge::from_document(&doc);
+            assert_eq!(typed.is_ok(), valid, "{properties}");
+            if valid {
+                assert_eq!(typed.unwrap().alpha, alpha);
+            }
+        }
+    }
     fn document(properties: &str) -> GaugeDocument {
         GaugeDocument::parse(format!(r#"<SimBase.Document Type="AceXML"><SimGauge.Gauge><Size>100,30</Size><Image Name="face.bmp"/><Element><FloatPosition>2,3</FloatPosition><Element><FloatPosition>4,5</FloatPosition><GaugeText><Size>90,20</Size><FontHeight>16</FontHeight><FontColor>0x123456</FontColor><GaugeString> text </GaugeString><Transparent>True</Transparent>{properties}</GaugeText></Element></Element></SimGauge.Gauge></SimBase.Document>"#).as_bytes(), false).unwrap()
     }
