@@ -278,6 +278,68 @@ public:
     }
     ~InitializedModule() {try {close();} catch (const std::exception& e) {std::cerr<<e.what()<<'\n';}}
 };
+class GuardedTextBuffer {
+    unsigned char* allocation=nullptr;
+    size_t page=0,capacity=0;
+public:
+    char* data=nullptr;
+    explicit GuardedTextBuffer(size_t maximum) {
+        if (!maximum || maximum>256) throw std::runtime_error("String probe length must be 1..256.");
+        SYSTEM_INFO info{};GetSystemInfo(&info);page=info.dwPageSize;capacity=maximum+1;
+        allocation=static_cast<unsigned char*>(VirtualAlloc(nullptr,page*3,MEM_RESERVE,PAGE_NOACCESS));
+        if (!allocation) throw std::runtime_error("Cannot reserve guarded string output.");
+        if(!VirtualAlloc(allocation+page,page,MEM_COMMIT,PAGE_READWRITE)){VirtualFree(allocation,0,MEM_RELEASE);allocation=nullptr;throw std::runtime_error("Cannot commit guarded string output.");}
+        reset(maximum);
+    }
+    void reset(size_t maximum) {
+        if(!maximum || maximum>256)throw std::runtime_error("String probe length must be 1..256.");
+        capacity=maximum+1;
+        std::memset(allocation+page,0xa5,page);
+        data=reinterpret_cast<char*>(allocation+page*2-capacity);std::memset(data,0,capacity);
+    }
+    ~GuardedTextBuffer(){if(allocation)VirtualFree(allocation,0,MEM_RELEASE);}
+    GuardedTextBuffer(const GuardedTextBuffer&)=delete;
+    GuardedTextBuffer& operator=(const GuardedTextBuffer&)=delete;
+    std::string value() const {
+        for(size_t i=0;i<page-capacity;++i)if(allocation[page+i]!=0xa5)throw std::runtime_error("Native string callback wrote before its output buffer.");
+        auto end=static_cast<const char*>(std::memchr(data,0,capacity));
+        if(!end)throw std::runtime_error("Native string output exceeds declared length or lacks NUL.");
+        auto result=std::string(data,static_cast<size_t>(end-data));json(result);return result;
+    }
+};
+struct StringInput { double value;uint64_t payload;const char* kind; };
+static StringInput string_input(const wchar_t* raw) {
+    std::wstring text(raw);
+    if(text.rfind(L"f64:",0)==0){auto value=number(text.c_str()+4);uint64_t payload=0;std::memcpy(&payload,&value,8);return {value,payload,"f64"};}
+    if(text.rfind(L"u32:",0)==0){auto value_text=text.substr(4);if(value_text.empty() || value_text[0]==L'-' || value_text[0]==L'+')throw std::runtime_error("Invalid unsigned string slot.");size_t end=0;int base=value_text.rfind(L"0x",0)==0 || value_text.rfind(L"0X",0)==0?16:10;auto value=std::stoull(value_text,&end,base);if(end!=value_text.size() || value>UINT32_MAX)throw std::runtime_error("String integer slot exceeds u32.");return {static_cast<double>(value),value,"u32"};}
+    throw std::runtime_error("String inputs require explicit f64:VALUE or u32:VALUE union interpretation.");
+}
+static int string_sample(const fs::path& root,const std::string& library,const std::string& name,uint32_t rva,const std::array<StringInput,3>& inputs) {
+    // Buffer precedes module lifetime so native deinitialization cannot outlive it.
+    GuardedTextBuffer buffer(256);
+    InitializedModule owner(library_path(root,library));auto& module=owner.module;
+    auto header=gauge(module,owner.linkage,name);uintptr_t selected=0;
+    for(auto element:elements(module,header))if(element-module.base==rva && module.word(element)==2)selected=element;
+    if(!selected)throw std::runtime_error("No selected string RVA in the gauge graph.");
+    module.check(selected,324,true);
+    auto maximum=module.word(selected+292)&0xffff;
+    if(!maximum || maximum>256)throw std::runtime_error("Selected native string length is outside 1..256.");
+    buffer.reset(maximum);
+    auto callback=module.word(selected+312);module.check(callback,1,false,true);
+    for(size_t i=0;i<3;++i)if(module.word(selected+168+i*4))throw std::runtime_error("String source callbacks are unsupported by explicit-input sampling.");
+    std::array<uint32_t,3> tokens{};
+    for(size_t i=0;i<3;++i){tokens[i]=module.word(selected+60+i*28);module.check(selected+72+i*28,16,true);std::memcpy(reinterpret_cast<void*>(selected+72+i*28),&inputs[i].payload,8);std::memcpy(reinterpret_cast<void*>(selected+80+i*28),&inputs[i].payload,8);}
+    auto original=module.word(selected+184);auto pointer=buffer.data;std::memcpy(reinterpret_cast<void*>(selected+184),&pointer,4);
+    double result=0.;DWORD exception=0;
+    const bool success=invoke(reinterpret_cast<Update>(callback),reinterpret_cast<void*>(selected),&result,&exception);
+    const bool pointer_unchanged=module.word(selected+184)==reinterpret_cast<uintptr_t>(pointer);
+    std::memcpy(reinterpret_cast<void*>(selected+184),&original,4);
+    if(!success)throw std::runtime_error("Native string callback failed or needs unsupported services: "+hex(exception));
+    if(!pointer_unchanged || !std::isfinite(result))throw std::runtime_error("Native string callback changed its buffer or returned a non-finite value.");
+    auto text=buffer.value();owner.close();
+    std::cout<<std::setprecision(17)<<"{\"schema\":1,\"source\":\"native-string-probe\",\"pointer_bits\":32,\"library\":"<<json(library)<<",\"gauge\":"<<json(name)<<",\"element_rva\":"<<rva<<",\"tokens\":["<<tokens[0]<<','<<tokens[1]<<','<<tokens[2]<<"],\"raw_inputs\":["<<inputs[0].value<<','<<inputs[1].value<<','<<inputs[2].value<<"],\"input_kinds\":["<<json(inputs[0].kind)<<','<<json(inputs[1].kind)<<','<<json(inputs[2].kind)<<"],\"max_length\":"<<maximum<<",\"callback_result\":"<<result<<",\"text\":"<<json(text)<<",\"module_init_called\":true,\"module_deinit_called\":true,\"guarded_buffer\":true,\"panel_services\":false,\"full_gauge_lifecycle\":false}\n";
+    return 0;
+}
 struct Binding {
     InitializedModule* owner;
     const char* library;
@@ -375,10 +437,30 @@ static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=fals
 }
 static double __stdcall synthetic(void* value) { return *static_cast<double*>(value) * 2. + 3.; }
 static double __stdcall synthetic_fault(void*) { RaiseException(0xe0420001, 0, 0, nullptr); return 0.; }
+static double __stdcall synthetic_string(void* element) {
+    char* output=nullptr;std::memcpy(&output,static_cast<unsigned char*>(element)+184,4);
+    std::memcpy(output,"09:08:07",9);return 7.;
+}
+static double __stdcall synthetic_string_overflow(void* element) {
+    char* output=nullptr;std::memcpy(&output,static_cast<unsigned char*>(element)+184,4);
+    output[9]='X';return 0.;
+}
+static double __stdcall synthetic_string_underflow(void* element) {
+    char* output=nullptr;std::memcpy(&output,static_cast<unsigned char*>(element)+184,4);
+    output[-1]='X';return 0.;
+}
 static int self_test() {
     double input = 4., result = 0.; DWORD exception = 0;
     if (!invoke(synthetic, &input, &result, &exception) || result != 11.) throw std::runtime_error("Synthetic x86 stdcall result failed.");
     if (invoke(synthetic_fault, &input, &result, &exception) || exception != 0xe0420001) throw std::runtime_error("Structured exception containment failed.");
+    GuardedTextBuffer text(8);std::array<unsigned char,324> text_element{};auto text_pointer=text.data;
+    std::memcpy(text_element.data()+184,&text_pointer,4);
+    if(!invoke(synthetic_string,text_element.data(),&result,&exception)||result!=7.||text.value()!="09:08:07")throw std::runtime_error("Synthetic string callback failed.");
+    if(invoke(synthetic_string_overflow,text_element.data(),&result,&exception)||exception!=EXCEPTION_ACCESS_VIOLATION)throw std::runtime_error("String output guard did not contain an overflow.");
+    if(!invoke(synthetic_string_underflow,text_element.data(),&result,&exception))throw std::runtime_error("Synthetic string prefix test failed.");
+    bool underrun=false;try{text.value();}catch(...){underrun=true;}if(!underrun)throw std::runtime_error("String output prefix overwrite was not detected.");
+    if(string_input(L"u32:0x1825").payload!=0x1825 || string_input(L"f64:2.5").value!=2.5)throw std::runtime_error("String union interpretation failed.");
+    for(const wchar_t* bad:{L"1",L"u32:-1",L"u32:4294967296",L"f64:NaN"}){bool rejected=false;try{string_input(bad);}catch(...){rejected=true;}if(!rejected)throw std::runtime_error("Invalid string union input accepted.");}
     if (json("a\\b\"c") != "\"a\\\\b\\\"c\"" || number(L"-2.5") != -2.5) throw std::runtime_error("Protocol scalar/escaping check failed.");
     for (const wchar_t* bad : {L"NaN",L"1e99",L"2tail"}) {
         bool rejected = false; try { number(bad); } catch (...) { rejected = true; }
@@ -396,7 +478,7 @@ static int self_test() {
         bool rejected=false;try {parse_frame(bad);} catch (...) {rejected=true;}
         if (!rejected) throw std::runtime_error("Invalid frame input accepted.");
     }
-    std::cout << "{\"schema\":1,\"source\":\"synthetic\",\"pointer_bits\":32,\"stdcall_result\":11,\"exception_contained\":true,\"game_loaded\":false}\n";
+    std::cout << "{\"schema\":1,\"source\":\"synthetic\",\"pointer_bits\":32,\"stdcall_result\":11,\"exception_contained\":true,\"string_guard_verified\":true,\"game_loaded\":false}\n";
     return 0;
 }
 int wmain(int argc, wchar_t** argv) {
@@ -407,9 +489,13 @@ int wmain(int argc, wchar_t** argv) {
         if (argc == 2 && std::wstring(argv[1]) == L"--self-test") return self_test();
         if (argc==3 && std::wstring(argv[1])==L"--frames") return frame_stream(argv[2],deadline);
         if (argc==3 && std::wstring(argv[1])==L"--flight-frames") return frame_stream(argv[2],deadline,true);
+        if(argc==9 && std::wstring(argv[1])==L"--sample-string") {
+            size_t end=0;auto rva=std::stoul(argv[5],&end,0);if(!rva || argv[5][end] || argv[5][0]==L'-' || argv[5][0]==L'+')throw std::runtime_error("Invalid string RVA.");
+            return string_sample(argv[2],ascii(argv[3]),ascii(argv[4]),rva,{string_input(argv[6]),string_input(argv[7]),string_input(argv[8])});
+        }
         const bool sample = argc == 7 && std::wstring(argv[1]) == L"--sample";
         if (!sample && !(argc == 5 && std::wstring(argv[1]) == L"--probe"))
-            throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --frames FSX_ROOT | --flight-frames FSX_ROOT | --self-test");
+            throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --sample-string FSX_ROOT LIBRARY GAUGE ELEMENT_RVA INPUT1 INPUT2 INPUT3 (f64:VALUE or u32:VALUE) | --frames FSX_ROOT | --flight-frames FSX_ROOT | --self-test");
         auto library = ascii(argv[3]); auto name = ascii(argv[4]);
         uint32_t selected_id = 0; double raw = 0.;
         if (sample) {

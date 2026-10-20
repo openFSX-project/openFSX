@@ -465,6 +465,27 @@ aircraft configuration and does not launch FSX.
 cargo run -p fsx-app --example xml-gauge-check -- FSX/Gauges/n_number_plaque.cab n_number_plaque.xml FSX/SimObjects/Airplanes/C172 0 G-BAFM
 ```
 
+## Native string element subset
+
+The x86, four-byte-packed ELEMENT_STRING record is 324 bytes. Authored token
+slots begin at 60/88/116, source callback pointers at 168/172/176, image extent
+at 192/196, COLORREFs at 208/212/216 and a 32-byte face name at 248. Weight,
+charset and DrawText flags occupy 280/284/288, maximum string length is u16 at
+292, selection-sequence pointer is at 300, font height at 308 and update callback
+at 312. Callbacks and the first sequence record are bounded within the PE image;
+the selection sequence is not traversed. Face names require a terminator and
+explicit encoding. Zero font height remains authored automatic sizing.
+
+The three MODULE_VAR values are unions. The separate native string probe
+requires f64 or u32 payload interpretation for every slot; it does not resolve
+token types, BCD units, source callbacks or live simulator state. Its guarded
+ASCII output and explicit lifecycle checks are described in the helper README.
+Successful text samples are not native font/GDI or instrument-parity validation.
+The [published gauge header](https://prepar3d.com/SDKv3/LearningCenter/simobjects/sample_code/gauges.html)
+and [C-gauge API reference](https://www.prepar3d.com/SDKv2/LearningCenter/simobjects/panels_and_gauges/programming_c_gauges.html)
+describe these structures and callbacks. Implementation/tests use independent
+declarations; no installed header, DLL, font or native sample source is committed.
+
 ## Reference NDJSON
 
 The separate x86 recorder keeps schema 1 for title/elapsed time and 12 control

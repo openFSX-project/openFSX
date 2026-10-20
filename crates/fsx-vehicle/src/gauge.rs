@@ -236,6 +236,71 @@ pub struct Element {
     pub children: Vec<u32>,
     pub needle: Option<Needle>,
     pub sprite: Option<Sprite>,
+    pub text: Option<NativeText>,
+}
+#[derive(Debug, Clone)]
+pub struct NativeText {
+    pub tokens: [u32; 3],
+    pub source_callbacks: [Option<u32>; 3],
+    pub update_callback_rva: Option<u32>,
+    /// Authored string rectangle, not measured font glyph metrics.
+    pub size: [u32; 2],
+    pub font_name: String,
+    pub font_weight: i32,
+    pub font_charset: u8,
+    pub font_height: i32,
+    pub draw_text_flags: u32,
+    pub max_length: u16,
+    /// COLORREF values remain in their original 0xBBGGRR representation.
+    pub colors: [u32; 3],
+    /// Only the first record is bounded; sequence traversal is unsupported.
+    pub selection_sequence_rva: Option<u32>,
+}
+
+fn native_text(pe: &Pe<'_>, rva: u32, windows_1252: bool) -> Result<NativeText> {
+    // x86 pack(4), independently derived offsets; runtime string/GDI handles
+    // and source values are not followed or interpreted from file bytes.
+    let b = pe.slice(rva, 324)?;
+    let name = &b[248..280];
+    let end = name
+        .iter()
+        .position(|&c| c == 0)
+        .ok_or("Unterminated native string font name")?;
+    let font_name = decode(&name[..end], windows_1252)?;
+    if font_name.chars().any(char::is_control) {
+        return Err("Control character in native string font name".into());
+    }
+    let size = [u32_at(b, 192)?, u32_at(b, 196)?];
+    let font_height = u32_at(b, 308)? as i32;
+    if size.iter().any(|&v| v > 65536) || font_height.unsigned_abs() > 65536 {
+        return Err("Native string layout exceeds bounds".into());
+    }
+    let selection_sequence_rva = match u32_at(b, 300)? {
+        0 => None,
+        pointer => {
+            let rva = pe.pointer_rva(pointer)?;
+            pe.slice(rva, 12)?;
+            Some(rva)
+        }
+    };
+    Ok(NativeText {
+        tokens: [u32_at(b, 60)?, u32_at(b, 88)?, u32_at(b, 116)?],
+        source_callbacks: [
+            callback_rva(pe, u32_at(b, 168)?)?,
+            callback_rva(pe, u32_at(b, 172)?)?,
+            callback_rva(pe, u32_at(b, 176)?)?,
+        ],
+        update_callback_rva: callback_rva(pe, u32_at(b, 312)?)?,
+        size,
+        font_name,
+        font_height,
+        font_weight: u32_at(b, 280)? as i32,
+        font_charset: b[284],
+        draw_text_flags: u32_at(b, 288)?,
+        max_length: u16_at(b, 292)?,
+        colors: [u32_at(b, 208)?, u32_at(b, 212)?, u32_at(b, 216)?],
+        selection_sequence_rva,
+    })
 }
 #[derive(Debug, Clone)]
 pub struct SpriteAxis {
@@ -444,7 +509,7 @@ fn pointer_list(pe: &Pe<'_>, mut rva: u32, limit: usize) -> Result<Vec<u32>> {
     Err("Unterminated or oversized gauge pointer list".into())
 }
 
-fn elements(pe: &Pe<'_>, roots: &[u32]) -> Result<Vec<Element>> {
+fn elements(pe: &Pe<'_>, roots: &[u32], windows_1252: bool) -> Result<Vec<Element>> {
     let mut output = Vec::new();
     let mut active = BTreeSet::new();
     let mut seen = BTreeSet::new();
@@ -493,6 +558,11 @@ fn elements(pe: &Pe<'_>, roots: &[u32]) -> Result<Vec<Element>> {
             },
             sprite: if u32_at(b, 0)? == 6 {
                 Some(sprite(pe, rva)?)
+            } else {
+                None
+            },
+            text: if u32_at(b, 0)? == 2 {
+                Some(native_text(pe, rva, windows_1252)?)
             } else {
                 None
             },
@@ -615,7 +685,8 @@ impl GaugeLibrary {
                     vec![pe.pointer_rva(root)?]
                 }
             };
-            let elements = elements(&pe, &roots).map_err(|e| format!("Gauge {name}: {e}"))?;
+            let elements =
+                elements(&pe, &roots, windows_1252).map_err(|e| format!("Gauge {name}: {e}"))?;
             total_elements += elements.len();
             total_needle_points += elements
                 .iter()
@@ -695,6 +766,80 @@ impl GaugeLibrary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_string_fields_callbacks_and_runtime_pointers_are_distinct() {
+        let mut b = fixture();
+        rword(&mut b, 0x1500, 2);
+        for (offset, value) in [
+            (60, 23),
+            (88, 617),
+            (116, 0),
+            (168, BASE + 0x1804),
+            (192, 64),
+            (196, 18),
+            (208, 0x123456),
+            (212, 0x234567),
+            (216, 0x345678),
+            (280, 400),
+            (288, 0x25),
+            (300, BASE + 0x1660),
+            (308, 0),
+            (312, BASE + 0x1800),
+            (180, u32::MAX),
+            (184, u32::MAX),
+            (188, u32::MAX),
+            (220, u32::MAX),
+        ] {
+            rword(&mut b, 0x1500 + offset, value);
+        }
+        let name = at(0x1500 + 248);
+        b[name..name + 15].copy_from_slice(b"Synthetic Face\0");
+        b[at(0x1500 + 284)] = 1;
+        put16(&mut b, at(0x1500 + 292), 13);
+        let library = GaugeLibrary::parse(b.clone(), false).unwrap();
+        let element = &library.gauges[0].elements[1];
+        let text = element.text.as_ref().unwrap();
+        assert!(element.needle.is_none() && element.sprite.is_none());
+        assert_eq!(text.tokens, [23, 617, 0]);
+        assert_eq!(text.source_callbacks, [Some(0x1804), None, None]);
+        assert_eq!(text.update_callback_rva, Some(0x1800));
+        assert_eq!(text.size, [64, 18]);
+        assert_eq!(text.font_name, "Synthetic Face");
+        assert_eq!(
+            (
+                text.font_weight,
+                text.font_charset,
+                text.font_height,
+                text.max_length,
+                text.draw_text_flags
+            ),
+            (400, 1, 0, 13, 0x25)
+        );
+        assert_eq!(text.colors, [0x123456, 0x234567, 0x345678]);
+        assert_eq!(text.selection_sequence_rva, Some(0x1660));
+        for (offset, value) in [
+            (168, u32::MAX),
+            (312, u32::MAX),
+            (300, u32::MAX),
+            (192, 65537),
+            (308, i32::MIN as u32),
+        ] {
+            let mut bad = b.clone();
+            rword(&mut bad, 0x1500 + offset, value);
+            assert!(GaugeLibrary::parse(bad, false).is_err(), "offset {offset}");
+        }
+        let mut unterminated = b.clone();
+        unterminated[name..name + 32].fill(b'X');
+        assert!(GaugeLibrary::parse(unterminated, false).is_err());
+        b[name] = 0xe9;
+        assert!(GaugeLibrary::parse(b.clone(), false).is_err());
+        assert!(GaugeLibrary::parse(b, true).unwrap().gauges[0].elements[1]
+            .text
+            .as_ref()
+            .unwrap()
+            .font_name
+            .starts_with('é'));
+    }
     const BASE: u32 = 0x400000;
     #[test]
     fn sprite_fields_and_callback_addresses_are_bounded() {

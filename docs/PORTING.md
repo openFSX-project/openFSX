@@ -5,6 +5,41 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 20 October 2026
 
+After `b60cad2`, the read-only PE decoder recognizes x86 ELEMENT_STRING
+metadata: three tokens/source callbacks, update callback, authored dimensions,
+font/weight/charset/height, text flags, maximum length, COLORREFs and a bounded
+selection-sequence pointer. Runtime string/GDI/source-value pointers are not
+followed. All five checked libraries decoded; 20 reported string entries include
+aliases. The C172 clock declares Quartz, automatic font height and eight chars.
+
+The x86 helper adds `--sample-string` with explicit f64/u32 union payloads,
+ModuleInit/Deinit, executable-pointer checks, source-callback rejection and a
+guarded output buffer sized to the authored maximum (1..256). Its synthetic
+self-test contains a deliberate overrun and detects a prefix overwrite; the
+build/CI self-test gate now requires the string guard result.
+
+`native-string-check` resolves the Nav-Comm 1 string from tokens [23,617,0], not
+a hardcoded RVA, and validates three native outputs from synthetic BCD words:
+118.25/120.50, 122.50/127.00 and 119.85/124.30. Metadata, type/value echoes,
+text, guards and lifecycle fields pass (`target/native-string-check-01/`).
+Numeric n-slot injection alone is incorrect for these BCD union fields; input
+interpretation is now mandatory rather than inferred. Radio state/band logic
+and native text rendering remain unimplemented.
+
+The isolated C172/C182 clock callbacks returned blank text; a secondary clock
+and transponder sample faulted inside the callback, contained by the helper.
+No operational clock or complete gauge lifecycle is claimed, and private gauge
+state/services were not fabricated to force a result. Next work should establish
+the required lifecycle and native font sizing before integrating these strings.
+
+146 all-feature Rust test executions pass, plus the enhanced x86 self-test and
+three installed string samples. The existing 121-frame native flight check with
+the XML plaque still passes pause/reset/view/ground and helper-close checks
+(`target/native-string-flight-regression-01/`). Original-FSX acquisition remains
+deferred; the broad 1:1 goal remains active.
+
+### Previous completed XML visibility stage
+
 After `93233bb`, translated XML text elements accept bounded read-only Visibility
 expressions. Decoding retains parent-before-child condition nodes and authored
 text/child drawing order. Rendering evaluates each condition once per state;

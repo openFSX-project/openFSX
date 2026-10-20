@@ -73,6 +73,11 @@ fn gauge_report(path: &Path, windows_1252: bool) -> Result<(), String> {
             kinds,
             bitmap_ids.len()
         );
+        for element in &gauge.elements {
+            if let Some(text) = &element.text {
+                println!("    string RVA {:#x} at {:?} | size {:?} | tokens {:?} | callback {:?} | font {:?} weight {} charset {} height {} | max {} flags {:#x}", element.rva,element.position,text.size,text.tokens,text.update_callback_rva,text.font_name,text.font_weight,text.font_charset,text.font_height,text.max_length,text.draw_text_flags);
+            }
+        }
     }
     println!("Element kinds: 0 static image, 1 needle, 2 string, 3 slider, 4 icon, 5 moving image, 6 sprite. Unknown IDs remain metadata.");
     for (kind, count) in library.resource_counts() {

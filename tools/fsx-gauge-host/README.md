@@ -58,6 +58,34 @@ raised structured exception. It validates the 32-bit ABI, exception reporting,
 input limits and JSON escaping without loading game files. Windows CI runs that
 self-test; installed-library checks run only against the user's local content.
 
+## Isolated native string samples
+
+```powershell
+./target/fsx-gauge-host.exe --sample-string ./FSX Bendix_king_radio.dll "Bendix-King Radio Nav-Comm 1" 0x5cc8 u32:0x1825 u32:0x2050 f64:0
+cargo run -p fsx-app --example native-string-check -- FSX target/fsx-gauge-host.exe target/native-string-check
+```
+
+The first command's RVA is specific to the inspected local DLL. The Rust checker
+resolves its current RVA from token metadata and requires a new output directory.
+Each input must explicitly choose f64 numeric bytes or a u32 union word; u32
+accepts decimal/0x hexadecimal. BCD words must not be written as floating-point
+numbers. These inputs bypass host token resolution and do not model radio state.
+
+Source native-string-probe identifies token IDs, input kinds/values, maximum
+length, output text and numeric callback return. String capacity is 1..256 plus
+NUL; the output ends at an inaccessible page, with a checked prefix. The caller
+restores the original output pointer before module deinitialization. Source
+callbacks, pointer replacement, non-ASCII output, oversized/unterminated text,
+faults and non-finite results fail. The buffer outlives native module teardown.
+The parent Rust checker also bounds output and enforces a ten-second timeout.
+
+Three installed Nav-Comm samples passed. The isolated clock was blank and
+secondary clock/transponder samples required unsupported state/services or
+faulted; they are not operational. No string rendering, GDI font autosizing,
+panel-service table or complete gauge lifecycle is implemented. The synthetic
+self-test verifies a string callback, page-guard fault and prefix-overwrite
+detection without loading installed content.
+
 ## Persistent frame mode
 
 `--frames FSX_ROOT` keeps the checked Cessna/Cessna172 libraries and five needle
