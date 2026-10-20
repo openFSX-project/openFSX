@@ -481,6 +481,14 @@ requires f64 or u32 payload interpretation for every slot; it does not resolve
 token types, BCD units, source callbacks or live simulator state. Its guarded
 ASCII output and explicit lifecycle checks are described in the helper README.
 Successful text samples are not native font/GDI or instrument-parity validation.
+The optional headless C172 clock profile calls the original GAUGE_CALLBACK
+(header, service_id, extra_data) using the x86 stdcall ABI. Header callback and
+user_data occupy offsets 84/88; the mutable prefix is checked through byte 92.
+CONNECT_TO_WINDOW (14) and DISCONNECT (15) receive zero extra_data in this
+specific inspected handler, which does not require a real panel window. The
+original callback owns its private allocation; the helper only restores the
+public user_data slot after disconnect. This does not provide the PANELS table,
+the install/update/draw routines or general window-connection semantics.
 The [published gauge header](https://prepar3d.com/SDKv3/LearningCenter/simobjects/sample_code/gauges.html)
 and [C-gauge API reference](https://www.prepar3d.com/SDKv2/LearningCenter/simobjects/panels_and_gauges/programming_c_gauges.html)
 describe these structures and callbacks. Implementation/tests use independent

@@ -5,6 +5,37 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 20 October 2026
 
+After `8b3922c`, the isolated C172 clock profile can deliver original gauge
+CONNECT_TO_WINDOW/DISCONNECT notifications. Local callback inspection showed
+that connect creates the gauge-private state used by the main time string;
+ModuleInit alone left that state absent. The helper invokes the original
+three-argument stdcall callback, with extra_data=0 for this checked headless
+profile. It does not create a panel window or fabricate the private structure.
+
+`--sample-string-connected` is limited to the C172 Clock [3,4,5] string and
+integer f64 hour/minute/second inputs. Native connect creates state; the string
+callback fills the guarded buffer; native disconnect runs before ModuleDeinit.
+The public user_data slot is restored to its captured initial zero after native
+disconnect, preventing a dangling slot in the shared template. Exceptional paths
+also attempt disconnect while the module and output buffer are alive.
+
+The Rust checker's `--clock` mode resolves the string RVA from metadata and
+validates 00:00:00 / 12:34:56 / 23:59:59, including numeric returns 0 / 45296 /
+86399. `target/native-clock-connected-02/` records these plus the unconnected
+blank baseline. Six invalid type/range/fractional inputs were rejected. The
+enhanced synthetic host self-test checks connect/disconnect argument passing
+and exception containment; its build gate requires notification verification.
+
+146 all-feature Rust test executions pass. Three Nav-Comm samples and the
+121-frame native flight/XML-plaque regression remain passing
+(`target/native-clock-radio-regression-01/`, `target/native-clock-flight-regression-01/`).
+This is still an isolated, default-mode clock sample: no panel-service table,
+install/update/draw lifecycle, timer buttons, simulated local-time service,
+font sizing/rendering or cockpit clock binding is implemented. Original-FSX
+acquisition remains deferred and the complete 1:1 goal remains active.
+
+### Previous completed native-string sampling stage
+
 After `b60cad2`, the read-only PE decoder recognizes x86 ELEMENT_STRING
 metadata: three tokens/source callbacks, update callback, authored dimensions,
 font/weight/charset/height, text flags, maximum length, COLORREFs and a bounded

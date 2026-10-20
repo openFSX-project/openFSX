@@ -12,9 +12,9 @@ use std::{
 
 fn run() -> Result<(), String> {
     let args: Vec<_> = env::args_os().skip(1).collect();
-    if args.len() != 3 {
+    if args.len() != 3 && !(args.len() == 4 && args[3] == "--clock") {
         return Err(
-            "Usage: native-string-check <FSX root> <x86 helper.exe> <new output directory>".into(),
+            "Usage: native-string-check <FSX root> <x86 helper.exe> <new output directory> [--clock]".into(),
         );
     }
     let root = PathBuf::from(&args[0])
@@ -24,40 +24,69 @@ fn run() -> Result<(), String> {
         .canonicalize()
         .map_err(|e| e.to_string())?;
     let output = PathBuf::from(&args[2]);
-    let library = GaugeLibrary::load(&root.join("Gauges/Bendix_king_radio.dll"), true)?;
-    let gauge = library.gauge("Bendix-King Radio Nav-Comm 1")?;
+    let connected = args.len() == 4;
+    let (library_name, gauge_name, tokens, maximum) = if connected {
+        ("Cessna172.dll", "Clock", [3, 4, 5], 8)
+    } else {
+        (
+            "Bendix_king_radio.dll",
+            "Bendix-King Radio Nav-Comm 1",
+            [23, 617, 0],
+            13,
+        )
+    };
+    let library = GaugeLibrary::load(&root.join("Gauges").join(library_name), true)?;
+    let gauge = library.gauge(gauge_name)?;
     let mut matching = gauge
         .elements
         .iter()
-        .filter(|e| e.text.as_ref().is_some_and(|t| t.tokens == [23, 617, 0]));
-    let element = matching.next().ok_or("No checked Nav-Comm string tokens")?;
+        .filter(|e| e.text.as_ref().is_some_and(|t| t.tokens == tokens));
+    let element = matching.next().ok_or("No checked native string tokens")?;
     if matching.next().is_some() {
-        return Err("Ambiguous Nav-Comm string binding".into());
+        return Err("Ambiguous native string binding".into());
     }
     let descriptor = element.text.as_ref().unwrap();
     if descriptor.source_callbacks.iter().any(Option::is_some)
         || descriptor.update_callback_rva.is_none()
-        || descriptor.max_length != 13
+        || descriptor.max_length != maximum
     {
         return Err("Unsupported installed string profile".into());
     }
     fs::create_dir(&output).map_err(|e| e.to_string())?;
     let mut rows = Vec::new();
-    for (first, second, expected) in [
-        (0x1825u32, 0x2050u32, "118.25 120.50"),
-        (0x2250, 0x2700, "122.50 127.00"),
-        (0x1985, 0x2430, "119.85 124.30"),
-    ] {
+    let cases = if connected {
+        [
+            (0u32, 0u32, 0u32, "00:00:00"),
+            (12, 34, 56, "12:34:56"),
+            (23, 59, 59, "23:59:59"),
+        ]
+    } else {
+        [
+            (0x1825, 0x2050, 0, "118.25 120.50"),
+            (0x2250, 0x2700, 0, "122.50 127.00"),
+            (0x1985, 0x2430, 0, "119.85 124.30"),
+        ]
+    };
+    let kinds = if connected {
+        ["f64", "f64", "f64"]
+    } else {
+        ["u32", "u32", "f64"]
+    };
+    for (first, second, third, expected) in cases {
         let mut command = Command::new(&helper);
         command
-            .arg("--sample-string")
+            .arg(if connected {
+                "--sample-string-connected"
+            } else {
+                "--sample-string"
+            })
             .arg(&root)
-            .arg("Bendix_king_radio.dll")
-            .arg("Bendix-King Radio Nav-Comm 1")
+            .arg(library_name)
+            .arg(gauge_name)
             .arg(format!("0x{:x}", element.rva))
-            .arg(format!("u32:{first}"))
-            .arg(format!("u32:{second}"))
-            .arg("f64:0")
+            .arg(format!("{}:{first}", kinds[0]))
+            .arg(format!("{}:{second}", kinds[1]))
+            .arg(format!("{}:{third}", kinds[2]))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         #[cfg(windows)]
@@ -104,12 +133,12 @@ fn run() -> Result<(), String> {
         if row["schema"] != 1
             || row["source"] != "native-string-probe"
             || row["pointer_bits"] != 32
-            || row["library"] != "Bendix_king_radio.dll"
+            || row["library"] != library_name
             || row["gauge"] != gauge.name
             || row["element_rva"] != element.rva
-            || row["tokens"] != json!([23, 617, 0])
-            || row["input_kinds"] != json!(["u32", "u32", "f64"])
-            || row["raw_inputs"] != json!([first, second, 0])
+            || row["tokens"] != json!(tokens)
+            || row["input_kinds"] != json!(kinds)
+            || row["raw_inputs"] != json!([first, second, third])
             || row["max_length"] != descriptor.max_length
             || row["text"] != expected
             || row["guarded_buffer"] != true
@@ -117,6 +146,12 @@ fn run() -> Result<(), String> {
             || row["module_deinit_called"] != true
             || row["panel_services"] != false
             || row["full_gauge_lifecycle"] != false
+            || row["gauge_connection_notifications"] != connected
+            || row["private_state_created_by_original"] != connected
+            || row["panel_window"] != false
+            || (connected
+                && row["callback_result"].as_f64()
+                    != Some((first * 3600 + second * 60 + third) as f64))
             || !row["callback_result"].as_f64().is_some_and(f64::is_finite)
         {
             return Err(format!("Native string metadata/echo/text mismatch: {row}"));
@@ -126,9 +161,9 @@ fn run() -> Result<(), String> {
     }
     let ndjson = rows.iter().map(|r| format!("{r}\n")).collect::<String>();
     fs::write(output.join("samples.ndjson"), ndjson).map_err(|e| e.to_string())?;
-    fs::write(output.join("report.json"),json!({"profile":"Nav-Comm 1 explicit synthetic BCD slots","samples":rows.len(),"element_rva":element.rva,"tokens":descriptor.tokens,
+    fs::write(output.join("report.json"),json!({"profile":if connected {"C172 Clock headless original connect/disconnect with synthetic local time"}else{"Nav-Comm 1 explicit synthetic BCD slots"},"samples":rows.len(),"element_rva":element.rva,"tokens":descriptor.tokens,
         "font_name":descriptor.font_name,"font_height":descriptor.font_height,"max_length":descriptor.max_length,
-        "fsx_parity_validated":false,"rendered":false,"operational_radio":false}).to_string()).map_err(|e|e.to_string())?;
+        "fsx_parity_validated":false,"rendered":false,"operational_radio":false,"operational_clock":false,"full_gauge_lifecycle":false}).to_string()).map_err(|e|e.to_string())?;
     Ok(())
 }
 fn main() -> ExitCode {

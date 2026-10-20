@@ -28,6 +28,7 @@ namespace fs = std::filesystem;
 static_assert(sizeof(void*) == 4, "Native FSX gauges require the x86 helper.");
 using Update = double(__stdcall*)(void*);
 using ModuleCall = void(__stdcall*)();
+using GaugeCall = void(__stdcall*)(void*,int32_t,uint32_t);
 
 // The public x86 MODULE_VAR layout, independently declared from ABI facts.
 #pragma pack(push, 4)
@@ -48,6 +49,10 @@ static bool invoke(Update fn, void* element, double* result, DWORD* exception) {
 static bool invoke_module(ModuleCall fn, DWORD* exception) {
     __try { fn(); return true; }
     __except (EXCEPTION_EXECUTE_HANDLER) { *exception = GetExceptionCode(); return false; }
+}
+static bool invoke_gauge(GaugeCall fn,void* header,int32_t service,uint32_t extra,DWORD* exception) {
+    __try {fn(header,service,extra);return true;}
+    __except(EXCEPTION_EXECUTE_HANDLER){*exception=GetExceptionCode();return false;}
 }
 static std::string hex(uintptr_t value) {
     std::ostringstream s; s << "0x" << std::hex << value; return s.str();
@@ -308,13 +313,37 @@ public:
     }
 };
 struct StringInput { double value;uint64_t payload;const char* kind; };
+class GaugeConnection {
+    const Module& module;uintptr_t header;GaugeCall callback=nullptr;uint32_t original=0;bool active=false;
+public:
+    GaugeConnection(const Module& module_,uintptr_t header_):module(module_),header(header_){}
+    GaugeConnection(const GaugeConnection&)=delete;
+    GaugeConnection& operator=(const GaugeConnection&)=delete;
+    void connect() {
+        module.check(header,92,true);original=module.word(header+88);
+        if(original)throw std::runtime_error("Connected sample requires an unconnected gauge header.");
+        auto address=module.word(header+84);module.check(address,1,false,true);callback=reinterpret_cast<GaugeCall>(address);
+        active=true;DWORD exception=0;
+        if(!invoke_gauge(callback,reinterpret_cast<void*>(header),14,0,&exception))throw std::runtime_error("Headless gauge connect notification failed: "+hex(exception));
+        if(!module.word(header+88))throw std::runtime_error("Original connect callback did not create gauge-private state.");
+    }
+    void close() {
+        if(!active)return;active=false;DWORD exception=0;
+        const bool success=invoke_gauge(callback,reinterpret_cast<void*>(header),15,0,&exception);
+        // Some native disconnect callbacks free but leave user_data unchanged.
+        // Restore the public header slot; never inspect/fabricate the private object.
+        std::memcpy(reinterpret_cast<void*>(header+88),&original,4);
+        if(!success)throw std::runtime_error("Headless gauge disconnect notification failed: "+hex(exception));
+    }
+    ~GaugeConnection(){try{close();}catch(const std::exception& e){std::cerr<<e.what()<<'\n';}}
+};
 static StringInput string_input(const wchar_t* raw) {
     std::wstring text(raw);
     if(text.rfind(L"f64:",0)==0){auto value=number(text.c_str()+4);uint64_t payload=0;std::memcpy(&payload,&value,8);return {value,payload,"f64"};}
     if(text.rfind(L"u32:",0)==0){auto value_text=text.substr(4);if(value_text.empty() || value_text[0]==L'-' || value_text[0]==L'+')throw std::runtime_error("Invalid unsigned string slot.");size_t end=0;int base=value_text.rfind(L"0x",0)==0 || value_text.rfind(L"0X",0)==0?16:10;auto value=std::stoull(value_text,&end,base);if(end!=value_text.size() || value>UINT32_MAX)throw std::runtime_error("String integer slot exceeds u32.");return {static_cast<double>(value),value,"u32"};}
     throw std::runtime_error("String inputs require explicit f64:VALUE or u32:VALUE union interpretation.");
 }
-static int string_sample(const fs::path& root,const std::string& library,const std::string& name,uint32_t rva,const std::array<StringInput,3>& inputs) {
+static int string_sample(const fs::path& root,const std::string& library,const std::string& name,uint32_t rva,const std::array<StringInput,3>& inputs,bool connected=false) {
     // Buffer precedes module lifetime so native deinitialization cannot outlive it.
     GuardedTextBuffer buffer(256);
     InitializedModule owner(library_path(root,library));auto& module=owner.module;
@@ -329,6 +358,14 @@ static int string_sample(const fs::path& root,const std::string& library,const s
     for(size_t i=0;i<3;++i)if(module.word(selected+168+i*4))throw std::runtime_error("String source callbacks are unsupported by explicit-input sampling.");
     std::array<uint32_t,3> tokens{};
     for(size_t i=0;i<3;++i){tokens[i]=module.word(selected+60+i*28);module.check(selected+72+i*28,16,true);std::memcpy(reinterpret_cast<void*>(selected+72+i*28),&inputs[i].payload,8);std::memcpy(reinterpret_cast<void*>(selected+80+i*28),&inputs[i].payload,8);}
+    GaugeConnection connection(module,header);
+    if(connected){
+        if(!equal_ascii(library,"Cessna172.dll") || !equal_ascii(name,"Clock") || tokens!=std::array<uint32_t,3>{3,4,5} || maximum!=8)
+            throw std::runtime_error("Headless connect is limited to the checked C172 clock/time string.");
+        for(size_t i=0;i<3;++i)if(std::string(inputs[i].kind)!="f64" || inputs[i].value<0. || inputs[i].value>=(i==0?24.:60.) || std::floor(inputs[i].value)!=inputs[i].value)
+            throw std::runtime_error("Connected clock inputs require integer f64 hours 0..23 and minutes/seconds 0..59.");
+        connection.connect();
+    }
     auto original=module.word(selected+184);auto pointer=buffer.data;std::memcpy(reinterpret_cast<void*>(selected+184),&pointer,4);
     double result=0.;DWORD exception=0;
     const bool success=invoke(reinterpret_cast<Update>(callback),reinterpret_cast<void*>(selected),&result,&exception);
@@ -336,8 +373,10 @@ static int string_sample(const fs::path& root,const std::string& library,const s
     std::memcpy(reinterpret_cast<void*>(selected+184),&original,4);
     if(!success)throw std::runtime_error("Native string callback failed or needs unsupported services: "+hex(exception));
     if(!pointer_unchanged || !std::isfinite(result))throw std::runtime_error("Native string callback changed its buffer or returned a non-finite value.");
-    auto text=buffer.value();owner.close();
-    std::cout<<std::setprecision(17)<<"{\"schema\":1,\"source\":\"native-string-probe\",\"pointer_bits\":32,\"library\":"<<json(library)<<",\"gauge\":"<<json(name)<<",\"element_rva\":"<<rva<<",\"tokens\":["<<tokens[0]<<','<<tokens[1]<<','<<tokens[2]<<"],\"raw_inputs\":["<<inputs[0].value<<','<<inputs[1].value<<','<<inputs[2].value<<"],\"input_kinds\":["<<json(inputs[0].kind)<<','<<json(inputs[1].kind)<<','<<json(inputs[2].kind)<<"],\"max_length\":"<<maximum<<",\"callback_result\":"<<result<<",\"text\":"<<json(text)<<",\"module_init_called\":true,\"module_deinit_called\":true,\"guarded_buffer\":true,\"panel_services\":false,\"full_gauge_lifecycle\":false}\n";
+    auto text=buffer.value();connection.close();
+    if(connected && module.word(header+88)!=0)throw std::runtime_error("Gauge user_data was not restored after disconnect.");
+    owner.close();
+    std::cout<<std::setprecision(17)<<"{\"schema\":1,\"source\":\"native-string-probe\",\"pointer_bits\":32,\"library\":"<<json(library)<<",\"gauge\":"<<json(name)<<",\"element_rva\":"<<rva<<",\"tokens\":["<<tokens[0]<<','<<tokens[1]<<','<<tokens[2]<<"],\"raw_inputs\":["<<inputs[0].value<<','<<inputs[1].value<<','<<inputs[2].value<<"],\"input_kinds\":["<<json(inputs[0].kind)<<','<<json(inputs[1].kind)<<','<<json(inputs[2].kind)<<"],\"max_length\":"<<maximum<<",\"callback_result\":"<<result<<",\"text\":"<<json(text)<<",\"module_init_called\":true,\"module_deinit_called\":true,\"guarded_buffer\":true,\"gauge_connection_notifications\":"<<(connected?"true":"false")<<",\"private_state_created_by_original\":"<<(connected?"true":"false")<<",\"panel_window\":false,\"panel_services\":false,\"full_gauge_lifecycle\":false}\n";
     return 0;
 }
 struct Binding {
@@ -449,6 +488,10 @@ static double __stdcall synthetic_string_underflow(void* element) {
     char* output=nullptr;std::memcpy(&output,static_cast<unsigned char*>(element)+184,4);
     output[-1]='X';return 0.;
 }
+static void __stdcall synthetic_gauge_notification(void* state,int32_t service,uint32_t extra) {
+    auto values=static_cast<uint32_t*>(state);values[0]=static_cast<uint32_t>(service)+extra;values[1]=static_cast<uint32_t>(service);++values[2];
+}
+static void __stdcall synthetic_gauge_notification_fault(void*,int32_t,uint32_t) {RaiseException(0xe0420002,0,0,nullptr);}
 static int self_test() {
     double input = 4., result = 0.; DWORD exception = 0;
     if (!invoke(synthetic, &input, &result, &exception) || result != 11.) throw std::runtime_error("Synthetic x86 stdcall result failed.");
@@ -459,6 +502,10 @@ static int self_test() {
     if(invoke(synthetic_string_overflow,text_element.data(),&result,&exception)||exception!=EXCEPTION_ACCESS_VIOLATION)throw std::runtime_error("String output guard did not contain an overflow.");
     if(!invoke(synthetic_string_underflow,text_element.data(),&result,&exception))throw std::runtime_error("Synthetic string prefix test failed.");
     bool underrun=false;try{text.value();}catch(...){underrun=true;}if(!underrun)throw std::runtime_error("String output prefix overwrite was not detected.");
+    std::array<uint32_t,3> gauge_state{};
+    if(!invoke_gauge(synthetic_gauge_notification,gauge_state.data(),14,2,&exception)||gauge_state!=std::array<uint32_t,3>{16,14,1})throw std::runtime_error("Gauge connect callback ABI failed.");
+    if(!invoke_gauge(synthetic_gauge_notification,gauge_state.data(),15,0,&exception)||gauge_state!=std::array<uint32_t,3>{15,15,2})throw std::runtime_error("Gauge disconnect callback ABI failed.");
+    if(invoke_gauge(synthetic_gauge_notification_fault,gauge_state.data(),14,0,&exception)||exception!=0xe0420002)throw std::runtime_error("Gauge notification exception containment failed.");
     if(string_input(L"u32:0x1825").payload!=0x1825 || string_input(L"f64:2.5").value!=2.5)throw std::runtime_error("String union interpretation failed.");
     for(const wchar_t* bad:{L"1",L"u32:-1",L"u32:4294967296",L"f64:NaN"}){bool rejected=false;try{string_input(bad);}catch(...){rejected=true;}if(!rejected)throw std::runtime_error("Invalid string union input accepted.");}
     if (json("a\\b\"c") != "\"a\\\\b\\\"c\"" || number(L"-2.5") != -2.5) throw std::runtime_error("Protocol scalar/escaping check failed.");
@@ -478,7 +525,7 @@ static int self_test() {
         bool rejected=false;try {parse_frame(bad);} catch (...) {rejected=true;}
         if (!rejected) throw std::runtime_error("Invalid frame input accepted.");
     }
-    std::cout << "{\"schema\":1,\"source\":\"synthetic\",\"pointer_bits\":32,\"stdcall_result\":11,\"exception_contained\":true,\"string_guard_verified\":true,\"game_loaded\":false}\n";
+    std::cout << "{\"schema\":1,\"source\":\"synthetic\",\"pointer_bits\":32,\"stdcall_result\":11,\"exception_contained\":true,\"string_guard_verified\":true,\"gauge_notifications_verified\":true,\"game_loaded\":false}\n";
     return 0;
 }
 int wmain(int argc, wchar_t** argv) {
@@ -489,13 +536,13 @@ int wmain(int argc, wchar_t** argv) {
         if (argc == 2 && std::wstring(argv[1]) == L"--self-test") return self_test();
         if (argc==3 && std::wstring(argv[1])==L"--frames") return frame_stream(argv[2],deadline);
         if (argc==3 && std::wstring(argv[1])==L"--flight-frames") return frame_stream(argv[2],deadline,true);
-        if(argc==9 && std::wstring(argv[1])==L"--sample-string") {
+        if(argc==9 && (std::wstring(argv[1])==L"--sample-string" || std::wstring(argv[1])==L"--sample-string-connected")) {
             size_t end=0;auto rva=std::stoul(argv[5],&end,0);if(!rva || argv[5][end] || argv[5][0]==L'-' || argv[5][0]==L'+')throw std::runtime_error("Invalid string RVA.");
-            return string_sample(argv[2],ascii(argv[3]),ascii(argv[4]),rva,{string_input(argv[6]),string_input(argv[7]),string_input(argv[8])});
+            return string_sample(argv[2],ascii(argv[3]),ascii(argv[4]),rva,{string_input(argv[6]),string_input(argv[7]),string_input(argv[8])},std::wstring(argv[1])==L"--sample-string-connected");
         }
         const bool sample = argc == 7 && std::wstring(argv[1]) == L"--sample";
         if (!sample && !(argc == 5 && std::wstring(argv[1]) == L"--probe"))
-            throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --sample-string FSX_ROOT LIBRARY GAUGE ELEMENT_RVA INPUT1 INPUT2 INPUT3 (f64:VALUE or u32:VALUE) | --frames FSX_ROOT | --flight-frames FSX_ROOT | --self-test");
+            throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --sample-string[-connected] FSX_ROOT LIBRARY GAUGE ELEMENT_RVA INPUT1 INPUT2 INPUT3 (f64:VALUE or u32:VALUE) | --frames FSX_ROOT | --flight-frames FSX_ROOT | --self-test");
         auto library = ascii(argv[3]); auto name = ascii(argv[4]);
         uint32_t selected_id = 0; double raw = 0.;
         if (sample) {

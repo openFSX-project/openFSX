@@ -79,12 +79,37 @@ callbacks, pointer replacement, non-ASCII output, oversized/unterminated text,
 faults and non-finite results fail. The buffer outlives native module teardown.
 The parent Rust checker also bounds output and enforces a ten-second timeout.
 
-Three installed Nav-Comm samples passed. The isolated clock was blank and
+Three installed Nav-Comm samples passed. Without connection notifications the isolated clock was blank and
 secondary clock/transponder samples required unsupported state/services or
 faulted; they are not operational. No string rendering, GDI font autosizing,
 panel-service table or complete gauge lifecycle is implemented. The synthetic
 self-test verifies a string callback, page-guard fault and prefix-overwrite
 detection without loading installed content.
+
+## Headless C172 clock connection notifications
+
+```powershell
+cargo run -p fsx-app --example native-string-check -- FSX target/fsx-gauge-host.exe target/native-clock-check --clock
+```
+
+This opt-in uses `--sample-string-connected`, resolves the main Clock string
+from tokens [3,4,5], and delivers original CONNECT_TO_WINDOW (14) / DISCONNECT
+(15) gauge callbacks with extra_data zero. Only the inspected Cessna172.dll Clock
+time-string profile is allowed. The callback creates/frees its own private state;
+the helper never manufactures its internal layout. It restores the public
+user_data header slot to the captured initial zero after native disconnect.
+No actual PANEL_WND or OS window exists, and panel_services/full_gauge_lifecycle
+remain false. The notification metadata is explicit in each JSON sample.
+
+Clock inputs must use f64 integer hours 0..23 and minutes/seconds 0..59. Samples
+at midnight, 12:34:56 and 23:59:59 produced the matching original strings and
+0/45296/86399 numeric results. The unconnected baseline remains blank. Six
+invalid range/type/fraction cases are rejected. The native synthetic self-test
+also verifies the three-argument gauge callback ABI and fault containment.
+
+This does not implement installation, update/draw routines, service imports,
+multiple instances, timer controls, font sizing or flight-mode clock updates.
+Other connection handlers may require a real panel context and remain unsupported.
 
 ## Persistent frame mode
 
