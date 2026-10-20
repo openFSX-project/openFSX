@@ -10,5 +10,7 @@ fsx-model.workspace = true
 fsx-texture.workspace = true
 fsx-sim.workspace = true
 fsx-vehicle.workspace = true
+fsx-script.workspace = true
+fontdue = { version = "=0.9.4", default-features = false, features = ["std"] }
 wgpu.workspace = true
 winit.workspace = true

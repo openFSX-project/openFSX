@@ -393,6 +393,7 @@ fn run() -> Result<(), String> {
         println!("Pose inspector: repeat --pose-var NAME#units#value (XAPS/read-only XAPC; no flight override)");
         println!("Flight views: --cockpit starts inside; F9 virtual cockpit / recenter, F11 exterior; cockpit drag looks around, wheel changes FOV.");
         println!("Experimental Windows C172 instruments: --native-gauges [--gauge-host path/to/fsx-gauge-host.exe]. Five needles plus native attitude/heading sprites, ideal ISA air data and ideal gyros; no RPM, full panel services or needle lag.");
+        println!("Optional daylight XML registration plaque: --xml-gauge-font path/to/font.ttf with --native-gauges. Explicit font mapping and pixels-per-em metrics; FSX default font/rasterization parity unverified.");
         return Ok(());
     }
     let (mut lod, mut snapshot) = (None, None);
@@ -402,6 +403,7 @@ fn run() -> Result<(), String> {
     let mut cockpit = false;
     let mut native_gauges_enabled = false;
     let mut gauge_host = None;
+    let mut xml_gauge_font = None;
     let mut menu = false;
     let mut debug_hud = false;
     let mut animation = None;
@@ -415,6 +417,11 @@ fn run() -> Result<(), String> {
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--native-gauges") => native_gauges_enabled = true,
+            Some("--xml-gauge-font") => {
+                xml_gauge_font = Some(PathBuf::from(
+                    args.next().ok_or("Expected explicit XML gauge font path")?,
+                ))
+            }
             Some("--gauge-host") => {
                 gauge_host = Some(PathBuf::from(
                     args.next().ok_or("Expected native gauge helper path")?,
@@ -545,6 +552,7 @@ fn run() -> Result<(), String> {
         if fly
             || native_gauges_enabled
             || gauge_host.is_some()
+            || xml_gauge_font.is_some()
             || cockpit
             || ground
             || snapshot.is_some()
@@ -575,8 +583,9 @@ fn run() -> Result<(), String> {
     }
     if (native_gauges_enabled && (!fly || !cfg!(windows) || no_textures))
         || (gauge_host.is_some() && !native_gauges_enabled)
+        || (xml_gauge_font.is_some() && !native_gauges_enabled)
     {
-        return Err("--native-gauges requires Windows --fly with textures; --gauge-host requires --native-gauges".into());
+        return Err("--native-gauges requires Windows --fly with textures; --gauge-host and --xml-gauge-font require --native-gauges".into());
     }
     let aircraft = if fly {
         Some(Aircraft::load(&path, variant, windows_1252)?)
@@ -811,11 +820,19 @@ fn run() -> Result<(), String> {
                     .join("fsx-gauge-host.exe")
             }
         };
-        Some(flight_gauges::FlightGauges::new(
-            root,
-            &aircraft.panel,
-            &helper,
-        )?)
+        let gauges = flight_gauges::FlightGauges::new(root, &aircraft.panel, &helper)?;
+        Some(if let Some(font) = &xml_gauge_font {
+            gauges.with_day_xml_plaque(
+                root,
+                font,
+                aircraft
+                    .registration
+                    .as_deref()
+                    .ok_or("XML plaque requires authored aircraft atc_id")?,
+            )?
+        } else {
+            gauges
+        })
     } else {
         None
     };

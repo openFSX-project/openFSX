@@ -3,7 +3,38 @@
 The target remains FSX 1:1 across interface, flight behavior, content and APIs.
 This is a long-term acceptance target; no subsystem claims complete parity.
 
-## Current stage — 19 October 2026
+## Current stage — 20 October 2026
+
+After `139f1bf`, the C172 XML registration plaque can be rasterized and composed
+into its authored VC placement. The vehicle layer accepts a checked static
+background/translated GaugeText subset and rejects unknown visual properties.
+The renderer uses a caller-selected local font, bounded single-line ASCII,
+COLORREF colors, alignment, glyph coverage, clipping and straight-alpha blending.
+Neither original fonts nor artwork are added to the repository.
+
+The viewer's opt-in `--xml-gauge-font <font.ttf>` requires `--native-gauges` and
+adds the authored variant registration to the current daylight flight profile.
+The installed XML omits FontFace: the caller explicitly supplies that mapping.
+FontHeight is interpreted as pixels per em; the original FSX default face,
+GDI metrics/filtering and rasterization parity remain unverified. Panel lights,
+night-background selection, general text formatting and interaction are not
+implemented by this option. Original-FSX acquisition remains deferred.
+
+`xml-text-render-check` rendered four registration/color cases from the installed
+XML using the explicitly selected Windows Arial file. Variant 0's alternate
+color changed 276 cockpit pixels within (423,200)..(466,209); both variants and
+their 89x25 gauge images were rendered. Local images were inspected. Reports and
+ignored images are under `target/xml-text-render-02/` (initial inspection also
+under `target/xml-text-render-01/`). This is a synthetic color-state comparison,
+using the authored daytime background in both states, not a night-lighting model.
+
+The actual viewer CLI snapshot passed with the new flag. The 121-frame native
+flight regression with the XML plaque passed ten paused reuses, reset/helper
+restart, view round trips and ground checks; reset/view pixels stayed identical
+(`target/xml-text-flight-02/`). 134 all-feature workspace test executions pass,
+including XML property rejection, color order, alpha and placement clipping.
+
+## Previous stage — 19 October 2026
 
 After `cb787c4`, GaugeString now evaluates bounded literal/string output,
 read-only A:/P: conditions, nested if/else/end and default/alternate color spans.
@@ -19,7 +50,7 @@ The interpreter never reparses returned registration text as executable markup.
 130 workspace test executions with all features pass, including four new
 synthetic string tests and expanded variant-selection/bounds checks.
 
-The plaque is still omitted from flight rendering. The next stage needs typed
+At that checkpoint the plaque was still omitted from flight rendering. The next stage needed typed
 GaugeText visual properties, an explicit font source/default-font decision,
 text rasterization and VC placement with day/night/registration image checks.
 No font metrics or real-FSX text-rasterization parity is established by the
@@ -96,10 +127,10 @@ all GPU startup paths have been established.
 
 ## Next acceptance work
 
-1. Continue the plaque from CAB/ACE structural decoding to bounded GaugeString
-   evaluation, configured ATC ID, font selection and actual VC-texture rendering.
-   Verify synthetic day/night/registration cases and preserve the native gauges.
-   XML loading alone must not remove the unsupported-rendering diagnostic.
+1. Establish the FSX text/default-font contract and validate pixels when reference
+   acquisition resumes. Add actual time-of-day/panel-light state and authored
+   night-bitmap selection before calling this general day/night XML support.
+   Extend strings beyond the current single-line ASCII/conditional subset.
 2. When the user resumes original-FSX acquisition, verify schema 2 against a
    loaded C172 flight and compare indications/cockpit images with exact
    weather/loading/realism settings. Acquisition is currently deferred.

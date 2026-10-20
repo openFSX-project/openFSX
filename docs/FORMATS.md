@@ -334,9 +334,25 @@ attributes, text and unknown nodes, resolves predefined/numeric entities and
 requires an AceXML document with one SimGauge.Gauge. DTDs, external entities,
 processing instructions and unsupported encodings fail. Image Name references
 resolve within the XML member's directory; ArtDirectory never opens a path on
-the host. Structural decoding does not interpret typed visual elements, select
-night bitmaps or render fonts. The separate script layer provides the bounded
-GaugeString subset below; it does not make decoded visual elements functional.
+the host. Structural decoding alone does not make visual elements functional.
+The typed text-gauge reader separately accepts a static background plus
+translated GaugeText, dimensions, optional FontFace, FontHeight, alignment,
+transparent text and default/alternate COLORREF colors (0xBBGGRR). Unsupported
+visual properties and duplicate scalar properties fail explicitly. A small
+named-color subset and hexadecimal values are accepted. Root translation,
+rotation, bold/weight, alternate fonts, opaque text boxes and scripted visual
+properties are not applied.
+
+The renderer requires an explicit local font file (bounded to 16 MiB), validates
+an authored FontFace against the selected full face name, and reports when that
+file substitutes for an absent FontFace. It bounds glyph counts/metrics and
+uses single-line ASCII, fontdue coverage and pixels-per-em FontHeight. Text clips
+to its authored rectangle; composed RGBA gauges scale/clip into panel coordinates
+using straight-alpha blending. Fonts and installed images remain external.
+Default FSX font selection, complex shaping, GDI height/kerning/rasterization
+and night-art selection remain unverified or unsupported. See the
+[fontdue metrics reference](https://docs.rs/fontdue/0.9.4/fontdue/struct.Font.html)
+and the viewer's explicit-font inspection commands.
 
 ```powershell
 cargo run -- inspect-cabinet "./FSX/Gauges/n_number_plaque.cab"

@@ -47,5 +47,9 @@ name = "reference-gauge-replay"
 required-features = ["viewer"]
 test = true
 
+[[example]]
+name = "xml-text-render-check"
+required-features = ["viewer"]
+
 [dev-dependencies]
 fsx-vehicle = { workspace = true, features = ["test-support"] }

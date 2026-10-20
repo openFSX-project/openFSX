@@ -423,6 +423,24 @@ Windows flight mode can opt into the five checked native needle bindings:
 cargo run --locked -p fsx-app --features viewer --bin openfsx-viewer -- ./FSX/SimObjects/Airplanes/C172 --fly --cockpit --native-gauges --windows-1252
 ```
 
+Add `--xml-gauge-font C:/Windows/Fonts/arial.ttf` to draw the XML registration
+plaque using that explicitly selected installed font. No font is bundled or
+silently chosen for the XML's missing FontFace. This option uses authored atc_id,
+the current daylight environment and panel-light value false. FontHeight uses
+pixels per em; FSX default-font/GDI metrics and filtering remain unverified.
+The normal native profile keeps its XML omission unless a font is supplied.
+
+```powershell
+cargo run -p fsx-app --features viewer --example xml-text-render-check -- FSX target/xml-text-check C:/Windows/Fonts/arial.ttf
+cargo run -p fsx-app --features viewer --example native-gauge-flight-check -- FSX target/xml-flight-check target/fsx-gauge-host.exe C:/Windows/Fonts/arial.ttf
+```
+
+Both output directories must be new. The first example checks two authored
+registrations and two synthetic text-color conditions through GPU snapshots;
+both use the authored day background and do not simulate cockpit night lighting.
+The second checks XML persistence with live native needles/sprites, pause/reset,
+view changes and helper closure. Neither launches original FSX.
+
 The helper defaults to `fsx-gauge-host.exe` beside the viewer or in its parent
 build directory. Use `--gauge-host PATH` to select it explicitly. This option
 requires Windows, flight mode, textures and the checked C172 VC placements.
@@ -486,7 +504,7 @@ it left, and heading 90 places E under the top index. Local source art is 84/93
 pixels wide; openFSX samples those bitmaps directly, without a 256-pixel runtime
 texture conversion. FSX filtering and subpixel placement remain unverified.
 
-RPM, other moving faces, digital text, XML gauges, needle lag, interaction and
+RPM, other moving faces, broader digital/XML gauges, needle lag, interaction and
 the full PANELS/gauge lifecycle remain unsupported.
 Static root artwork can display fixed or empty regions for those instruments;
 it must not be treated as operational telemetry. Native DLL code remains in

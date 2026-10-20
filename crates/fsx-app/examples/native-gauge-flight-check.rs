@@ -24,7 +24,7 @@ fn ensure(condition: bool, message: &str) -> Result<(), String> {
 fn run() -> Result<(), String> {
     let mut args = std::env::args_os().skip(1);
     let root = PathBuf::from(args.next().ok_or(
-        "Usage: native-gauge-flight-check <FSX root> <new output directory> [x86 helper]",
+        "Usage: native-gauge-flight-check <FSX root> <new output directory> [x86 helper] [explicit XML font.ttf]",
     )?)
     .canonicalize()
     .map_err(|e| e.to_string())?;
@@ -32,6 +32,7 @@ fn run() -> Result<(), String> {
     let helper = args.next().map(PathBuf::from).unwrap_or_else(|| {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/fsx-gauge-host.exe")
     });
+    let xml_font = args.next().map(PathBuf::from);
     ensure(args.next().is_none(), "Unexpected argument")?;
     let aircraft = Aircraft::load(&root.join("SimObjects/Airplanes/C172"), 0, true)?;
     let interior = aircraft
@@ -44,6 +45,16 @@ fn run() -> Result<(), String> {
     let mut current = flight_view::Visual::load(interior, Some(&aircraft.texture))?;
     let mut alternate = flight_view::Visual::load(&aircraft.model, Some(&aircraft.texture))?;
     let mut gauges = flight_gauges::FlightGauges::new(&root, &aircraft.panel, &helper)?;
+    if let Some(font) = &xml_font {
+        gauges = gauges.with_day_xml_plaque(
+            &root,
+            font,
+            aircraft
+                .registration
+                .as_deref()
+                .ok_or("Missing authored registration")?,
+        )?;
+    }
     let first_pid = gauges.pid();
     let first = gauges.update(&flight.simulation)?;
     ensure(
@@ -213,6 +224,16 @@ fn run() -> Result<(), String> {
     // Ground air data must also work with the actual loaded contact geometry.
     let ground = desktop_flight::FlightSession::on_ground(aircraft.parameters)?;
     let mut ground_gauges = flight_gauges::FlightGauges::new(&root, &aircraft.panel, &helper)?;
+    if let Some(font) = &xml_font {
+        ground_gauges = ground_gauges.with_day_xml_plaque(
+            &root,
+            font,
+            aircraft
+                .registration
+                .as_deref()
+                .ok_or("Missing authored registration")?,
+        )?;
+    }
     let ground_frame = ground_gauges.update(&ground.simulation)?;
     let ground_airspeed =
         fsx_sim::air_data::AirData::from_telemetry(ground.simulation.telemetry()?)?.native_inputs()
@@ -225,6 +246,7 @@ fn run() -> Result<(), String> {
     let report = serde_json::json!({"schema":1,"source":"openfsx-native-gauge-flight-check",
         "forward_frames":121,"paused_reuses":10,"changed_rgb_bytes":changed_bytes,
         "flight_driven_sprites":3,
+        "xml_day_plaque":xml_font.is_some(),"xml_font_path":xml_font,"registration":aircraft.registration,
         "reset_restarted_helper":true,"reset_pixels_identical":true,"view_pixels_identical":true,
         "ground_airspeed_knots":ground_airspeed,"full_panel_services":false,"fsx_parity_validated":false});
     std::fs::write(output.join("report.json"), report.to_string()).map_err(|e| e.to_string())?;

@@ -20,7 +20,7 @@ There are no placeholder crates for unimplemented scenery, gauges or APIs.
 | fsx-texture | DDS top-mip and BI_RGB bitmap decoding, texture.cfg fallback lookup | None |
 | fsx-vehicle | CFG/AIR data, static loading, contacts, panel placements, native gauge metadata and CAB/ACE XML documents | fsx-cfg, fsx-geometry |
 | fsx-sim | 6DOF integration, aerodynamics and wheel contact forces | fsx-vehicle, fsx-geometry |
-| fsx-render | wgpu resources, materials, draw passes, debugging overlay and readback | model, texture, geometry, vehicle, sim |
+| fsx-render | wgpu resources, materials, draw passes, XML text rasterization, debugging overlay and readback | model, texture, geometry, vehicle, sim, script |
 | fsx-ui | Windows WebView2 menu host, native 3D preview and bounded installation asset access | fsx-cfg, fsx-model, fsx-vehicle, fsx-render |
 | fsx-app | Native event loop, keyboard flight adapter and view orchestration | content, sim, render, UI |
 | tools/fsx-check | Headless openfsx CLI and repeatable local content/flight checks | cfg, model, vehicle, sim |

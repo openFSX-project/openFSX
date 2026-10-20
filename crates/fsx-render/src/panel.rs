@@ -599,6 +599,37 @@ fn rotate(
 
 // Nearest-neighbor rectangle inspection. Coordinates describe pixel edges;
 // destination centers select source pixels. Clipping does not stretch the source.
+/// Compose an explicitly rendered XML gauge in its authored CFG rectangle.
+/// Missing placement dimensions use the intrinsic XML image dimensions.
+pub fn paint_xml_image(
+    preview: &mut Preview,
+    panel: &Panel,
+    placement: &fsx_vehicle::panel::Gauge,
+    source: &Image,
+) -> Result<(), String> {
+    if !matches!(panel.kind, Kind::VirtualCockpit { .. }) || placement.parameters.is_some() {
+        return Err("XML composition requires a VC placement without gauge parameters".into());
+    }
+    validate_image(&preview.image)?;
+    validate_image(source)?;
+    let mm = extent(panel.size_mm)?;
+    let pixels = extent(panel.pixel_size)?;
+    if preview.image.width as f64 != pixels[0] || preview.image.height as f64 != pixels[1] {
+        return Err("XML panel canvas does not match pixel_size".into());
+    }
+    blit(
+        &mut preview.image,
+        source,
+        [
+            placement.position[0] / mm[0] * pixels[0],
+            placement.position[1] / mm[1] * pixels[1],
+            placement.size[0].unwrap_or(source.width as f64) / mm[0] * pixels[0],
+            placement.size[1].unwrap_or(source.height as f64) / mm[1] * pixels[1],
+        ],
+        false,
+    )
+}
+
 fn blit(target: &mut Image, source: &Image, rect: [f64; 4], black_key: bool) -> Result<(), String> {
     if rect.iter().any(|v| !v.is_finite() || v.abs() > 1e9) || rect[2] <= 0. || rect[3] <= 0. {
         return Err("Invalid panel drawing rectangle".into());
@@ -621,7 +652,11 @@ fn blit(target: &mut Image, source: &Image, rect: [f64; 4], black_key: bool) -> 
                 continue;
             }
             let t = (y as usize * target.width as usize + x as usize) * 4;
-            target.rgba[t..t + 4].copy_from_slice(&source.rgba[p..p + 4]);
+            crate::xml_text::source_over(
+                &mut target.rgba[t..t + 4],
+                source.rgba[p..p + 3].try_into().unwrap(),
+                source.rgba[p + 3],
+            );
         }
     }
     Ok(())
@@ -630,6 +665,43 @@ fn blit(target: &mut Image, source: &Image, rect: [f64; 4], black_key: bool) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn xml_image_scales_intrinsic_size_clips_and_blends() {
+        let config = fsx_vehicle::panel::PanelConfig::parse("[VCockpit01]\nsize_mm=4,4\npixel_size=4,4\ntexture=$synthetic\ngauge00=own!text,-1,1,2,2\n").unwrap();
+        let panel = &config.panels[0];
+        let mut preview = Preview {
+            image: Image {
+                width: 4,
+                height: 4,
+                rgba: [0, 0, 0, 255].repeat(16),
+            },
+            drawn_roots: 0,
+            drawn_needles: 0,
+            drawn_sprites: 0,
+            omitted_elements: 0,
+            diagnostics: vec![],
+        };
+        let source = Image {
+            width: 2,
+            height: 2,
+            rgba: [200, 100, 50, 128].repeat(4),
+        };
+        paint_xml_image(&mut preview, panel, &panel.gauges[0], &source).unwrap();
+        let changed = preview
+            .image
+            .rgba
+            .chunks_exact(4)
+            .enumerate()
+            .filter(|(_, p)| *p != [0, 0, 0, 255])
+            .collect::<Vec<_>>();
+        assert_eq!(
+            changed,
+            [(4, &[100, 50, 25, 255][..]), (8, &[100, 50, 25, 255][..])]
+        );
+        let mut placement = panel.gauges[0].clone();
+        placement.parameters = Some("unhandled".into());
+        assert!(paint_xml_image(&mut preview, panel, &placement, &source).is_err());
+    }
     #[test]
     fn sprite_mask_foreground_rotation_and_clipping_are_independent() {
         let mut source = Image {

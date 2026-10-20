@@ -16,6 +16,67 @@ pub struct FlightGauges {
     bases: Vec<(usize, panel::Preview)>,
 }
 impl FlightGauges {
+    /// Explicit-font XML plaque in the current daylight-only flight environment.
+    /// This does not infer the FSX default font or simulate panel-light controls.
+    pub fn with_day_xml_plaque(
+        mut self,
+        root: &Path,
+        font: &Path,
+        registration: &str,
+    ) -> Result<Self, String> {
+        use fsx_vehicle::{cabinet::Cabinet, xml_gauge::GaugeDocument, xml_text::TextGauge};
+        let cabinet = Cabinet::load(&root.join("Gauges/n_number_plaque.cab"), true)?;
+        let document = GaugeDocument::from_cabinet(&cabinet, "n_number_plaque.xml", false)?;
+        let text = TextGauge::from_document(&document)?;
+        let font = fsx_render::xml_text::GaugeFont::load(font)?;
+        let rendered = font.render(
+            &text,
+            &cabinet,
+            "n_number_plaque.xml",
+            |namespace, name, units| {
+                if namespace == 'P'
+                    && name.eq_ignore_ascii_case("Time of Day")
+                    && units.eq_ignore_ascii_case("enum")
+                {
+                    Some(1.)
+                } else if namespace == 'A'
+                    && name.eq_ignore_ascii_case("Light Panel")
+                    && units.eq_ignore_ascii_case("bool")
+                {
+                    Some(0.)
+                } else {
+                    None
+                }
+            },
+            |name| {
+                name.eq_ignore_ascii_case("ATC ID")
+                    .then(|| registration.to_owned())
+            },
+        )?;
+        let mut count = 0;
+        for (index, preview) in &mut self.bases {
+            let p = &self.config.panels[*index];
+            for placement in p.gauges.iter().filter(|g| {
+                g.module.eq_ignore_ascii_case("n_number_plaque")
+                    && g.name.eq_ignore_ascii_case("n_number_plaque")
+            }) {
+                if placement.parameters.is_some() {
+                    return Err("XML plaque parameters are unsupported".into());
+                }
+                panel::paint_xml_image(preview, p, placement, &rendered.image)?;
+                preview.diagnostics.retain(|d| {
+                    !d.to_ascii_lowercase()
+                        .starts_with("n_number_plaque!n_number_plaque:")
+                });
+                count += 1;
+            }
+        }
+        if count != 1 {
+            return Err("XML flight profile requires exactly one C172 VC plaque".into());
+        }
+        println!("XML plaque: {registration:?}, explicit font {:?}, default-font mapping {}, daylight profile; FSX rasterization parity unverified", font.name(), rendered.explicit_default_font);
+        Ok(self)
+    }
     pub fn new(root: &Path, panel_path: &Path, helper: &Path) -> Result<Self, String> {
         let config = PanelConfig::load(panel_path, true)?;
         let mut libraries = BTreeMap::new();

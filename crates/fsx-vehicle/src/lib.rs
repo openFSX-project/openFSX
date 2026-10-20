@@ -7,4 +7,5 @@ pub mod ground;
 pub mod mass;
 pub mod panel;
 pub mod xml_gauge;
+pub mod xml_text;
 pub const GRAVITY: f64 = 9.80665;

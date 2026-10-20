@@ -67,6 +67,11 @@ full panel services, response lag and FSX instrument parity remain ahead. See
 [live instrument instructions](docs/VIEWER.md)
 and the [porting checkpoint](docs/PORTING.md).
 
+Add `--xml-gauge-font C:/Windows/Fonts/arial.ttf` to the native-gauge flight
+command to draw the authored registration plaque with an explicitly selected
+local font. This is a daylight, single-line text subset; the original default
+font and text rasterization have not been matched against FSX.
+
 The independent reference reader now has an optional 32-field instrument
 profile and a bounded offline C172 replay tool. Synthetic C# → Rust → native
 callback → render checks pass, including simulation-clock pause and rewind.
