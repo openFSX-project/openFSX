@@ -5,6 +5,30 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 20 October 2026
 
+After `6d0a1c9`, GaugeString additionally supports bounded numeric d/f output
+and width-formatted A: strings. Numeric expressions retain explicit A:/P:
+namespace and units. Integer output rounds, preserves sign and supports space/
+zero padding and left alignment; fixed output uses explicit fractional precision
+and the SDK's width-ignored behavior. Limits are width 256, precision 16 and
+the existing 8 KiB total text budget. Unknown formats and unsafe widths fail.
+
+The synthetic `xml-numeric-render-check` passes two complete XML -> lookup ->
+format -> font rasterization cases for COM/altitude/VSI/heading text. Changing
+inputs changed 2,824 pixels in the 400x68 diagnostic image; both local images
+were inspected (`target/xml-numeric-render-01/`). These are synthetic diagnostic
+readings, not operational radios or extra telemetry in the flight cockpit.
+138 all-feature workspace test executions pass, including four new formatting
+tests and the existing registration/conditional/renderer checks.
+
+Integer half ties currently round away from zero; fixed formatting follows
+Rust's binary-f64 rounding. Bare f uses a six-digit precision policy inferred
+from C formatting, without proof that FSX uses that default. These choices,
+zero-sign behavior and fractional numeric-to-string conversion still need
+original-FSX validation. The latter currently fails explicitly. Original-FSX
+acquisition remains deferred; full compatibility is not claimed.
+
+### Previous completed XML rasterization stage
+
 After `139f1bf`, the C172 XML registration plaque can be rasterized and composed
 into its authored VC placement. The vehicle layer accepts a checked static
 background/translated GaugeText subset and rejects unknown visual properties.
@@ -17,7 +41,7 @@ adds the authored variant registration to the current daylight flight profile.
 The installed XML omits FontFace: the caller explicitly supplies that mapping.
 FontHeight is interpreted as pixels per em; the original FSX default face,
 GDI metrics/filtering and rasterization parity remain unverified. Panel lights,
-night-background selection, general text formatting and interaction are not
+night-background selection, broader text formatting and interaction are not
 implemented by this option. Original-FSX acquisition remains deferred.
 
 `xml-text-render-check` rendered four registration/color cases from the installed

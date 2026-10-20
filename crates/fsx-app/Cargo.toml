@@ -51,5 +51,9 @@ test = true
 name = "xml-text-render-check"
 required-features = ["viewer"]
 
+[[example]]
+name = "xml-numeric-render-check"
+required-features = ["viewer"]
+
 [dev-dependencies]
 fsx-vehicle = { workspace = true, features = ["test-support"] }

@@ -370,7 +370,7 @@ dictionary. No installed XML, bitmap or compressed original member is committed.
 ## GaugeString evaluation subset
 
 The independent script layer compiles literal UTF-8 text, a single read-only
-A: string lookup followed by %!s!, numeric A:/P: conditions followed by
+A: string lookup followed by a bounded s format, numeric A:/P: output and conditions followed by
 %{if}/%{else}/%{end}, percent escaping, standard newline/tab/return/backslash
 escapes and the observed default/alternate color commands. Values are emitted
 as colored text spans, not reparsed markup. Numeric lookups receive separate
@@ -380,14 +380,38 @@ non-finite values fail, and inactive branches do not resolve their variables.
 Source is bounded to 16 KiB, 2,048 string parts, nesting 32 and 8 KiB of output.
 Numeric subexpressions retain the existing RPN stack/instruction limits. The
 ordinary model RPN compiler still rejects P: reads; GaugeString does not enable
-model-local writes, events, shared panel variables or host callbacks. Numeric
-formatting, general string arithmetic, loops, case, alternate fonts and other
+model-local writes, events, shared panel variables or host callbacks. General
+string arithmetic, loops, case, alternate fonts and other
 escape codes remain unsupported. Literal whitespace is preserved; full FSX
 indentation/wrapping rules and rendered text metrics remain unverified.
 The conditional/format syntax is described in the
 [XML gauge SDK reference](https://www.prepar3d.com/SDKv2/LearningCenter/simobjects/panels_and_gauges/creating_xml_gauges.html);
 the clr2/default mapping is checked against the installed plaque's expression,
 not a live FSX pixel comparison.
+
+Numeric d output supports rounding, width, sign for positive nonzero results,
+leading zeros/spaces and left alignment. Negative zero is normalized for d.
+Fixed f output uses requested fractional precision, ignoring width/zero padding
+as described in the SDK. Width is limited to 256, precision to 16. Integer
+conversions are limited to the exact f64 integer range. The s format accepts
+width-formatted A: strings and whole numeric values; fractional numeric-to-string
+conversion fails. String width counts characters rather than UTF-8 bytes and
+never reparses returned data as markup.
+
+Integer halves round away from zero; fixed formatting uses Rust's binary-f64
+formatter, including ties-to-even behavior. These edge policies require an FSX
+reference. Bare f currently uses six fractional digits, an inference from the
+[Microsoft C formatting default](https://learn.microsoft.com/en-us/cpp/c-runtime-library/format-specification-syntax-printf-and-wprintf-functions),
+not proof of the gauge runtime's choice. Exponential/hex formats, star widths,
+precision on d/s, and floating sign/alignment flags fail explicitly.
+
+```powershell
+cargo run -p fsx-app --features viewer --example xml-numeric-render-check -- FSX/Gauges/n_number_plaque.cab n_number_plaque_background.bmp C:/Windows/Fonts/arial.ttf target/xml-numeric-check
+```
+
+This command renders independently authored synthetic COM/altitude/VSI/heading
+text using an explicitly selected installed background/font. It does not add
+operational radio, engine or flight-variable bindings to the aircraft.
 
 Aircraft/VisualAircraft expose optional selected-variant atc_id (at most 256
 bytes, without control characters), preserving explicit emptiness and absence.

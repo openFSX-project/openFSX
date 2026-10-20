@@ -1,5 +1,6 @@
 //! Bounded, read-only GaugeString subset: literal text, A: strings, numeric
 //! A:/P: conditions, if/else/end, percent escaping and default/alternate colors.
+use crate::gauge_format::{Format, Kind};
 use crate::{EvalError, Program, MAX_DEPTH, MAX_SOURCE};
 
 const MAX_OUTPUT: usize = 8192;
@@ -22,7 +23,8 @@ pub struct GaugeString {
 #[derive(Debug)]
 enum Part {
     Literal(String),
-    StringVariable(String),
+    StringVariable(String, Format),
+    Numeric(Program, Format),
     Color(Color),
     If(Program, Vec<Part>, Vec<Part>),
 }
@@ -30,6 +32,24 @@ struct Parser<'a> {
     source: &'a str,
     offset: usize,
     count: usize,
+}
+
+fn evaluate_numeric(
+    program: &Program,
+    numeric: &mut impl FnMut(char, &str, &str) -> Option<f64>,
+) -> Result<f64, EvalError> {
+    program
+        .evaluate(|name, units| match name.strip_prefix("\0P:") {
+            Some(name) => numeric('P', name, units),
+            None => numeric('A', name, units),
+        })
+        .map_err(|error| match error {
+            EvalError::Unavailable { variable, units } => EvalError::Unavailable {
+                variable: variable.strip_prefix('\0').unwrap_or(&variable).to_owned(),
+                units,
+            },
+            other => other,
+        })
 }
 
 impl Parser<'_> {
@@ -73,27 +93,36 @@ impl Parser<'_> {
             let part = if rest.starts_with("%(") {
                 let expression = self.expression()?.trim().to_owned();
                 let tail = &self.source[self.offset..];
-                if tail.starts_with("%!s!") {
-                    self.offset += 4;
-                    let variable = expression
+                if let Some(tail) = tail.strip_prefix("%!") {
+                    let end = tail.find('!').ok_or("Unclosed GaugeString field format")?;
+                    let format = Format::parse(&tail[..end])?;
+                    self.offset += end + 3;
+                    let string_variable = expression
                         .strip_prefix('(')
                         .and_then(|v| v.strip_suffix(')'))
-                        .ok_or("String output requires one A: string read")?
-                        .trim();
-                    let (namespace, variable) =
-                        variable.split_once(':').ok_or("Missing string namespace")?;
-                    let (name, units) = variable.split_once(',').ok_or("Missing string units")?;
-                    let name = name.trim();
-                    if !namespace.eq_ignore_ascii_case("A")
-                        || !units.trim().eq_ignore_ascii_case("string")
-                        || name.is_empty()
-                        || name.len() > 256
-                        || !name.is_ascii()
-                        || name.contains(['(', ')', ','])
-                    {
-                        return Err("Only a bounded A: string variable supports %!s!".into());
+                        .and_then(|v| v.trim().split_once(':'))
+                        .and_then(|(namespace, v)| {
+                            v.split_once(',')
+                                .map(|(name, units)| (namespace, name.trim(), units.trim()))
+                        })
+                        .filter(|(_, _, units)| units.eq_ignore_ascii_case("string"));
+                    if let Some((namespace, name, _)) = string_variable {
+                        if format.kind != Kind::String
+                            || !namespace.eq_ignore_ascii_case("A")
+                            || name.is_empty()
+                            || name.len() > 256
+                            || !name.is_ascii()
+                            || name.contains(['(', ')', ','])
+                        {
+                            return Err(
+                                "String output requires a bounded A: string read and s format"
+                                    .into(),
+                            );
+                        }
+                        Part::StringVariable(name.to_owned(), format)
+                    } else {
+                        Part::Numeric(Program::compile_mode(&expression, false, true)?, format)
                     }
-                    Part::StringVariable(name.to_owned())
                 } else if tail.starts_with("%{if}") {
                     self.offset += 5;
                     let program = Program::compile_mode(&expression, false, true)?;
@@ -191,34 +220,21 @@ impl GaugeString {
             for part in parts {
                 let text = match part {
                     Part::Literal(text) => text.clone(),
-                    Part::StringVariable(name) => {
-                        string(name).ok_or_else(|| EvalError::Unavailable {
+                    Part::StringVariable(name, format) => {
+                        format.text(string(name).ok_or_else(|| EvalError::Unavailable {
                             variable: format!("A:{name}"),
                             units: "string".into(),
-                        })?
+                        })?)?
+                    }
+                    Part::Numeric(program, format) => {
+                        format.number(evaluate_numeric(program, numeric)?)?
                     }
                     Part::Color(value) => {
                         *color = *value;
                         continue;
                     }
                     Part::If(program, yes, no) => {
-                        let condition = program
-                            .evaluate(|name, units| match name.strip_prefix("\0P:") {
-                                Some(name) => numeric('P', name, units),
-                                None => numeric('A', name, units),
-                            })
-                            .map_err(|error| match error {
-                                EvalError::Unavailable { variable, units } => {
-                                    EvalError::Unavailable {
-                                        variable: variable
-                                            .strip_prefix('\0')
-                                            .unwrap_or(&variable)
-                                            .to_owned(),
-                                        units,
-                                    }
-                                }
-                                other => other,
-                            })?;
+                        let condition = evaluate_numeric(program, numeric)?;
                         run(
                             if condition != 0. { yes } else { no },
                             color,
@@ -262,6 +278,114 @@ impl GaugeString {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn formatted(source: &str) -> String {
+        GaugeString::compile(source)
+            .unwrap()
+            .evaluate(|_, _, _| None, |_| None)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.text)
+            .collect()
+    }
+    #[test]
+    fn integer_formats_round_pad_and_preserve_sign() {
+        for (source, expected) in [
+            ("%(27.6)%!d!", "28"),
+            ("%(-27.6)%!d!", "-28"),
+            ("%(27.5)%!d!", "28"),
+            ("%(-27.5)%!d!", "-28"),
+            ("%(27.4)%!+05d!", "+0027"),
+            ("%(-27.4)%!05d!", "-0027"),
+            ("%(27)%!5d!", "   27"),
+            ("%(27)%!-5d!", "27   "),
+            ("%(27)%! 5d!", "   27"),
+            ("%(123456)%!2d!", "123456"),
+            ("%(-0.4)%!d!", "0"),
+            ("%(0)%!+d!", "0"),
+        ] {
+            assert_eq!(formatted(source), expected, "{source}");
+        }
+    }
+    #[test]
+    fn floating_formats_use_precision_and_ignore_field_width() {
+        for (source, expected) in [
+            ("%(7.8125)%!2.3f!", "7.812"),
+            ("%(7.8125)%!02.4f!", "7.8125"),
+            ("%(5432.625)%!1.2f!", "5432.62"),
+            ("%(-0.125)%!.3f!", "-0.125"),
+            ("%(1.25)%!f!", "1.250000"),
+            ("%(8)%!.0f!", "8"),
+        ] {
+            assert_eq!(formatted(source), expected, "{source}");
+        }
+    }
+    #[test]
+    fn formatted_variables_keep_units_namespaces_and_inactive_branches_lazy() {
+        let script = GaugeString::compile(r"%(1)%{if}COM %((A:COM ACTIVE FREQUENCY:1, MHz))%!6.3f! ALT %((A:INDICATED ALTITUDE, feet))%!+06d! %((P:clock, seconds) 2 /)%!04d!%{else}%((A:missing, number))%!d!%{end} ID %((A:ATC ID, string))%!6s!").unwrap();
+        let result = script
+            .evaluate(
+                |ns, name, units| match (ns, name, units) {
+                    ('A', "COM ACTIVE FREQUENCY:1", "MHz") => Some(123.45),
+                    ('A', "INDICATED ALTITUDE", "feet") => Some(1524.3),
+                    ('P', "clock", "seconds") => Some(14.),
+                    _ => None,
+                },
+                |name| (name == "ATC ID").then(|| "OWN7".into()),
+            )
+            .unwrap();
+        assert_eq!(result[0].text, "COM 123.450 ALT +01524 0007 ID   OWN7");
+        assert_eq!(formatted("%(314)%!5s!"), "  314");
+        let unicode = GaugeString::compile("%(( A:id, string ))%!5s!").unwrap();
+        assert_eq!(
+            unicode
+                .evaluate(|_, _, _| None, |_| Some("Я7".into()))
+                .unwrap()[0]
+                .text,
+            "   Я7"
+        );
+    }
+    #[test]
+    fn numeric_format_rejections_and_output_bounds() {
+        for code in [
+            "",
+            "e",
+            "x",
+            "999999999999999999999d",
+            "257d",
+            ".17f",
+            "3.2d",
+            "3dextra",
+            "0s",
+            "++d",
+            "1😈",
+            "+f",
+            "3..2f",
+            "n",
+            "*d",
+        ] {
+            assert!(
+                GaugeString::compile(&format!("%(1)%!{code}! ")).is_err(),
+                "{code}"
+            );
+        }
+        for source in ["%(1e30)%!d!", "%(1.5)%!s!", "%((A:x, string))%!d!"] {
+            assert!(GaugeString::compile(source)
+                .and_then(|p| p
+                    .evaluate(|_, _, _| None, |_| Some("x".into()))
+                    .map_err(|e| format!("{e:?}")))
+                .is_err());
+        }
+        let script = GaugeString::compile(&"%(1)%!256d!".repeat(33)).unwrap();
+        assert!(script.evaluate(|_, _, _| None, |_| None).is_err());
+        let script = GaugeString::compile("%((P:missing, number))%!d!").unwrap();
+        assert_eq!(
+            script.evaluate(|_, _, _| None, |_| None),
+            Err(EvalError::Unavailable {
+                variable: "P:missing".into(),
+                units: "number".into()
+            })
+        );
+    }
     #[test]
     fn string_color_branches_and_namespace_units() {
         let script = GaugeString::compile(r"ID %( (P:Clock phase, enum) 2 == (A:Panel switch, bool) and )%{if}\{clr2}%{else}day:%{end}%( (A:Registration, string) )%!s!\{clr} 100%%").unwrap();
@@ -334,7 +458,7 @@ mod tests {
             "%((>A:x, number))%{if}x%{end}",
             "%((K:x, number))%{if}x%{end}",
             "%((L:x, number))%{if}x%{end}",
-            "%(1)%!d!",
+            "%(1)%!x!",
             "%((P:x, string))%!s!",
             r"\{other}",
             "%(",
