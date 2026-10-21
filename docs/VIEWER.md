@@ -664,11 +664,24 @@ a guarded mouse context/string buffer and independent parent timeout.
 
 The checker accepts and distinguishes a completed callback and a contained
 native fault; success of the diagnostic command does not mean buttons work.
-Currently all three calls fault on the absent PANELS shared-event service table.
-The reports say callbacks_completed=0, contained_native_faults=3 and
-operational_buttons=false. Event/lookup services, native event delivery and
-screen input routing remain to be implemented. Failed calls never produce a
-fabricated after-string result or a claim of original-FSX input parity.
+Without services all three calls fault on the absent PANELS shared-event table.
+That baseline reports callbacks_completed=0 and contained_native_faults=3.
+To exercise the separate, opt-in local event bridge:
+
+```powershell
+cargo run -p fsx-app --example native-mouse-callback-check --locked -- FSX target/fsx-gauge-host.exe target/native-local-events --local-events
+```
+
+This profile binds only shared-event capture, CLOCK_TOTAL_SECONDS lookup and a
+local-master query. It copies each original four-byte mouse packet, delivers it
+once to the original event callback after mouse return, then updates the main
+string. All three original callbacks complete and accept delivery. The first
+switches to " 0:00:00"; the second performs a local-time lookup. Guarded event
+words, readonly table and import restoration are checked. This is isolated
+local delivery evidence: operational_buttons=false still applies to the viewer.
+Persistent button state, advancing stopwatch inputs, secondary clock text,
+screen routing and original-FSX delivery parity remain unfinished. Failed calls
+never produce a fabricated after-string result.
 
 ## Visibility inspection
 

@@ -5,6 +5,50 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 21 October 2026
 
+After `4ec6d7c`, an opt-in isolated C172 local event bridge binds the checked
+exported PANELS import entry. It resolves ImportTable by export, requires the
+PANELS ID 15 plus a null terminator and an unbound pointer, and installs a
+read-only independent table with only shared-event capture, CLOCK_TOTAL_SECONDS
+lookup and a local-master query. All remaining function slots stay unavailable.
+The bridge remains installed through original ModuleDeinit and restores the
+import pointer before releasing its table. It is not enabled in the viewer.
+
+The original event-size callback must write exactly four bytes into a guarded
+word. The original mouse callback creates its own packet; the bridge copies it
+while the caller's stack is alive, then delivers a guarded copy once to the
+original process-event callback after mouse return. No private gauge object or
+native packet is fabricated. Header/length/count/recursion, executable pointers,
+packet immutability, native acceptance and cleanup are checked. Event words end
+at NOACCESS pages and have checked prefixes. The installed DLL uses stdcall for
+both event callbacks (ret 8), even though the public typedef omits FSAPI; the
+process-event result and PANELS shared/master results are C++ bool. A repeated
+synthetic ABI/true/false/overflow/underrun check gates helper builds.
+
+`native-mouse-callback-check --local-events` passes all three original callbacks
+with no native exceptions in `target/native-local-event-check-02/`. Their actual
+packets are 1, 0, 2 in metadata child order. The first changes the main string
+from 12:34:56 to " 0:00:00" (result 0.6); the second preserves the visible time
+with result 45296.1 and one real token-557 lookup; the third preserves the main
+string/result. Lookup supplies explicit local seconds since midnight (45296),
+not an invented all-zero variable service. The secondary clock string and its
+state are not rendered by this probe. Local delivery after callback return is
+an explicit host profile, not verified original-FSX shared-cockpit behavior.
+
+161 all-feature Rust test executions pass, including strict local delivery
+protocol checks. The guarded native helper self-test and existing 121-frame
+flight/pause/reset/view/clock-event/selection regression pass under
+`target/native-local-event-flight-regression-01/`. Baseline --sample-clock-mouse
+still omits services and reports contained faults, preserving the diagnostic
+comparison. No original code or installed asset is committed.
+
+Next work is persistent local button/event delivery with advancing clock tokens,
+stopwatch/pause/reset checks and renderer invalidation, before screen input
+routing. Multiplayer, broad PANELS services, secondary text and full gauge
+lifecycle remain unsupported. Original-FSX acquisition remains deferred; the
+full 1:1 objective is unfinished.
+
+### Previous completed guarded mouse diagnostic stage
+
 After `57eed45`, the isolated x86 helper can probe a checked C172 Clock mouse
 callback with the independently declared two-argument stdcall/32-bit BOOL ABI.
 The 28-byte MOUSECALLBACK context carries child-local coordinates, the actual

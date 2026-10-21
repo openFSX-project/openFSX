@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -513,7 +514,8 @@ public:
         if(module.word(element+184)!=original_pointer)throw std::runtime_error("Original string buffer pointer was not restored.");}
     ~ClockBinding(){try{close();}catch(const std::exception& e){std::cerr<<e.what()<<'\n';}}
 };
-static int clock_mouse_sample(const fs::path& root,uint32_t selected_rva,uint32_t seconds,int32_t x,int32_t y) {
+#include "clock-panels.hpp"
+static int clock_mouse_sample(const fs::path& root,uint32_t selected_rva,uint32_t seconds,int32_t x,int32_t y,bool local=false) {
     if(seconds>=86400 || x<0 || y<0)throw std::runtime_error("Invalid clock mouse seconds or child-local point.");
     GuardedMouseContext context;GuardedTextBuffer text_buffer(8);
     InitializedModule owner(library_path(root,"Cessna172.dll"));auto& module=owner.module;
@@ -539,6 +541,7 @@ static int clock_mouse_sample(const fs::path& root,uint32_t selected_rva,uint32_
         || width<=0 || height<=0 || width>65536 || height>65536 || x>=width || y>=height)
         throw std::runtime_error("Only an in-bounds left-single callback in the checked clock profile is supported.");
     module.check(callback,1,false,true);
+    auto panels=local?std::make_unique<ClockPanels>(owner,header,seconds):nullptr;
     ClockBinding clock(owner,text_buffer);clock.update(seconds);
     auto before=clock.text;auto before_result=clock.result;
     *context.data=MouseContext{{x,y},reinterpret_cast<void*>(header),reinterpret_cast<void*>(selected),{0,0},nullptr};
@@ -546,10 +549,11 @@ static int clock_mouse_sample(const fs::path& root,uint32_t selected_rva,uint32_
     const bool completed=invoke_mouse(reinterpret_cast<MouseCall>(callback),context.data,flags,&result,&fault);
     context.check();const bool unchanged=std::memcmp(&original,context.data,sizeof(original))==0;
     std::string after;double after_result=0.;std::ostringstream after_numeric;after_numeric.imbue(std::locale::classic());
-    if(completed){clock.update(seconds);after=clock.text;after_result=clock.result;after_numeric<<std::setprecision(17)<<after_result;}
+    if(completed){if(panels)panels->deliver();clock.update(seconds);if(panels)panels->check();after=clock.text;after_result=clock.result;after_numeric<<std::setprecision(17)<<after_result;}
     clock.close();if(module.word(header+88)!=0)throw std::runtime_error("Clock private header slot was not restored after mouse probe.");
     owner.close();
-    std::cout<<std::setprecision(17)<<R"({"schema":1,"source":"native-mouse-probe","pointer_bits":32,"library":"Cessna172.dll","gauge":"Clock","header_rva":)"<<(header-module.base)
+    if(panels)panels->close();
+    std::cout<<std::setprecision(17)<<R"({"schema":1,"source":)"<<json(local?"native-mouse-local-event":"native-mouse-probe")<<R"(,"pointer_bits":32,"library":"Cessna172.dll","gauge":"Clock","header_rva":)"<<(header-module.base)
         <<R"(,"event_size_callback_rva":)"<<(event_size-module.base)<<R"(,"process_event_callback_rva":)"<<(process_event-module.base)
         <<R"(,"mouse_rva":)"<<selected_rva<<R"(,"callback_rva":)"<<(callback-module.base)<<R"(,"mouse_flags":)"<<flags
         <<R"(,"child_local_point":[)"<<x<<','<<y<<R"(],"screen_point":[0,0],"synthetic_pointer_coordinates":true,"local_seconds":)"<<seconds
@@ -559,7 +563,12 @@ static int clock_mouse_sample(const fs::path& root,uint32_t selected_rva,uint32_
         <<R"(,"context_unchanged":)"<<(unchanged?"true":"false")
         <<R"(,"guarded_context":true,"guarded_string":true,"before_text":)"<<json(before)<<R"(,"before_callback_result":)"<<before_result
         <<R"(,"after_text":)"<<(completed?json(after):"null")<<R"(,"after_callback_result":)"<<(completed?after_numeric.str():"null")
-        <<R"(,"module_init_called":true,"module_deinit_called":true,"gauge_connection_notifications":true,"private_header_slot_restored":true,"string_buffer_restored":true,"panel_window":false,"panel_services":false,"full_gauge_lifecycle":false})"<<'\n';
+        <<R"(,"module_init_called":true,"module_deinit_called":true,"gauge_connection_notifications":true,"private_header_slot_restored":true,"string_buffer_restored":true,"panel_window":false,"panel_services":false,"full_gauge_lifecycle":false)";
+    if(panels)std::cout<<R"(,"local_event_bridge":true,"event_size":4,"shared_event_count":)"<<panels->events<<R"(,"original_packet_word":)"<<panels->packet_word
+        <<R"(,"process_event_delivered":)"<<(panels->delivered?"true":"false")<<R"(,"process_event_result":)"<<(panels->process_result?"true":"false")
+        <<R"(,"lookup_count":)"<<panels->lookups<<R"(,"lookup_token":557,"lookup_value":)"<<seconds<<R"(,"master_query_count":)"<<panels->master_calls
+        <<R"(,"guarded_event_words":true,"service_table_readonly":true,"import_pointer_restored":true,"multiplayer":false,"fsx_delivery_parity_verified":false)";
+    std::cout<<"}\n";
     return completed?0:2;
 }
 static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=false,bool clock=false) {
@@ -665,6 +674,9 @@ static int32_t __stdcall synthetic_mouse_overflow(void* value,uint32_t) {
 static int32_t __stdcall synthetic_mouse_underflow(void* value,uint32_t) {
     static_cast<volatile unsigned char*>(value)[-1]=1;return 0;
 }
+static void __stdcall synthetic_event_size(void* header,uint32_t* size){if(header==reinterpret_cast<void*>(0x1234))*size=4;}
+static bool __stdcall synthetic_process_event(void* header,unsigned char* packet){uint32_t word;std::memcpy(&word,packet,4);return header==reinterpret_cast<void*>(0x1234) && word==0xabcdef01;}
+static void __stdcall synthetic_event_overflow(void*,uint32_t* size){size[1]=4;}
 static int self_test() {
     double input = 4., result = 0.; DWORD exception = 0;
     if (!invoke(synthetic, &input, &result, &exception) || result != 11.) throw std::runtime_error("Synthetic x86 stdcall result failed.");
@@ -686,6 +698,16 @@ static int self_test() {
     if(invoke_mouse(synthetic_mouse_overflow,mouse.data,0,&mouse_result,&mouse_fault) || mouse_fault.code!=EXCEPTION_ACCESS_VIOLATION || !mouse_fault.access || mouse_fault.operation!=1 || mouse_fault.target!=reinterpret_cast<uintptr_t>(mouse.data)+sizeof(MouseContext))throw std::runtime_error("Mouse context overflow guard/fault reporting failed.");
     if(!invoke_mouse(synthetic_mouse_underflow,mouse.data,0,&mouse_result,&mouse_fault))throw std::runtime_error("Mouse prefix overwrite fixture failed.");
     bool mouse_underrun=false;try{mouse.check();}catch(...){mouse_underrun=true;}if(!mouse_underrun)throw std::runtime_error("Mouse context prefix overwrite was not detected.");
+    GuardedWord event_word;bool event_result=false;
+    for(size_t i=0;i<256;++i){
+        if(!invoke_event_size(synthetic_event_size,reinterpret_cast<void*>(0x1234),reinterpret_cast<uint32_t*>(event_word.data()),&exception) || event_word.get()!=4)throw std::runtime_error("Event-size stdcall ABI failed.");
+        event_word.set(0xabcdef01);
+        if(!invoke_process_event(synthetic_process_event,reinterpret_cast<void*>(0x1234),event_word.data(),&event_result,&exception) || !event_result)throw std::runtime_error("Process-event stdcall bool ABI failed.");
+        if(!invoke_process_event(synthetic_process_event,nullptr,event_word.data(),&event_result,&exception) || event_result)throw std::runtime_error("Process-event bool false ABI failed.");
+        event_word.check();
+    }
+    if(invoke_event_size(synthetic_event_overflow,nullptr,reinterpret_cast<uint32_t*>(event_word.data()),&exception) || exception!=EXCEPTION_ACCESS_VIOLATION)throw std::runtime_error("Event packet overflow guard failed.");
+    event_word.data()[-1]=0;bool event_underrun=false;try{event_word.check();}catch(...){event_underrun=true;}if(!event_underrun)throw std::runtime_error("Event packet prefix guard failed.");
     if(string_input(L"u32:0x1825").payload!=0x1825 || string_input(L"f64:2.5").value!=2.5)throw std::runtime_error("String union interpretation failed.");
     for(const wchar_t* bad:{L"1",L"u32:-1",L"u32:4294967296",L"f64:NaN"}){bool rejected=false;try{string_input(bad);}catch(...){rejected=true;}if(!rejected)throw std::runtime_error("Invalid string union input accepted.");}
     if (json("a\\b\"c") != "\"a\\\\b\\\"c\"" || number(L"-2.5") != -2.5) throw std::runtime_error("Protocol scalar/escaping check failed.");
@@ -705,7 +727,7 @@ static int self_test() {
         bool rejected=false;try {parse_frame(bad);} catch (...) {rejected=true;}
         if (!rejected) throw std::runtime_error("Invalid frame input accepted.");
     }
-    std::cout << "{\"schema\":1,\"source\":\"synthetic\",\"pointer_bits\":32,\"stdcall_result\":11,\"exception_contained\":true,\"string_guard_verified\":true,\"gauge_notifications_verified\":true,\"mouse_context_verified\":true,\"game_loaded\":false}\n";
+    std::cout << "{\"schema\":1,\"source\":\"synthetic\",\"pointer_bits\":32,\"stdcall_result\":11,\"exception_contained\":true,\"string_guard_verified\":true,\"gauge_notifications_verified\":true,\"mouse_context_verified\":true,\"event_abi_verified\":true,\"game_loaded\":false}\n";
     return 0;
 }
 int wmain(int argc, wchar_t** argv) {
@@ -721,16 +743,16 @@ int wmain(int argc, wchar_t** argv) {
             size_t end=0;auto rva=std::stoul(argv[5],&end,0);if(!rva || argv[5][end] || argv[5][0]==L'-' || argv[5][0]==L'+')throw std::runtime_error("Invalid string RVA.");
             return string_sample(argv[2],ascii(argv[3]),ascii(argv[4]),rva,{string_input(argv[6]),string_input(argv[7]),string_input(argv[8])},std::wstring(argv[1])==L"--sample-string-connected");
         }
-        if(argc==7 && std::wstring(argv[1])==L"--sample-clock-mouse") {
+        if(argc==7 && (std::wstring(argv[1])==L"--sample-clock-mouse" || std::wstring(argv[1])==L"--sample-clock-mouse-local")) {
             size_t end=0;auto rva=std::stoul(argv[3],&end,0);
             if(!rva || argv[3][end] || argv[3][0]==L'-' || argv[3][0]==L'+')throw std::runtime_error("Invalid mouse RVA.");
             auto seconds=number(argv[4]),x=number(argv[5]),y=number(argv[6]);
             if(seconds<0 || seconds>=86400 || std::floor(seconds)!=seconds || x<0 || x>65536 || std::floor(x)!=x || y<0 || y>65536 || std::floor(y)!=y)throw std::runtime_error("Mouse probe requires integer local seconds and child-local pixel coordinates.");
-            return clock_mouse_sample(argv[2],rva,static_cast<uint32_t>(seconds),static_cast<int32_t>(x),static_cast<int32_t>(y));
+            return clock_mouse_sample(argv[2],rva,static_cast<uint32_t>(seconds),static_cast<int32_t>(x),static_cast<int32_t>(y),std::wstring(argv[1])==L"--sample-clock-mouse-local");
         }
         const bool sample = argc == 7 && std::wstring(argv[1]) == L"--sample";
         if (!sample && !(argc == 5 && std::wstring(argv[1]) == L"--probe"))
-            throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --sample-string[-connected] FSX_ROOT LIBRARY GAUGE ELEMENT_RVA INPUT1 INPUT2 INPUT3 (f64:VALUE or u32:VALUE) | --frames FSX_ROOT | --flight-frames FSX_ROOT | --clock-frames FSX_ROOT | --sample-clock-mouse FSX_ROOT MOUSE_RVA LOCAL_SECONDS X Y | --self-test");
+            throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --sample-string[-connected] FSX_ROOT LIBRARY GAUGE ELEMENT_RVA INPUT1 INPUT2 INPUT3 (f64:VALUE or u32:VALUE) | --frames FSX_ROOT | --flight-frames FSX_ROOT | --clock-frames FSX_ROOT | --sample-clock-mouse[-local] FSX_ROOT MOUSE_RVA LOCAL_SECONDS X Y | --self-test");
         auto library = ascii(argv[3]); auto name = ascii(argv[4]);
         uint32_t selected_id = 0; double raw = 0.;
         if (sample) {

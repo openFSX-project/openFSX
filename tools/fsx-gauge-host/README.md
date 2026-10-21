@@ -240,7 +240,33 @@ probe pass. Numeric/stream/string modes remain separate and retain their schema.
 
 ## What this does not establish
 
-This is an isolated update-call diagnostic, not a complete gauge host. No PANELS
+The separate local event probe enables a narrow service profile:
+
+```powershell
+./target/fsx-gauge-host.exe --sample-clock-mouse-local FSX 22144 45296 3 3
+cargo run -p fsx-app --example native-mouse-callback-check --locked -- FSX target/fsx-gauge-host.exe target/native-local-events --local-events
+```
+
+Use the checker to resolve actual metadata RVAs. It checks all three original
+packets (1/0/2), native event acceptance, actual after-string/result and lookup.
+ImportTable is resolved by export, must contain only an unbound PANELS entry
+and terminator, and receives an independently allocated readonly table. Only
+shared-event capture, token-557 CLOCK_TOTAL_SECONDS lookup and a local-master
+query are present. Unknown services/variables are unsupported. The original
+four-byte packet is copied during its mouse callback and delivered after return
+to the original process-event callback. Event-size output and delivery packet
+end at guard pages with checked prefixes. Event callbacks use verified installed
+x86 stdcall and C++ bool for process-event. Build self-test additionally requires
+event_abi_verified, including bool true/false and buffer guard checks.
+
+The table stays installed through ModuleDeinit, then the original null import
+pointer is restored. Local delivery order is a host profile assumption, not
+verified FSX multiplayer behavior. No private native clock object or packet is
+fabricated. This probe does not enable viewer input, repeated/persistent button
+state, advancing stopwatch inputs or the secondary clock string. Full panel
+services remain absent; the no-service probe above still contains three faults.
+
+This is an isolated update-call diagnostic, not a complete gauge host. No full PANELS
 import services are supplied; the protocol reports panel_services=false. Gauge
 query/install/initialize/update/generate/draw/kill stages, panel service callbacks,
 shared variable lifetime, failure systems, rendering and simulator events remain

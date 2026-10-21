@@ -612,7 +612,7 @@ from the header's 236/240 offsets, with an explicit 244-byte extent check.
 The [published PANELS/gauge definitions](https://www.prepar3d.com/SDKv2/LearningCenter/simobjects/sample_code/gauges.html)
 and [shared-event API](https://prepar3d.com/SDKv2/LearningCenter/simobjects/panels_and_gauges/programming_c_gauges.html)
 identify process_shared_event_out at x86 table offset 0x150. The sampled clock
-mouse handlers access a missing PANELS pointer there; all three calls currently
+mouse handlers access a missing PANELS pointer there; all three service-free calls
 fault and are contained. A correct service bridge needs the original event-size/
 process-event callbacks and supported variable lookup, with explicit delivery
 semantics. No generic stub, fabricated packet or multiplayer behavior is supplied.
@@ -661,3 +661,40 @@ describes visibility parameters, and the [Microsoft RPN reference](https://docs.
 describes stack/branch syntax. These documents do not establish complete FSX
 runtime equivalence. Tests use original synthetic expressions and triangle data;
 no installed model expressions or SDK implementation are distributed.
+
+### Isolated local PANELS event bridge
+
+The separate --sample-clock-mouse-local profile preserves the checked mouse
+inputs but binds the exported 16-byte ImportTable: ID 15, null function pointer,
+then a zero ID/pointer terminator. Only the independent PANELS linkage prefix
+and lookup_var (0xa0), process_shared_event_out (0x150), is_master (0x154) slots
+are populated in a readonly table; unsupported slots are null. This table stays
+alive through native ModuleDeinit; the original null import pointer is restored.
+
+The installed C172 event-size and process-event callbacks use x86 stdcall with
+two arguments. process-event/shared-event/master return C++ bool, unlike the
+32-bit BOOL of mouse callbacks. These declarations are checked against the
+installed binary's stack cleanup and independently tested synthetic callbacks.
+The native event-size callback must report four bytes into a guarded word. The
+shared-event service requires the actual clock header, four bytes and exactly
+one nonrecursive packet, copying the original bytes while valid. After mouse
+return, a guarded copy is delivered once to the original process-event callback;
+acceptance and unchanged packet bytes are required. Native faults are contained.
+
+lookup_var accepts only checked writable module-owned MODULE_VAR records with
+CLOCK_TOTAL_SECONDS (557), supplies explicit local seconds since midnight as
+FLOAT64 (type 33), and preserves the previous numeric value. Unknown variables
+fail the observation. is_master returns true only for this local host profile;
+none of the three checked first-click cases calls it. General variable address
+binding, multiplayer and simulator-owned event routing are not implemented.
+
+Records use source=native-mouse-local-event and add original packet word,
+event size/count/delivery/result, lookup token/value/count, master query count,
+guard/table/import guarantees and explicit multiplayer=false and
+fsx_delivery_parity_verified=false. panel_services=false denotes the incomplete
+service surface, while local_event_bridge=true identifies this narrow profile.
+At 12:34:56 the three authored children produce words 1/0/2; original processing
+changes the first main string to " 0:00:00" and performs one token lookup for
+the second. The service-free probe remains available as a fault baseline.
+Local delivery order is a host assumption requiring later reference validation;
+this does not claim operational viewer buttons or original shared-cockpit parity.

@@ -19,7 +19,9 @@ fn validate(
     point: [i32; 2],
 ) -> Result<bool, String> {
     if row["schema"] != 1
-        || row["source"] != "native-mouse-probe"
+        || !["native-mouse-probe", "native-mouse-local-event"]
+            .iter()
+            .any(|s| row["source"] == *s)
         || row["pointer_bits"] != 32
         || row["library"] != "Cessna172.dll"
         || row["gauge"] != "Clock"
@@ -98,11 +100,56 @@ fn validate(
     Ok(completed)
 }
 
+fn validate_local(row: &Value, packet: u32) -> Result<(), String> {
+    for key in [
+        "local_event_bridge",
+        "process_event_delivered",
+        "process_event_result",
+        "guarded_event_words",
+        "service_table_readonly",
+        "import_pointer_restored",
+    ] {
+        if row[key] != true {
+            return Err(format!("Missing local event guarantee: {key}"));
+        }
+    }
+    let (text, result, lookups) = match packet {
+        1 => (" 0:00:00", 0.6, 0),
+        0 => ("12:34:56", 45296.1, 1),
+        2 => ("12:34:56", 45296., 0),
+        _ => return Err("Unexpected C172 mouse packet".into()),
+    };
+    if row["source"] != "native-mouse-local-event"
+        || row["mouse_callback_completed"] != true
+        || row["mouse_callback_result"] != 1
+        || row["shared_event_count"] != 1
+        || row["event_size"] != 4
+        || row["original_packet_word"] != packet
+        || row["lookup_count"] != lookups
+        || row["lookup_token"] != 557
+        || row["lookup_value"] != 45296
+        || row["master_query_count"] != 0
+        || row["after_text"] != text
+        || !row["after_callback_result"]
+            .as_f64()
+            .is_some_and(|v| (v - result).abs() < 1e-9)
+        || row["multiplayer"] != false
+        || row["fsx_delivery_parity_verified"] != false
+        || !["fault_rva", "access_operation", "access_target"]
+            .iter()
+            .all(|k| row[k].is_null())
+    {
+        return Err("Original local event packet/delivery/result mismatch".into());
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 3 {
+    let local = args.len() == 4 && args[3] == "--local-events";
+    if args.len() != 3 && !local {
         return Err(
-            "Usage: native-mouse-callback-check <FSX root> <x86 helper.exe> <new output directory>"
+            "Usage: native-mouse-callback-check <FSX root> <x86 helper.exe> <new output directory> [--local-events]"
                 .into(),
         );
     }
@@ -128,7 +175,7 @@ fn main() -> Result<(), String> {
     }
     let mut rows = Vec::new();
     let mut completed = 0;
-    for r in children {
+    for (index, r) in children.into_iter().enumerate() {
         let callback = r.callback_rva.ok_or("Missing native mouse callback")?;
         let size = [r.relative_box[2], r.relative_box[3]];
         if r.mouse_flags != 1 << 29 || r.event_id != 0 || size.iter().any(|&v| v <= 0 || v > 65536)
@@ -138,7 +185,11 @@ fn main() -> Result<(), String> {
         let point = [size[0] / 2, size[1] / 2];
         let mut command = Command::new(&helper);
         command
-            .arg("--sample-clock-mouse")
+            .arg(if local {
+                "--sample-clock-mouse-local"
+            } else {
+                "--sample-clock-mouse"
+            })
             .arg(&root)
             .arg(r.rva.to_string())
             .arg("45296")
@@ -196,6 +247,11 @@ fn main() -> Result<(), String> {
             callback,
             point,
         )?;
+        if local {
+            validate_local(&row, [1, 0, 2][index])?;
+        } else if row["source"] != "native-mouse-probe" {
+            return Err("Unexpected mouse probe source".into());
+        }
         completed += usize::from(did_complete);
         println!(
             "{} mouse RVA {} callback {}: {}",
@@ -218,7 +274,8 @@ fn main() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     fs::write(output.join("report.json"),serde_json::to_vec_pretty(&json!({"schema":1,"observations":rows.len(),"callbacks_completed":completed,
         "contained_native_faults":rows.len()-completed,"headless_context":true,"all_modules_deinitialized":true,
-        "panel_services":false,"operational_buttons":false,"fsx_input_parity_verified":false})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+        "panel_services":false,"local_event_bridge":local,"original_events_delivered":if local {3}else{0},
+        "operational_buttons":false,"fsx_input_parity_verified":false})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
     println!("CHECKED: {completed}/3 callbacks completed; {} contained native faults. This is diagnostic evidence, not operational button support.",3-completed);
     Ok(())
 }
@@ -276,6 +333,45 @@ mod tests {
             let mut bad = v.clone();
             bad[key] = Value::Null;
             assert!(validate(&bad, 2, 10, 20, 30, [3, 3]).is_err(), "{key}");
+        }
+    }
+    #[test]
+    fn local_delivery_requires_original_packet_acknowledgment_lookup_and_cleanup() {
+        let mut row = fixture();
+        let fields = json!({"source":"native-mouse-local-event", "mouse_callback_completed":true,
+            "mouse_callback_result":1,"native_exception":0,"fault_rva":null,"access_operation":null,"access_target":null,
+            "after_text":"12:34:56","after_callback_result":45296.1,"local_event_bridge":true,
+            "process_event_delivered":true,"process_event_result":true,"guarded_event_words":true,
+            "service_table_readonly":true,"import_pointer_restored":true,"shared_event_count":1,
+            "event_size":4,"original_packet_word":0,"lookup_count":1,"lookup_token":557,
+            "lookup_value":45296,"master_query_count":0,"multiplayer":false,"fsx_delivery_parity_verified":false});
+        row.as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        assert!(validate(&row, 0, 10, 20, 30, [3, 3]).unwrap());
+        validate_local(&row, 0).unwrap();
+        assert!(validate_local(&row, 1).is_err());
+        for key in [
+            "source",
+            "shared_event_count",
+            "event_size",
+            "original_packet_word",
+            "lookup_count",
+            "lookup_token",
+            "lookup_value",
+            "process_event_delivered",
+            "process_event_result",
+            "guarded_event_words",
+            "service_table_readonly",
+            "import_pointer_restored",
+            "multiplayer",
+            "fsx_delivery_parity_verified",
+            "after_text",
+            "after_callback_result",
+        ] {
+            let mut bad = row.clone();
+            bad[key] = Value::Null;
+            assert!(validate_local(&bad, 0).is_err(), "{key}");
         }
     }
 }
