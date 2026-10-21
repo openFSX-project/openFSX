@@ -14,8 +14,53 @@ pub struct FlightGauges {
     config: PanelConfig,
     libraries: BTreeMap<String, GaugeLibrary>,
     bases: Vec<(usize, panel::Preview)>,
+    clock: Option<(fsx_sim::clock::LocalClock, fsx_render::xml_text::GaugeFont)>,
 }
 impl FlightGauges {
+    /// Explicit local-time origin, unselected authored daylight clock styling.
+    pub fn with_day_native_clock(
+        mut self,
+        root: &Path,
+        clock: fsx_sim::clock::LocalClock,
+    ) -> Result<Self, String> {
+        let font = fsx_render::xml_text::GaugeFont::load(&root.join("Fonts/quartz.ttf"))?;
+        let gauge = self.libraries["cessna172"].gauge("Clock")?;
+        let candidates: Vec<_> = gauge
+            .elements
+            .iter()
+            .filter(|e| e.kind == 2 && e.text.as_ref().is_some_and(|t| t.tokens == [3, 4, 5]))
+            .collect();
+        if candidates.len() != 1 {
+            return Err("Expected one C172 clock string".into());
+        }
+        let e = candidates[0];
+        let style = e.text.as_ref().unwrap();
+        if style.source_callbacks.iter().any(Option::is_some)
+            || style.update_callback_rva.is_none()
+            || style.max_length != 8
+        {
+            return Err("Unsupported native clock descriptor".into());
+        }
+        fsx_render::native_text::rasterize_unselected(&font, style, e.image_flags, "00:00:00")?;
+        let count = self
+            .bases
+            .iter()
+            .flat_map(|(i, _)| &self.config.panels[*i].gauges)
+            .filter(|g| {
+                g.module.eq_ignore_ascii_case("Cessna172")
+                    && g.name.eq_ignore_ascii_case("Clock")
+                    && g.parameters.is_none()
+            })
+            .count();
+        if count != 1 {
+            return Err("Expected one parameter-free C172 clock placement".into());
+        }
+        self.native.enable_clock()?;
+        self.clock = Some((clock, font));
+        println!("Native clock: explicit local-time origin, installed Quartz, unselected authored daylight style; no timer buttons or FSX pixel parity");
+        Ok(self)
+    }
+
     /// Explicit-font XML plaque in the current daylight-only flight environment.
     /// This does not infer the FSX default font or simulate panel-light controls.
     pub fn with_day_xml_plaque(
@@ -129,6 +174,7 @@ impl FlightGauges {
             config,
             libraries,
             bases,
+            clock: None,
         })
     }
     pub fn pid(&self) -> u32 {
@@ -139,7 +185,12 @@ impl FlightGauges {
         self.native.restart()
     }
     pub fn update_inputs(&mut self, time: f64, inputs: [f64; 6]) -> Result<Frame, String> {
-        self.native.update(time, inputs)
+        if let Some((clock, _)) = &self.clock {
+            self.native
+                .update_with_clock(time, inputs, Some(clock.seconds_at(time)?))
+        } else {
+            self.native.update(time, inputs)
+        }
     }
     pub fn update(&mut self, simulation: &Simulation) -> Result<Frame, String> {
         let telemetry = simulation.telemetry()?;
@@ -166,6 +217,10 @@ impl FlightGauges {
     ) -> Result<(), String> {
         let mut drawn = 0;
         let mut sprites_drawn = 0;
+        let mut strings_drawn = 0;
+        if self.clock.is_some() != frame.clock.is_some() {
+            return Err("Native clock result/profile mismatch".into());
+        }
         for (index, base) in &self.bases {
             let p = &self.config.panels[*index];
             let Kind::VirtualCockpit { texture } = &p.kind else {
@@ -277,6 +332,41 @@ impl FlightGauges {
                 )?;
                 drawn += 1;
             }
+            if let (Some((_, font)), Some(value)) = (&self.clock, &frame.clock) {
+                for placement in p.gauges.iter().filter(|g| {
+                    g.module.eq_ignore_ascii_case("Cessna172")
+                        && g.name.eq_ignore_ascii_case("Clock")
+                }) {
+                    let library = &self.libraries["cessna172"];
+                    let gauge = library.gauge("Clock")?;
+                    let e = gauge
+                        .elements
+                        .iter()
+                        .find(|e| e.kind == 2 && e.rva == value.element_rva)
+                        .ok_or("Native clock RVA does not match installed metadata")?;
+                    let style = e
+                        .text
+                        .as_ref()
+                        .filter(|t| t.tokens == [3, 4, 5] && t.max_length == 8)
+                        .ok_or("Native clock style mismatch")?;
+                    let raster = fsx_render::native_text::rasterize_unselected(
+                        font,
+                        style,
+                        e.image_flags,
+                        &value.text,
+                    )?;
+                    panel::paint_native_text(
+                        &mut preview,
+                        p,
+                        placement,
+                        library,
+                        e.rva,
+                        1033,
+                        &raster.image,
+                    )?;
+                    strings_drawn += 1;
+                }
+            }
             if !model
                 .textures
                 .iter()
@@ -291,9 +381,10 @@ impl FlightGauges {
             }
             appearance.bind_image(texture, preview.image)?;
         }
-        if drawn != 5 || sprites_drawn != 3 {
+        if drawn != 5 || sprites_drawn != 3 || strings_drawn != usize::from(self.clock.is_some()) {
             return Err(
-                "Native flight profile did not draw all five needles and three sprites".into(),
+                "Native flight profile did not draw all configured needles, sprites and strings"
+                    .into(),
             );
         }
         Ok(())

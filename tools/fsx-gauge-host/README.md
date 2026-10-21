@@ -169,6 +169,33 @@ token 80. Source-lookup callbacks are rejected. Author scales stay in the
 renderer and apply once. The parent validates every axis binding, callback
 presence and input echo. Pause/reset/timeouts follow the original contract.
 
+### Connected local clock profile
+
+`--clock-frames FSX_ROOT` uses schema 3, preserving the 14 schema-2 bindings and
+adding one checked C172 Clock string selected by tokens [3,4,5]. Requests append
+integer local seconds of day in 0..86399:
+
+```text
+frame 1 0 90 984 0 -10 -30 90 86399
+frame 2 1 90 984 0 -10 -30 90 0
+frame 3 1 90 984 0 -10 -30 90 0
+quit
+```
+
+Native connect runs once and owns its private state. One guarded eight-character
+output buffer remains valid through the session and module deinitialization.
+Current/previous f64 hours, minutes and seconds are supplied explicitly. Frames
+report the clock element RVA/tokens/maximum, input seconds, callback result,
+text and guard guarantee. Pause reuses the prior string and rejects changed
+clock input. Close restores the original string pointer and disconnects the native gauge
+before module deinitialization; the final packet acknowledges all three. Error
+paths attempt the same restoration/disconnect through RAII. The Rust parent
+validates this profile separately; legacy schemas 1/2 remain unchanged.
+
+The viewer opts in with an explicit `--native-clock-start HH:MM:SS`; its local
+clock advances on simulator elapsed time. Timer/selection buttons, runtime
+colors, electrical/lighting state and full lifecycle services are not supplied.
+
 ## What this does not establish
 
 This is an isolated update-call diagnostic, not a complete gauge host. No PANELS
@@ -176,7 +203,8 @@ import services are supplied; the protocol reports panel_services=false. Gauge
 query/install/initialize/update/generate/draw/kill stages, panel service callbacks,
 shared variable lifetime, failure systems, rendering and simulator events remain
 unimplemented. Default flight mode has no operational native gauges; the opt-in
-flight profile implements five checked needle bindings and three gyro sprites.
+flight profile implements five checked needle bindings and three gyro sprites, with an optional connected
+local-time string display.
 Gyro drift/failures, magnetic variation and adjustment controls remain absent.
 Callback return values may represent a reading or an angle depending on the
 native element's authored mapping; this tool does not guess that interpretation.

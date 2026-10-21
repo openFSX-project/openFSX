@@ -540,6 +540,36 @@ and the later available game window belonged to openFSX. Keep original-game
 images under ignored `target/` as reference material. They are not screenshots
 of openFSX progress.
 
+## Native local-time display in flight
+
+Add an explicit local time origin to the C172 native profile:
+
+```powershell
+cargo run -p fsx-app --features viewer --bin openfsx-viewer --locked -- FSX/SimObjects/Airplanes/C172 --fly --cockpit --native-gauges --native-clock-start 23:59:59 --windows-1252
+```
+
+HH:MM:SS must be within 00:00:00..23:59:59. Time advances by whole elapsed
+simulator seconds, wraps at midnight, pauses with flight and returns to the
+origin on reset. The helper maintains one connected C172 clock, writes its
+callback output into a guarded buffer and restores that pointer before native
+disconnect/module teardown. The renderer loads the matching installed Quartz
+font and uses explicitly unselected authored daylight styling. The option
+requires `--native-gauges`; it does not read or set the host's wall clock.
+
+For reproducible flight/GPU boundaries, include the explicit XML plaque font
+and clock origin in the installed-content checker:
+
+```powershell
+cargo run -p fsx-app --features viewer --example native-gauge-flight-check --locked -- FSX target/native-clock-flight target/fsx-gauge-host.exe C:/Windows/Fonts/arial.ttf 23:59:59
+```
+
+The check covers native session lifetime, flight/pause/reset/view/ground behavior,
+clock second/minute/day transitions and paused/rewound pixel equality while
+holding other instrument results fixed. Calendar, timezone, UTC synchronization,
+timer/selection controls, electrical/lighting changes, full panel services and
+GDI/FSX pixel parity remain unsupported or unverified. Omitting the clock option
+preserves the existing schema-2 flight/replay profile.
+
 ## Recorded native clock text
 
 Produce three guarded native strings in the isolated x86 helper, then render

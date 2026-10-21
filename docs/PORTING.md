@@ -5,6 +5,42 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 21 October 2026
 
+After `32131cd`, opt-in native C172 local-time text runs in the same persistent
+x86 session as the five needles and three gyro sprites. `--clock-frames` schema 3
+adds explicit whole seconds of local time of day, guarded string results, native
+connect/disconnect and buffer-restoration acknowledgements. Schemas 1/2 remain
+unchanged. Source old/current values advance only with new simulator time;
+unchanged time must keep both physics and clock inputs unchanged.
+
+The headless simulation layer has a bounded deterministic LocalClock with an
+explicit HH:MM:SS origin. It advances on elapsed simulator seconds, wraps at
+midnight, freezes on pause and rewinds deterministically. The viewer enables it
+with `--native-clock-start HH:MM:SS` alongside `--native-gauges`, loads the matching
+installed Quartz font and draws the native callback output into the authored
+C172 placement. Ordinary flight and reference replay keep their schema-2 profile.
+
+151 all-feature Rust test executions pass, including clock boundaries and strict
+schema-3 response validation. The x86 synthetic self-test passes. Six malformed
+or inconsistent clock requests were rejected
+(`target/native-clock-stream-negative-01.json`). The clock-enabled 121-frame
+flight regression passes pause/reset/view/ground/helper-close checks, plus
+23:59:59 -> 00:00:00 -> 00:01:00, a whole-day wrap, paused pixel equality and
+rewind pixel equality (`target/native-clock-live-flight-02/`). Boundary comparisons
+hold all other needle/sprite results fixed. The legacy profile also passes
+(`target/native-clock-live-legacy-regression-01/`). Actual viewer CLI output and
+its 1.25-second cockpit snapshot were checked
+(`target/native-clock-live-viewer-01.png`).
+
+This is a default-mode local-time display using unselected authored daylight
+styling. Calendar/timezone/UTC synchronization, clock timer/selection buttons,
+electrical/lighting state, runtime color overrides, full gauge services/lifecycle
+and FSX pixel equivalence are still absent or unverified. Next work should extend
+the actual instrument state/services and controls, retaining the isolated ABI
+and pause/reset contracts. Original-FSX acquisition remains deferred; the full
+1:1 goal stays active.
+
+### Previous completed recorded clock rasterization stage
+
 After `62dbd3f`, recorded native C172 clock strings can be rasterized with the
 matching installed Quartz font and composed into the authored cockpit texture.
 The automatic font size follows the published NUMCHARS-capital-W width rule;

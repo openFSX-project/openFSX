@@ -515,6 +515,21 @@ the root bitmap's intrinsic dimensions. Next-list predecessors affect drawing
 order/visibility, not spatial parenting. Images use bounded source-over blending.
 No DLL, font, callback result or bitmap from the installed game is distributed.
 
+### Persistent clock stream
+
+The opt-in `--clock-frames` profile uses schema 3 with the existing 14 numeric
+flight bindings plus one string binding. Frame requests append integer local
+seconds of day (0..86399). Ready reports clock connection, a single string
+binding and guarded buffering. Each clock object identifies library/gauge/RVA,
+tokens [3,4,5], maximum length 8, input seconds, text and numeric callback result.
+The parent checks metadata, guards, exact default-mode HH:MM:SS output and the
+numeric result. Clock and physics inputs must both stay unchanged at equal
+simulator time. Pause reuses results; a time rewind restarts the entire session.
+Closed acknowledges native disconnect and restoration of the original string
+pointer before the three modules deinitialize. The buffer outlives those modules.
+Schemas 1/2 are unchanged. This protocol does not supply a calendar, selection
+events, PANELS services or the full gauge lifecycle.
+
 ## Reference NDJSON
 
 The separate x86 recorder keeps schema 1 for title/elapsed time and 12 control

@@ -3,6 +3,7 @@ use fsx_vehicle::aircraft;
 #[cfg(test)]
 use fsx_vehicle::mass;
 pub mod air_data;
+pub mod clock;
 pub mod flight;
 pub mod ground;
 pub use flight::AircraftDynamics;

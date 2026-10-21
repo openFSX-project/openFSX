@@ -24,7 +24,7 @@ fn ensure(condition: bool, message: &str) -> Result<(), String> {
 fn run() -> Result<(), String> {
     let mut args = std::env::args_os().skip(1);
     let root = PathBuf::from(args.next().ok_or(
-        "Usage: native-gauge-flight-check <FSX root> <new output directory> [x86 helper] [explicit XML font.ttf]",
+        "Usage: native-gauge-flight-check <FSX root> <new output directory> [x86 helper] [explicit XML font.ttf] [local clock HH:MM:SS]",
     )?)
     .canonicalize()
     .map_err(|e| e.to_string())?;
@@ -33,6 +33,10 @@ fn run() -> Result<(), String> {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/fsx-gauge-host.exe")
     });
     let xml_font = args.next().map(PathBuf::from);
+    let local_clock = args
+        .next()
+        .map(|s| fsx_sim::clock::LocalClock::parse(s.to_str().ok_or("Invalid clock text")?))
+        .transpose()?;
     ensure(args.next().is_none(), "Unexpected argument")?;
     let aircraft = Aircraft::load(&root.join("SimObjects/Airplanes/C172"), 0, true)?;
     let interior = aircraft
@@ -55,8 +59,15 @@ fn run() -> Result<(), String> {
                 .ok_or("Missing authored registration")?,
         )?;
     }
+    if let Some(clock) = local_clock {
+        gauges = gauges.with_day_native_clock(&root, clock)?;
+    }
     let first_pid = gauges.pid();
     let first = gauges.update(&flight.simulation)?;
+    ensure(
+        first.clock.is_some() == local_clock.is_some(),
+        "Clock profile/result mismatch",
+    )?;
     ensure(
         first.sequence == 1 && first.evaluated == 1 && !first.reused,
         "Invalid first frame",
@@ -218,6 +229,93 @@ fn run() -> Result<(), String> {
         std::fs::read(reset_path).map_err(|e| e.to_string())? == initial_pixels,
         "Reset did not restore initial cockpit pixels",
     )?;
+    let mut clock_comparisons = Vec::new();
+    if local_clock.is_some() {
+        ensure(
+            first.clock.as_ref().unwrap().text == reset.clock.as_ref().unwrap().text,
+            "Reset did not restore local clock origin",
+        )?;
+        let inputs = [75., 500., 256., 0., 0., 90.];
+        let mut clock_pixels = Vec::new();
+        let mut fixed_results: Option<native_gauges::Frame> = None;
+        for (i, time) in [0.75, 1.25, 61.25, 86401.25].into_iter().enumerate() {
+            let frame = gauges.update_inputs(time, inputs)?;
+            if let Some(previous) = &fixed_results {
+                ensure(
+                    previous
+                        .values
+                        .iter()
+                        .zip(&frame.values)
+                        .all(|(a, b)| a.result == b.result)
+                        && previous
+                            .sprites
+                            .iter()
+                            .zip(&frame.sprites)
+                            .all(|(a, b)| a.results == b.results),
+                    "Clock-only GPU comparison changed another instrument",
+                )?;
+            } else {
+                fixed_results = Some(frame.clone());
+            }
+            gauges.apply(
+                &frame,
+                &current.model,
+                &mut current.appearance,
+                Some(&mut gpu),
+            )?;
+            let path = output.join(format!("c172-clock-boundary-{i}.ppm"));
+            gpu.snapshot(&orbit, &path)?;
+            let pixels = std::fs::read(path).map_err(|e| e.to_string())?;
+            if i > 0 {
+                ensure(
+                    pixels != clock_pixels[i - 1],
+                    "Clock boundary produced unchanged cockpit pixels",
+                )?;
+            }
+            let paused = gauges.update_inputs(time, inputs)?;
+            ensure(
+                paused.reused
+                    && paused.clock.as_ref().unwrap().text == frame.clock.as_ref().unwrap().text,
+                "Clock pause did not reuse the string",
+            )?;
+            gauges.apply(
+                &paused,
+                &current.model,
+                &mut current.appearance,
+                Some(&mut gpu),
+            )?;
+            let path = output.join(format!("c172-clock-boundary-{i}-paused.ppm"));
+            gpu.snapshot(&orbit, &path)?;
+            ensure(
+                std::fs::read(path).map_err(|e| e.to_string())? == pixels,
+                "Paused clock changed cockpit pixels",
+            )?;
+            clock_comparisons.push(serde_json::json!({"elapsed":time,"text":frame.clock.as_ref().unwrap().text,"paused_reused":true,"paused_pixels_identical":true}));
+            clock_pixels.push(pixels);
+        }
+        ensure(
+            clock_pixels[1] == clock_pixels[3],
+            "A whole day changed the same time-of-day pixels",
+        )?;
+        let pid = gauges.pid();
+        let rewound = gauges.update_inputs(0.75, inputs)?;
+        ensure(
+            gauges.pid() != pid && rewound.sequence == 1,
+            "Clock rewind did not restart the connected native session",
+        )?;
+        gauges.apply(
+            &rewound,
+            &current.model,
+            &mut current.appearance,
+            Some(&mut gpu),
+        )?;
+        let path = output.join("c172-clock-boundary-rewound.ppm");
+        gpu.snapshot(&orbit, &path)?;
+        ensure(
+            std::fs::read(path).map_err(|e| e.to_string())? == clock_pixels[0],
+            "Clock rewind did not restore the same pixels",
+        )?;
+    }
     gauges.close()?;
     ensure(gauges.pid() == 0, "Helper remained attached after close")?;
 
@@ -234,6 +332,9 @@ fn run() -> Result<(), String> {
                 .ok_or("Missing authored registration")?,
         )?;
     }
+    if let Some(clock) = local_clock {
+        ground_gauges = ground_gauges.with_day_native_clock(&root, clock)?;
+    }
     let ground_frame = ground_gauges.update(&ground.simulation)?;
     let ground_airspeed =
         fsx_sim::air_data::AirData::from_telemetry(ground.simulation.telemetry()?)?.native_inputs()
@@ -245,7 +346,8 @@ fn run() -> Result<(), String> {
     ground_gauges.close()?;
     let report = serde_json::json!({"schema":1,"source":"openfsx-native-gauge-flight-check",
         "forward_frames":121,"paused_reuses":10,"changed_rgb_bytes":changed_bytes,
-        "flight_driven_sprites":3,
+        "flight_driven_sprites":3,"native_local_clock":local_clock.is_some(),"clock_boundaries":clock_comparisons,
+        "clock_style":"unselected authored daylight","gdi_pixel_parity_verified":false,
         "xml_day_plaque":xml_font.is_some(),"xml_font_path":xml_font,"registration":aircraft.registration,
         "reset_restarted_helper":true,"reset_pixels_identical":true,"view_pixels_identical":true,
         "ground_airspeed_knots":ground_airspeed,"full_panel_services":false,"fsx_parity_validated":false});

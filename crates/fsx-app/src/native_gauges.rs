@@ -46,6 +46,12 @@ pub struct Frame {
     pub evaluated: u64,
     pub values: Vec<NeedleValue>,
     pub sprites: Vec<SpriteValue>,
+    pub clock: Option<ClockValue>,
+}
+#[derive(Debug, Clone)]
+pub struct ClockValue {
+    pub element_rva: u32,
+    pub text: String,
 }
 #[derive(Debug, Clone)]
 pub struct SpriteValue {
@@ -59,13 +65,16 @@ pub struct SpriteValue {
 fn close_number(a: f64, b: f64) -> bool {
     (a - b).abs() <= 8. * f64::EPSILON * a.abs().max(b.abs()).max(1.)
 }
-fn packet(line: &str, kind: &str) -> Result<Value, String> {
+fn packet(line: &str, kind: &str, clock: bool) -> Result<Value, String> {
     if line.len() > 16384 {
         return Err("Native gauge response exceeds 16 KiB".into());
     }
     let v: Value =
         serde_json::from_str(line).map_err(|e| format!("Invalid native gauge JSON: {e}"))?;
-    if v["schema"] != 2 || v["source"] != "native-gauge-stream" || v["kind"] != kind {
+    if v["schema"] != if clock { 3 } else { 2 }
+        || v["source"] != "native-gauge-stream"
+        || v["kind"] != kind
+    {
         return Err("Unexpected native gauge response schema/source/kind".into());
     }
     Ok(v)
@@ -77,8 +86,9 @@ fn decode_frame(
     inputs: [f64; 6],
     reused: bool,
     evaluated: u64,
+    clock_seconds: Option<u32>,
 ) -> Result<Frame, String> {
-    let v = packet(line, "frame")?;
+    let v = packet(line, "frame", clock_seconds.is_some())?;
     let returned_time = v["time"]
         .as_f64()
         .filter(|n| n.is_finite())
@@ -167,6 +177,45 @@ fn decode_frame(
         }
         sprites.push(sprite);
     }
+    let clock = if let Some(seconds) = clock_seconds {
+        if seconds >= 86400 {
+            return Err("Invalid local clock seconds".into());
+        }
+        let c = &v["clock"];
+        let expected = format!(
+            "{:02}:{:02}:{:02}",
+            seconds / 3600,
+            seconds / 60 % 60,
+            seconds % 60
+        );
+        let element_rva = c["element_rva"]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|&n| n != 0)
+            .ok_or("Invalid native clock element RVA")?;
+        if c["library"] != "Cessna172.dll"
+            || c["gauge"] != "Clock"
+            || c["tokens"] != serde_json::json!([3, 4, 5])
+            || c["max_length"] != 8
+            || c["local_seconds"].as_u64() != Some(u64::from(seconds))
+            || c["guarded_buffer"] != true
+            || c["text"].as_str() != Some(expected.as_str())
+            || !c["callback_result"]
+                .as_f64()
+                .is_some_and(|n| close_number(n, f64::from(seconds)))
+        {
+            return Err("Native clock binding, text, guard or input echo mismatch".into());
+        }
+        Some(ClockValue {
+            element_rva,
+            text: expected,
+        })
+    } else {
+        if !v["clock"].is_null() {
+            return Err("Unexpected native clock result".into());
+        }
+        None
+    };
     Ok(Frame {
         sequence,
         time,
@@ -174,6 +223,7 @@ fn decode_frame(
         evaluated,
         values: out,
         sprites,
+        clock,
     })
 }
 
@@ -183,12 +233,17 @@ struct Process {
     responses: Option<Receiver<Result<String, String>>>,
     reader: Option<JoinHandle<()>>,
     pid: u32,
+    clock: bool,
 }
 impl Process {
-    fn open(helper: &Path, root: &Path) -> Result<Self, String> {
+    fn open(helper: &Path, root: &Path, clock: bool) -> Result<Self, String> {
         let mut command = Command::new(helper);
         command
-            .arg("--flight-frames")
+            .arg(if clock {
+                "--clock-frames"
+            } else {
+                "--flight-frames"
+            })
             .arg(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -252,8 +307,9 @@ impl Process {
             responses: Some(rx),
             reader: Some(reader),
             pid: 0,
+            clock,
         };
-        let ready = packet(&process.receive()?, "ready")?;
+        let ready = packet(&process.receive()?, "ready", clock)?;
         let pid = ready["pid"]
             .as_u64()
             .and_then(|n| u32::try_from(n).ok())
@@ -262,6 +318,10 @@ impl Process {
             || ready["libraries_loaded"] != 3
             || ready["bindings"] != 14
             || ready["panel_services"] != false
+            || (clock
+                && (ready["clock_connected"] != true
+                    || ready["string_bindings"] != 1
+                    || ready["guarded_buffer"] != true))
             || pid != process.child.id()
         {
             return Err("Unexpected native gauge helper capabilities/PID".into());
@@ -299,8 +359,12 @@ impl Process {
     }
     fn close(&mut self, evaluated: u64) -> Result<(), String> {
         self.write("quit\n")?;
-        let v = packet(&self.receive()?, "closed")?;
-        if v["modules_deinitialized"] != 3 || v["frames_evaluated"].as_u64() != Some(evaluated) {
+        let v = packet(&self.receive()?, "closed", self.clock)?;
+        if v["modules_deinitialized"] != 3
+            || v["frames_evaluated"].as_u64() != Some(evaluated)
+            || (self.clock
+                && (v["clock_disconnected"] != true || v["string_buffer_restored"] != true))
+        {
             return Err("Invalid native module teardown acknowledgement".into());
         }
         let deadline = std::time::Instant::now() + WAIT;
@@ -337,31 +401,51 @@ pub struct NativeGauges {
     process: Option<Process>,
     sequence: u64,
     evaluated: u64,
-    last: Option<(f64, [f64; 6])>,
+    last: Option<(f64, [f64; 6], Option<u32>)>,
+    clock: bool,
 }
 impl NativeGauges {
     pub fn new(helper: &Path, root: &Path) -> Result<Self, String> {
         Ok(Self {
             helper: helper.to_owned(),
             root: root.to_owned(),
-            process: Some(Process::open(helper, root)?),
+            process: Some(Process::open(helper, root, false)?),
             sequence: 0,
             evaluated: 0,
             last: None,
+            clock: false,
         })
+    }
+    pub fn enable_clock(&mut self) -> Result<(), String> {
+        if self.sequence != 0 {
+            return Err("Enable native clock before evaluating frames".into());
+        }
+        self.clock = true;
+        self.restart()
     }
     pub fn pid(&self) -> u32 {
         self.process.as_ref().map(|p| p.pid).unwrap_or(0)
     }
     pub fn restart(&mut self) -> Result<(), String> {
         self.close()?;
-        self.process = Some(Process::open(&self.helper, &self.root)?);
+        self.process = Some(Process::open(&self.helper, &self.root, self.clock)?);
         self.sequence = 0;
         self.evaluated = 0;
         self.last = None;
         Ok(())
     }
     pub fn update(&mut self, time: f64, inputs: [f64; 6]) -> Result<Frame, String> {
+        self.update_with_clock(time, inputs, None)
+    }
+    pub fn update_with_clock(
+        &mut self,
+        time: f64,
+        inputs: [f64; 6],
+        clock_seconds: Option<u32>,
+    ) -> Result<Frame, String> {
+        if self.clock != clock_seconds.is_some() || clock_seconds.is_some_and(|s| s >= 86400) {
+            return Err("Native clock request does not match the session profile".into());
+        }
         if !time.is_finite()
             || !(0. ..=1e9).contains(&time)
             || inputs.iter().any(|v| !v.is_finite() || v.abs() > 1e12)
@@ -369,11 +453,11 @@ impl NativeGauges {
         {
             return Err("Invalid simulation time or native gauge inputs".into());
         }
-        if self.last.is_some_and(|(t, _)| time < t) {
+        if self.last.is_some_and(|(t, _, _)| time < t) {
             self.restart()?;
         }
-        let reused = self.last.is_some_and(|(t, _)| t == time);
-        if reused && self.last.unwrap().1 != inputs {
+        let reused = self.last.is_some_and(|(t, _, _)| t == time);
+        if reused && (self.last.unwrap().1 != inputs || self.last.unwrap().2 != clock_seconds) {
             return Err("Changed gauge physics inputs without advancing simulation time".into());
         }
         let sequence = self
@@ -386,8 +470,9 @@ impl NativeGauges {
             .as_mut()
             .ok_or("Native gauge session is closed")?;
         let result = (|| -> Result<Frame, String> {
+            let clock_suffix = clock_seconds.map(|s| format!(" {s}")).unwrap_or_default();
             process.write(&format!(
-                "frame {sequence} {time} {} {} {} {} {} {}\n",
+                "frame {sequence} {time} {} {} {} {} {} {}{clock_suffix}\n",
                 inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5]
             ))?;
             decode_frame(
@@ -397,6 +482,7 @@ impl NativeGauges {
                 inputs,
                 reused,
                 evaluated,
+                clock_seconds,
             )
         })();
         let frame = match result {
@@ -408,7 +494,7 @@ impl NativeGauges {
         };
         self.sequence = sequence;
         self.evaluated = evaluated;
-        self.last = Some((time, inputs));
+        self.last = Some((time, inputs, clock_seconds));
         Ok(frame)
     }
     pub fn close(&mut self) -> Result<(), String> {
@@ -427,6 +513,49 @@ impl Drop for NativeGauges {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clock_protocol_requires_guarded_matching_default_mode_output() {
+        let mut v = fixture();
+        v["schema"] = serde_json::json!(3);
+        v["clock"] = serde_json::json!({"library":"Cessna172.dll","gauge":"Clock",
+            "element_rva":100,"tokens":[3,4,5],"max_length":8,"local_seconds":45296,
+            "guarded_buffer":true,"text":"12:34:56","callback_result":45296});
+        let decode = |v: &Value, seconds| {
+            decode_frame(
+                &v.to_string(),
+                1,
+                0.5,
+                [75., 500., 256., -10., -30., 90.],
+                false,
+                1,
+                seconds,
+            )
+        };
+        assert_eq!(
+            decode(&v, Some(45296)).unwrap().clock.unwrap().text,
+            "12:34:56"
+        );
+        assert!(decode(&v, None).is_err());
+        assert!(decode(&v, Some(45297)).is_err());
+        assert!(decode(&v, Some(86400)).is_err());
+        for field in [
+            "library",
+            "gauge",
+            "element_rva",
+            "tokens",
+            "max_length",
+            "local_seconds",
+            "guarded_buffer",
+            "text",
+            "callback_result",
+        ] {
+            let mut bad = v.clone();
+            bad["clock"][field] = Value::Null;
+            assert!(decode(&bad, Some(45296)).is_err(), "{field}");
+        }
+        v["clock"]["text"] = serde_json::json!("12:34:55");
+        assert!(decode(&v, Some(45296)).is_err());
+    }
     fn fixture() -> Value {
         let inputs = [75., 500., 256., -10., -30., 90.];
         let mut values: Vec<_> = BINDINGS.iter().map(|(l,g,r,t,i)|serde_json::json!({"library":l,"gauge":g,"resource":r,"token":t,"raw_input":inputs[*i],"callback_result":42.,"element_kind":1,"axis":0,"callback_called":true})).collect();
@@ -446,6 +575,7 @@ mod tests {
             [75., 500., 256., -10., -30., 90.],
             false,
             1,
+            None,
         )
         .unwrap();
         assert_eq!(f.values.len(), 5);
@@ -462,7 +592,8 @@ mod tests {
                 0.5,
                 [75., 500., 256., -10., -30., 90.],
                 false,
-                1
+                1,
+                None
             )
             .is_err());
         }
@@ -486,7 +617,8 @@ mod tests {
                     0.5,
                     [75., 500., 256., -10., -30., 90.],
                     false,
-                    1
+                    1,
+                    None
                 )
                 .is_err());
             }

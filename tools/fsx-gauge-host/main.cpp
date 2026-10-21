@@ -234,14 +234,15 @@ static std::vector<uintptr_t> elements(const Module& module, uintptr_t header) {
     return out;
 }
 
-struct FrameInput {uint64_t sequence;double time;std::array<double,6> inputs;};
-static FrameInput parse_frame(const std::string& line, bool flight=false) {
+struct FrameInput {uint64_t sequence;double time;std::array<double,6> inputs;uint32_t local_seconds=0;};
+static FrameInput parse_frame(const std::string& line, bool flight=false, bool clock=false) {
     std::istringstream stream(line);stream.imbue(std::locale::classic());
     std::string command;FrameInput frame{};
     if (!(stream>>command>>frame.sequence>>frame.time>>frame.inputs[0]>>frame.inputs[1]>>frame.inputs[2]) || command!="frame")
         throw std::runtime_error("Expected: frame SEQUENCE SECONDS IAS_KNOTS BARO_FEET VERTICAL_SPEED_RAW");
     if (flight && !(stream>>frame.inputs[3]>>frame.inputs[4]>>frame.inputs[5]))
         throw std::runtime_error("Flight frames also require PITCH_DEG BANK_DEG GYRO_HEADING_DEG");
+    if (clock && (!(stream>>frame.local_seconds) || frame.local_seconds>=86400)) throw std::runtime_error("Clock frames require local seconds of day in 0..86399.");
     std::string extra;if (stream>>extra) throw std::runtime_error("Trailing frame data.");
     if (!frame.sequence || !std::isfinite(frame.time) || frame.time<0. || frame.time>1e9
         || std::any_of(frame.inputs.begin(),frame.inputs.end(),[](double v){return !std::isfinite(v)||std::abs(v)>1e12;}) || frame.inputs[0]<0.)
@@ -421,7 +422,45 @@ struct Binding {
         previous=raw;previous_available=true;return result;
     }
 };
-static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=false) {
+// Owns one connected default-mode C172 clock without panel services/events.
+// The caller keeps the guarded buffer alive beyond module deinitialization.
+class ClockBinding {
+    const Module& module;uintptr_t header,element=0;uint32_t original_pointer=0;
+    GuardedTextBuffer& buffer;GaugeConnection connection;Update callback=nullptr;
+    std::array<double,3> previous{};bool previous_available=false,installed=false;
+public:
+    uint32_t rva=0;std::string text;double result=0.;
+    ClockBinding(InitializedModule& owner,GuardedTextBuffer& buffer_)
+        :module(owner.module),header(gauge(module,owner.linkage,"Clock")),buffer(buffer_),connection(module,header) {
+        for(auto e:elements(module,header))if(module.word(e)==2 && module.word(e+60)==3 && module.word(e+88)==4 && module.word(e+116)==5){
+            if(element)throw std::runtime_error("Ambiguous C172 clock string.");element=e;
+        }
+        if(!element)throw std::runtime_error("No C172 main clock string.");
+        module.check(element,324,true);rva=static_cast<uint32_t>(element-module.base);
+        if((module.word(element+292)&0xffff)!=8)throw std::runtime_error("Unexpected clock string maximum.");
+        for(size_t i=0;i<3;++i)if(module.word(element+168+i*4))throw std::runtime_error("Clock source callbacks are unsupported.");
+        auto address=module.word(element+312);module.check(address,1,false,true);callback=reinterpret_cast<Update>(address);
+        connection.connect();original_pointer=module.word(element+184);
+        auto pointer=buffer.data;std::memcpy(reinterpret_cast<void*>(element+184),&pointer,4);installed=true;
+    }
+    void update(uint32_t seconds) {
+        if(seconds>=86400)throw std::runtime_error("Clock seconds exceed a day.");
+        std::array<double,3> values{static_cast<double>(seconds/3600),static_cast<double>(seconds/60%60),static_cast<double>(seconds%60)};
+        buffer.reset(8);
+        for(size_t i=0;i<3;++i){double old=previous_available?previous[i]:values[i];
+            std::memcpy(reinterpret_cast<void*>(element+72+i*28),&values[i],8);
+            std::memcpy(reinterpret_cast<void*>(element+80+i*28),&old,8);
+        }
+        DWORD exception=0;
+        if(!invoke(callback,reinterpret_cast<void*>(element),&result,&exception))throw std::runtime_error("Persistent clock callback failed: "+hex(exception));
+        if(module.word(element+184)!=reinterpret_cast<uintptr_t>(buffer.data) || !std::isfinite(result))throw std::runtime_error("Persistent clock pointer/result is invalid.");
+        text=buffer.value();previous=values;previous_available=true;
+    }
+    void close(){if(installed){std::memcpy(reinterpret_cast<void*>(element+184),&original_pointer,4);installed=false;}connection.close();}
+    ~ClockBinding(){try{close();}catch(const std::exception& e){std::cerr<<e.what()<<'\n';}}
+};
+static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=false,bool clock=false) {
+    GuardedTextBuffer clock_buffer(8);
     InitializedModule cessna(library_path(root,"Cessna.dll"));
     InitializedModule c172(library_path(root,"Cessna172.dll"));
     auto bell=flight?std::make_unique<InitializedModule>(library_path(root,"Bell_206B.dll")):nullptr;
@@ -441,22 +480,27 @@ static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=fals
         {bell.get(),"Bell_206B.dll","Attitude",2002,78,3,6,1},
         {bell.get(),"Bell_206B.dll","Attitude",2002,80,4,6,2}
     }};
-    const size_t count=flight?14:5;const int schema=flight?2:1;
+    const size_t count=flight?14:5;const int schema=clock?3:(flight?2:1);
     for (size_t i=0;i<count;++i) bindings[i].locate();
+    auto clock_binding=clock?std::make_unique<ClockBinding>(c172,clock_buffer):nullptr;
     std::cout<<"{\"schema\":"<<schema<<",\"source\":\"native-gauge-stream\",\"kind\":\"ready\",\"pointer_bits\":32,\"pid\":"<<GetCurrentProcessId()
-        <<",\"libraries_loaded\":"<<(flight?3:2)<<",\"bindings\":"<<count<<",\"panel_services\":false}"<<std::endl;
+        <<",\"libraries_loaded\":"<<(flight?3:2)<<",\"bindings\":"<<count<<",\"panel_services\":false";
+    if(clock)std::cout<<",\"clock_connected\":true,\"string_bindings\":1,\"guarded_buffer\":true";
+    std::cout<<'}'<<std::endl;
     uint64_t sequence=0,evaluated=0;double time=-1.;std::array<double,6> inputs{};std::array<double,14> results{};
+    uint32_t local_seconds=0;
     std::string line;
     while (true) {
         deadline.idle();bool available=line_bounded(line);deadline.active();
         if (!available || line=="quit") break;
-        auto frame=parse_frame(line,flight);
+        auto frame=parse_frame(line,flight,clock);
         if (frame.sequence!=sequence+1 || frame.time<time) throw std::runtime_error("Stream sequence/time must advance; reset requires a new session.");
         bool reused=frame.time==time;
-        if (reused && frame.inputs!=inputs) throw std::runtime_error("Changed physics inputs at an unchanged simulation time.");
+        if (reused && (frame.inputs!=inputs || (clock && frame.local_seconds!=local_seconds))) throw std::runtime_error("Changed physics inputs at an unchanged simulation time.");
         if (!reused) {
             for (size_t i=0;i<count;++i) results[i]=bindings[i].update(bindings[i].input<6?frame.inputs[bindings[i].input]:0.);
-            ++evaluated;inputs=frame.inputs;time=frame.time;
+            if(clock_binding)clock_binding->update(frame.local_seconds);
+            ++evaluated;inputs=frame.inputs;time=frame.time;local_seconds=frame.local_seconds;
         }
         sequence=frame.sequence;
         std::cout<<std::setprecision(17)<<"{\"schema\":"<<schema<<",\"source\":\"native-gauge-stream\",\"kind\":\"frame\",\"sequence\":"<<sequence
@@ -468,10 +512,16 @@ static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=fals
             if (flight) std::cout<<",\"element_kind\":"<<b.kind<<",\"axis\":"<<b.axis<<",\"callback_called\":"<<(b.callback?"true":"false");
             std::cout<<'}';
         }
-        std::cout<<"]}"<<std::endl;
+        std::cout<<']';
+        if(clock_binding)std::cout<<R"(,"clock":{"library":"Cessna172.dll","gauge":"Clock","element_rva":)"<<clock_binding->rva
+            <<R"(,"tokens":[3,4,5],"max_length":8,"local_seconds":)"<<local_seconds<<R"(,"guarded_buffer":true,"text":)"<<json(clock_binding->text)<<R"(,"callback_result":)"<<clock_binding->result<<'}';
+        std::cout<<'}'<<std::endl;
     }
+    if(clock_binding)clock_binding->close();
     if (bell) bell->close();c172.close();cessna.close();
-    std::cout<<"{\"schema\":"<<schema<<",\"source\":\"native-gauge-stream\",\"kind\":\"closed\",\"frames_evaluated\":"<<evaluated<<",\"modules_deinitialized\":"<<(flight?3:2)<<"}"<<std::endl;
+    std::cout<<"{\"schema\":"<<schema<<",\"source\":\"native-gauge-stream\",\"kind\":\"closed\",\"frames_evaluated\":"<<evaluated<<",\"modules_deinitialized\":"<<(flight?3:2);
+    if(clock)std::cout<<",\"clock_disconnected\":true,\"string_buffer_restored\":true";
+    std::cout<<'}'<<std::endl;
     return 0;
 }
 static double __stdcall synthetic(void* value) { return *static_cast<double*>(value) * 2. + 3.; }
@@ -535,6 +585,7 @@ int wmain(int argc, wchar_t** argv) {
         Deadline deadline;
         if (argc == 2 && std::wstring(argv[1]) == L"--self-test") return self_test();
         if (argc==3 && std::wstring(argv[1])==L"--frames") return frame_stream(argv[2],deadline);
+        if (argc==3 && std::wstring(argv[1])==L"--clock-frames") return frame_stream(argv[2],deadline,true,true);
         if (argc==3 && std::wstring(argv[1])==L"--flight-frames") return frame_stream(argv[2],deadline,true);
         if(argc==9 && (std::wstring(argv[1])==L"--sample-string" || std::wstring(argv[1])==L"--sample-string-connected")) {
             size_t end=0;auto rva=std::stoul(argv[5],&end,0);if(!rva || argv[5][end] || argv[5][0]==L'-' || argv[5][0]==L'+')throw std::runtime_error("Invalid string RVA.");
@@ -542,7 +593,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         const bool sample = argc == 7 && std::wstring(argv[1]) == L"--sample";
         if (!sample && !(argc == 5 && std::wstring(argv[1]) == L"--probe"))
-            throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --sample-string[-connected] FSX_ROOT LIBRARY GAUGE ELEMENT_RVA INPUT1 INPUT2 INPUT3 (f64:VALUE or u32:VALUE) | --frames FSX_ROOT | --flight-frames FSX_ROOT | --self-test");
+            throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --sample-string[-connected] FSX_ROOT LIBRARY GAUGE ELEMENT_RVA INPUT1 INPUT2 INPUT3 (f64:VALUE or u32:VALUE) | --frames FSX_ROOT | --flight-frames FSX_ROOT | --clock-frames FSX_ROOT | --self-test");
         auto library = ascii(argv[3]); auto name = ascii(argv[4]);
         uint32_t selected_id = 0; double raw = 0.;
         if (sample) {

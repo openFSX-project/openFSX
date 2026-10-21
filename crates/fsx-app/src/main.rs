@@ -393,6 +393,7 @@ fn run() -> Result<(), String> {
         println!("Pose inspector: repeat --pose-var NAME#units#value (XAPS/read-only XAPC; no flight override)");
         println!("Flight views: --cockpit starts inside; F9 virtual cockpit / recenter, F11 exterior; cockpit drag looks around, wheel changes FOV.");
         println!("Experimental Windows C172 instruments: --native-gauges [--gauge-host path/to/fsx-gauge-host.exe]. Five needles plus native attitude/heading sprites, ideal ISA air data and ideal gyros; no RPM, full panel services or needle lag.");
+        println!("Optional native C172 clock: --native-clock-start HH:MM:SS with --native-gauges. Explicit local time advanced by simulation seconds; Quartz daylight styling, timer/selection controls unavailable.");
         println!("Optional daylight XML registration plaque: --xml-gauge-font path/to/font.ttf with --native-gauges. Explicit font mapping and pixels-per-em metrics; FSX default font/rasterization parity unverified.");
         return Ok(());
     }
@@ -404,6 +405,7 @@ fn run() -> Result<(), String> {
     let mut native_gauges_enabled = false;
     let mut gauge_host = None;
     let mut xml_gauge_font = None;
+    let mut native_clock = None;
     let mut menu = false;
     let mut debug_hud = false;
     let mut animation = None;
@@ -417,6 +419,12 @@ fn run() -> Result<(), String> {
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--native-gauges") => native_gauges_enabled = true,
+            Some("--native-clock-start") => {
+                let value = args.next().ok_or("Expected local clock HH:MM:SS")?;
+                native_clock = Some(fsx_sim::clock::LocalClock::parse(
+                    value.to_str().ok_or("Invalid local clock text")?,
+                )?);
+            }
             Some("--xml-gauge-font") => {
                 xml_gauge_font = Some(PathBuf::from(
                     args.next().ok_or("Expected explicit XML gauge font path")?,
@@ -553,6 +561,7 @@ fn run() -> Result<(), String> {
             || native_gauges_enabled
             || gauge_host.is_some()
             || xml_gauge_font.is_some()
+            || native_clock.is_some()
             || cockpit
             || ground
             || snapshot.is_some()
@@ -584,8 +593,9 @@ fn run() -> Result<(), String> {
     if (native_gauges_enabled && (!fly || !cfg!(windows) || no_textures))
         || (gauge_host.is_some() && !native_gauges_enabled)
         || (xml_gauge_font.is_some() && !native_gauges_enabled)
+        || (native_clock.is_some() && !native_gauges_enabled)
     {
-        return Err("--native-gauges requires Windows --fly with textures; --gauge-host and --xml-gauge-font require --native-gauges".into());
+        return Err("--native-gauges requires Windows --fly with textures; --gauge-host, --xml-gauge-font and --native-clock-start require --native-gauges".into());
     }
     let aircraft = if fly {
         Some(Aircraft::load(&path, variant, windows_1252)?)
@@ -821,6 +831,11 @@ fn run() -> Result<(), String> {
             }
         };
         let gauges = flight_gauges::FlightGauges::new(root, &aircraft.panel, &helper)?;
+        let gauges = if let Some(clock) = native_clock {
+            gauges.with_day_native_clock(root, clock)?
+        } else {
+            gauges
+        };
         Some(if let Some(font) = &xml_gauge_font {
             gauges.with_day_xml_plaque(
                 root,
