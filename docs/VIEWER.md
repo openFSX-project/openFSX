@@ -540,6 +540,32 @@ and the later available game window belonged to openFSX. Keep original-game
 images under ignored `target/` as reference material. They are not screenshots
 of openFSX progress.
 
+## Recorded native clock text
+
+Produce three guarded native strings in the isolated x86 helper, then render
+those records offscreen with the matching font from the same local installation:
+
+```powershell
+cargo run -p fsx-app --example native-string-check --locked -- FSX target/fsx-gauge-host.exe target/native-clock-samples --clock
+cargo run -p fsx-app --features viewer --example native-string-render-check --locked -- FSX target/native-clock-render target/native-clock-samples/samples.ndjson
+```
+
+Both output directories must be new. The renderer reads at most 64 KiB/three
+records, validates the checked C172 profile and resolves metadata from the DLL.
+It loads `FSX/Fonts/quartz.ttf`, fits the authored eight-character width, uses
+the native position/colors/alignment, and composites exactly one cockpit clock.
+Four GPU snapshots cover three times plus a restored first state. The check
+requires distinct GPU pixels and identical restored pixels; report.json records
+font metrics, style, placement, comparisons and limitations. It opens no game
+window and starts no native helper during rendering.
+
+Times are explicit synthetic inputs. Styling is explicitly unselected and
+uses authored colors; HILITE_LIST events, runtime color overrides, timer buttons,
+electrical/night states, live flight time and full panel services are absent.
+The width rule is implemented with fontdue; GDI/FSX pixel equivalence still
+requires original-game reference images. Installed fonts and generated images
+remain local, ignored evidence.
+
 ## Visibility inspection
 
 VISL conditions link to scene nodes through SGVL. The reader supports direct

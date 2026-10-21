@@ -3,7 +3,40 @@
 The target remains FSX 1:1 across interface, flight behavior, content and APIs.
 This is a long-term acceptance target; no subsystem claims complete parity.
 
-## Current stage — 20 October 2026
+## Current stage — 21 October 2026
+
+After `62dbd3f`, recorded native C172 clock strings can be rasterized with the
+matching installed Quartz font and composed into the authored cockpit texture.
+The automatic font size follows the published NUMCHARS-capital-W width rule;
+this descriptor fits eight Ws into 43 pixels at about 10.899 pixels per em.
+The rasterizer bounds input, verifies the face/weight/charset, decodes COLORREF,
+handles single-line alignment and clips to the declared 43x13 extent. Fixed
+font heights and unsupported effects fail explicitly. XML text reuses the same
+bounded glyph painter without changing its evaluation or visibility behavior.
+
+`native-string-render-check` validates three bounded connected-probe records,
+resolves the current string RVA from tokens [3,4,5], and places each raster using
+the root bitmap dimensions, native [6,23] position and panel.cfg rectangle.
+The installed HILITE_LIST is present; this check explicitly requests unselected
+text and does not evaluate selection events or runtime color overrides.
+
+`target/native-clock-render-02/` contains 00:00:00 / 12:34:56 / 23:59:59 and a
+repeat of the first state. GPU comparisons change 212 and 172 pixels within
+[322,266]..[362,273]; restoring the first state restores identical pixels.
+The small raster and cockpit snapshot were visually inspected. The report
+labels synthetic time inputs, authored styling and unverified GDI pixel parity.
+
+148 all-feature Rust test executions pass. All five XML numeric/visibility
+rasters remain byte-identical to the previous checkpoint
+(`target/native-clock-xml-regression-01/`). The 121-frame native flight/plaque
+regression still passes pause/reset/view/ground/helper-close checks
+(`target/native-clock-render-flight-regression-01/`). No operational clock,
+flight-mode native string binding, selection controls, complete gauge lifecycle
+or original-FSX pixel comparison is claimed. Next work is a bounded persistent
+clock/time binding and pause/reset validation. Original-FSX acquisition remains
+deferred and the complete 1:1 goal remains active.
+
+### Previous completed native-clock connection stage
 
 After `8b3922c`, the isolated C172 clock profile can deliver original gauge
 CONNECT_TO_WINDOW/DISCONNECT notifications. Local callback inspection showed

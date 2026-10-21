@@ -12,7 +12,7 @@ use fsx_vehicle::{
 use std::{fs::File, io::Read, path::Path};
 
 pub struct GaugeFont {
-    font: Font,
+    pub(crate) font: Font,
 }
 pub struct RenderedText {
     pub image: Image,
@@ -126,6 +126,99 @@ impl GaugeFont {
         self.font.name()
     }
 
+    pub(crate) fn paint_spans(
+        &self,
+        image: &mut Image,
+        text: &fsx_vehicle::xml_text::TextElement,
+        spans: &[Span],
+    ) -> Result<(), String> {
+        let mut glyphs = Vec::new();
+        let mut width = 0f32;
+        let mut previous = None;
+        for span in spans {
+            let color = match span.color {
+                Color::Default => text.color,
+                Color::Alternate => text
+                    .alternate
+                    .ok_or("Text selects an absent alternate color")?,
+            };
+            for ch in span.text.chars() {
+                if !ch.is_ascii() || ch.is_control() {
+                    return Err("XML rasterizer currently requires single-line ASCII text".into());
+                }
+                if !self.font.has_glyph(ch) {
+                    return Err(format!("Selected font lacks glyph {ch:?}"));
+                }
+                if glyphs.len() >= 256 {
+                    return Err("XML text exceeds 256 glyphs".into());
+                }
+                if let Some(previous) = previous {
+                    width += self
+                        .font
+                        .horizontal_kern(previous, ch, text.font_height)
+                        .unwrap_or(0.);
+                }
+                let metrics = self.font.metrics(ch, text.font_height);
+                if metrics.width > 1024
+                    || metrics.height > 1024
+                    || !metrics.advance_width.is_finite()
+                    || metrics.advance_width.abs() > 4096.
+                {
+                    return Err("Font glyph metrics exceed rasterization bounds".into());
+                }
+                glyphs.push((ch, width, color));
+                width += metrics.advance_width;
+                previous = Some(ch);
+            }
+        }
+        let line = self
+            .font
+            .horizontal_line_metrics(text.font_height)
+            .ok_or("Font lacks horizontal line metrics")?;
+        let x = text.position[0] + aligned(text.horizontal, text.size[0] as f32 - width);
+        let baseline = text.position[1]
+            + aligned(
+                text.vertical,
+                text.size[1] as f32 - (line.ascent - line.descent),
+            )
+            + line.ascent;
+        let clip = [
+            text.position[0],
+            text.position[1],
+            text.position[0] + text.size[0] as f32,
+            text.position[1] + text.size[1] as f32,
+        ];
+        for (ch, advance, color) in glyphs {
+            let (metrics, coverage) = self.font.rasterize(ch, text.font_height);
+            let left = (x + advance + metrics.xmin as f32).floor() as i32;
+            let top = (baseline - metrics.ymin as f32 - metrics.height as f32).floor() as i32;
+            for gy in 0..metrics.height {
+                for gx in 0..metrics.width {
+                    let px = left + gx as i32;
+                    let py = top + gy as i32;
+                    if px < 0
+                        || py < 0
+                        || px >= image.width as i32
+                        || py >= image.height as i32
+                        || (px as f32 + 0.5) < clip[0]
+                        || (py as f32 + 0.5) < clip[1]
+                        || (px as f32 + 0.5) >= clip[2]
+                        || (py as f32 + 0.5) >= clip[3]
+                    {
+                        continue;
+                    }
+                    let at = (py as usize * image.width as usize + px as usize) * 4;
+                    source_over(
+                        &mut image.rgba[at..at + 4],
+                        color,
+                        coverage[gy * metrics.width + gx],
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn render(
         &self,
         gauge: &TextGauge,
@@ -171,92 +264,7 @@ impl GaugeFont {
             let spans = program
                 .evaluate(&mut numeric, &mut string)
                 .map_err(|e| format!("{e:?}"))?;
-            let mut glyphs = Vec::new();
-            let mut width = 0f32;
-            let mut previous = None;
-            for span in &spans {
-                let color = match span.color {
-                    Color::Default => text.color,
-                    Color::Alternate => text
-                        .alternate
-                        .ok_or("Text selects an absent alternate color")?,
-                };
-                for ch in span.text.chars() {
-                    if !ch.is_ascii() || ch.is_control() {
-                        return Err(
-                            "XML rasterizer currently requires single-line ASCII text".into()
-                        );
-                    }
-                    if !self.font.has_glyph(ch) {
-                        return Err(format!("Selected font lacks glyph {ch:?}"));
-                    }
-                    if glyphs.len() >= 256 {
-                        return Err("XML text exceeds 256 glyphs".into());
-                    }
-                    if let Some(previous) = previous {
-                        width += self
-                            .font
-                            .horizontal_kern(previous, ch, text.font_height)
-                            .unwrap_or(0.);
-                    }
-                    let metrics = self.font.metrics(ch, text.font_height);
-                    if metrics.width > 1024
-                        || metrics.height > 1024
-                        || !metrics.advance_width.is_finite()
-                        || metrics.advance_width.abs() > 4096.
-                    {
-                        return Err("Font glyph metrics exceed rasterization bounds".into());
-                    }
-                    glyphs.push((ch, width, color));
-                    width += metrics.advance_width;
-                    previous = Some(ch);
-                }
-            }
-            let line = self
-                .font
-                .horizontal_line_metrics(text.font_height)
-                .ok_or("Font lacks horizontal line metrics")?;
-            let x = text.position[0] + aligned(text.horizontal, text.size[0] as f32 - width);
-            let baseline = text.position[1]
-                + aligned(
-                    text.vertical,
-                    text.size[1] as f32 - (line.ascent - line.descent),
-                )
-                + line.ascent;
-            let clip = [
-                text.position[0],
-                text.position[1],
-                text.position[0] + text.size[0] as f32,
-                text.position[1] + text.size[1] as f32,
-            ];
-            for (ch, advance, color) in glyphs {
-                let (metrics, coverage) = self.font.rasterize(ch, text.font_height);
-                let left = (x + advance + metrics.xmin as f32).floor() as i32;
-                let top = (baseline - metrics.ymin as f32 - metrics.height as f32).floor() as i32;
-                for gy in 0..metrics.height {
-                    for gx in 0..metrics.width {
-                        let px = left + gx as i32;
-                        let py = top + gy as i32;
-                        if px < 0
-                            || py < 0
-                            || px >= image.width as i32
-                            || py >= image.height as i32
-                            || (px as f32 + 0.5) < clip[0]
-                            || (py as f32 + 0.5) < clip[1]
-                            || (px as f32 + 0.5) >= clip[2]
-                            || (py as f32 + 0.5) >= clip[3]
-                        {
-                            continue;
-                        }
-                        let at = (py as usize * image.width as usize + px as usize) * 4;
-                        source_over(
-                            &mut image.rgba[at..at + 4],
-                            color,
-                            coverage[gy * metrics.width + gx],
-                        );
-                    }
-                }
-            }
+            self.paint_spans(&mut image, text, &spans)?;
             all_spans.push(spans);
         }
         Ok(RenderedText {

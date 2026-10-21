@@ -11,6 +11,7 @@ use std::{
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 pub mod hud;
+pub mod native_text;
 pub mod panel;
 pub mod xml_text;
 // GPU initialization and map_async don't need a general-purpose async runtime.

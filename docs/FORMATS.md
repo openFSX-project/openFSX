@@ -494,6 +494,27 @@ and [C-gauge API reference](https://www.prepar3d.com/SDKv2/LearningCenter/simobj
 describe these structures and callbacks. Implementation/tests use independent
 declarations; no installed header, DLL, font or native sample source is committed.
 
+### Native string rasterization subset
+
+`native_text::rasterize_unselected` accepts an explicit matching local regular
+font, automatic height, ANSI/default charset and bounded single-line ASCII.
+It maps authored foreground/background COLORREFs and horizontal/vertical text
+alignment, clips glyph coverage, and leaves transparent backgrounds clear.
+The callback result is literal text, never parsed as GaugeString or RPN.
+The [published gauge API](https://www.prepar3d.com/SDKv6/sdk/panels_and_user_interface/gauges/references/gauges_api_overview.html)
+defines automatic sizing by fitting NUMCHARS capital Ws into SIZE_X; fontdue
+advance/kerning metrics implement that width rule. GDI cell metrics, hinting
+and FSX pixels remain unverified. Nonzero fixed font height and unsupported
+font/effect flags are rejected. Selection tables may be present, but this API
+explicitly renders the unselected authored style; it does not run selection
+sequences, highlight events, runtime user colors or lighting transitions.
+
+The panel compositor selects strings by RVA, requires a zero-origin static
+root and explicit gauge/panel extents, and scales the string position/size by
+the root bitmap's intrinsic dimensions. Next-list predecessors affect drawing
+order/visibility, not spatial parenting. Images use bounded source-over blending.
+No DLL, font, callback result or bitmap from the installed game is distributed.
+
 ## Reference NDJSON
 
 The separate x86 recorder keeps schema 1 for title/elapsed time and 12 control

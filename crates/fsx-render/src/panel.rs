@@ -131,6 +131,90 @@ pub fn static_roots(
     Ok(result)
 }
 
+/// Composite a pre-rasterized string at its authored background-relative position.
+/// The caller must use the selected descriptor's font, colors and image flags.
+pub fn paint_native_text(
+    preview: &mut Preview,
+    panel: &Panel,
+    placement: &fsx_vehicle::panel::Gauge,
+    library: &GaugeLibrary,
+    element_rva: u32,
+    language: u32,
+    layer: &Image,
+) -> Result<(), String> {
+    validate_image(&preview.image)?;
+    validate_image(layer)?;
+    let mm = extent(panel.size_mm)?;
+    let pixels = extent(panel.pixel_size)?;
+    if !matches!(panel.kind, Kind::VirtualCockpit { .. })
+        || pixels != [preview.image.width as f64, preview.image.height as f64]
+    {
+        return Err("Native text overlay does not match the panel pixel extent".into());
+    }
+    let gauge = library.gauge(&placement.name)?;
+    let element = gauge
+        .elements
+        .iter()
+        .find(|e| e.rva == element_rva)
+        .ok_or("No selected native string element")?;
+    let style = element
+        .text
+        .as_ref()
+        .filter(|_| element.kind == 2)
+        .ok_or("Selected element is not a native string")?;
+    if style.size != [layer.width, layer.height]
+        || element.image_flags & !7 != 0
+        || element.offset != [0, 0]
+        || element.position.iter().any(|v| v.unsigned_abs() > 65536)
+    {
+        return Err("Unsupported native string dimensions, offset or image flags".into());
+    }
+    let root = gauge
+        .roots
+        .first()
+        .and_then(|r| gauge.elements.iter().find(|e| e.rva == *r))
+        .filter(|e| e.kind == 0 && e.position == [0, 0] && e.image_flags & !7 == 0)
+        .ok_or("Native text requires an untransformed zero-origin static root")?;
+    let mut pending = vec![element.rva];
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(rva) = pending.pop() {
+        if !seen.insert(rva) {
+            continue;
+        }
+        for predecessor in gauge.elements.iter().filter(|e| e.children.contains(&rva)) {
+            if predecessor.image_flags & (1 << 25) != 0 {
+                return Err("A preceding element hides the string's next-list tree".into());
+            }
+            pending.push(predecessor.rva);
+        }
+    }
+    let id = u32::try_from(root.resource_id)
+        .ok()
+        .filter(|v| *v != 0)
+        .ok_or("Invalid native string background bitmap ID")?;
+    let resource = library
+        .resource(2, id, language)
+        .ok_or("Missing exact-language native string background")?;
+    let background = Image::dib(library.resource_bytes(resource)?)?;
+    let [Some(w), Some(h)] = placement.size else {
+        return Err("Native string overlay requires explicit gauge size".into());
+    };
+    let scale = [w / background.width as f64, h / background.height as f64];
+    blit(
+        &mut preview.image,
+        layer,
+        [
+            (placement.position[0] + element.position[0] as f64 * scale[0]) / mm[0] * pixels[0],
+            (placement.position[1] + element.position[1] as f64 * scale[1]) / mm[1] * pixels[1],
+            layer.width as f64 * scale[0] / mm[0] * pixels[0],
+            layer.height as f64 * scale[1] / mm[1] * pixels[1],
+        ],
+        false,
+    )?;
+    preview.omitted_elements = preview.omitted_elements.saturating_sub(1);
+    Ok(())
+}
+
 /// Paint one needle at an explicit clockwise screen angle in gauge-background coordinates.
 /// The caller supplies the callback/table interpretation; no token values are invented.
 pub fn paint_needle(
