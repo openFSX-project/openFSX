@@ -27,6 +27,66 @@ fn extent(values: Option<[Option<f64>; 2]>) -> Result<[f64; 2], String> {
     Ok([w, h])
 }
 
+pub struct NativeMousePoint {
+    pub point: [f64; 2],
+    pub native_size: [u32; 2],
+}
+/// Map a top-left-origin VC texture pixel into authored gauge bitmap coordinates.
+/// This is the texture stage of picking, not a screen-ray/triangle hit test.
+pub fn native_mouse_point(
+    panel: &Panel,
+    placement: &fsx_vehicle::panel::Gauge,
+    library: &GaugeLibrary,
+    language: u32,
+    point: [f64; 2],
+) -> Result<Option<NativeMousePoint>, String> {
+    let mm = extent(panel.size_mm)?;
+    let pixels = extent(panel.pixel_size)?;
+    let size = extent(Some(placement.size))?;
+    if !matches!(panel.kind, Kind::VirtualCockpit { .. })
+        || pixels.iter().any(|v| v.fract() != 0. || *v > 4096.)
+        || point.iter().any(|v| !v.is_finite())
+        || placement.position.iter().any(|v| !v.is_finite())
+    {
+        return Err("Invalid native mouse panel/placement/point".into());
+    }
+    if point[0] < 0. || point[1] < 0. || point[0] >= pixels[0] || point[1] >= pixels[1] {
+        return Ok(None);
+    }
+    let normalized = [
+        (point[0] / pixels[0] * mm[0] - placement.position[0]) / size[0],
+        (point[1] / pixels[1] * mm[1] - placement.position[1]) / size[1],
+    ];
+    if normalized.iter().any(|v| !v.is_finite()) {
+        return Err("Native mouse coordinate overflow".into());
+    }
+    if normalized.iter().any(|v| !(0. ..1.).contains(v)) {
+        return Ok(None);
+    }
+    let gauge = library.gauge(&placement.name)?;
+    let root = gauge
+        .roots
+        .first()
+        .and_then(|r| gauge.elements.iter().find(|e| e.rva == *r))
+        .filter(|e| e.kind == 0 && e.position == [0, 0] && e.image_flags & !7 == 0)
+        .ok_or("Native mouse mapping needs an untransformed zero-origin static root")?;
+    let id = u32::try_from(root.resource_id)
+        .ok()
+        .filter(|&v| v != 0)
+        .ok_or("Invalid native mouse root bitmap ID")?;
+    let resource = library
+        .resource(2, id, language)
+        .ok_or("Missing exact-language native mouse root bitmap")?;
+    let bitmap = Image::dib(library.resource_bytes(resource)?)?;
+    Ok(Some(NativeMousePoint {
+        point: [
+            normalized[0] * bitmap.width as f64,
+            normalized[1] * bitmap.height as f64,
+        ],
+        native_size: [bitmap.width, bitmap.height],
+    }))
+}
+
 /// Draw only zero-origin static root images into their explicit CFG rectangles.
 /// The caller supplies libraries and exact resource language; there is no add-on search.
 pub fn static_roots(

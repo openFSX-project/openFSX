@@ -1,5 +1,8 @@
 //! Read-only PE32 / FS800-1000 gauge metadata. Never maps or executes a DLL.
 use fsx_cfg::decode;
+#[path = "gauge_mouse.rs"]
+mod mouse;
+pub use mouse::{MouseHit, MouseKind, MouseList, MouseRect, MouseRegion};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -718,6 +721,17 @@ fn resources(pe: &Pe<'_>) -> Result<Vec<Resource>> {
 }
 
 impl GaugeLibrary {
+    /// Opt-in authored mouse metadata. Ordinary gauge decoding needs only the
+    /// common 52-byte prefix; mouse access additionally requires the 84-byte header.
+    pub fn mouse_rects(&self, name: &str) -> Result<Option<MouseList>> {
+        let gauge = self.gauge(name)?;
+        let pe = Pe::parse(&self.data)?;
+        let header = pe.slice(gauge.rva, 84)?;
+        match u32_at(header, 80)? {
+            0 => Ok(None),
+            pointer => MouseList::decode(&pe, pe.pointer_rva(pointer)?).map(Some),
+        }
+    }
     pub fn load(path: &Path, windows_1252: bool) -> Result<Self> {
         let mut data = Vec::new();
         fs::File::open(path)
@@ -850,6 +864,85 @@ impl GaugeLibrary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mouse_records_preserve_hierarchy_actions_and_overloaded_tooltip_fields() {
+        let mut b = fixture();
+        rword(&mut b, 0x1200 + 80, BASE + 0x1800);
+        for (i, kind) in [1, 1, 2, 4, 3, 3, 0].into_iter().enumerate() {
+            rword(&mut b, 0x1800 + i as u32 * 44, kind);
+        }
+        for (offset, value) in [(4, 10), (8, 20), (12, 8), (16, 8)] {
+            rword(&mut b, 0x1800 + 44 + offset, value);
+        }
+        for (offset, value) in [
+            (4, 1),
+            (8, 2),
+            (12, 3),
+            (16, 4),
+            (20, 5),
+            (28, 1 << 29),
+            (32, 65658),
+            (36, BASE + 0x1b00),
+        ] {
+            rword(&mut b, 0x1800 + 88 + offset, value);
+        }
+        rword(&mut b, 0x1800 + 132 + 12, 1234567);
+        rword(&mut b, 0x1800 + 132 + 36, BASE + 0x1b10);
+        rword(&mut b, 0x1800 + 132 + 40, u32::MAX);
+        let library = GaugeLibrary::parse(b.clone(), false).unwrap();
+        let list = library.mouse_rects("Own Dial").unwrap().unwrap();
+        assert_eq!(list.records.len(), 6);
+        assert_eq!(list.terminator_rva, 0x1800 + 6 * 44);
+        assert_eq!(list.records[2].parent, Some(1));
+        assert_eq!(list.records[2].callback_rva, Some(0x1b00));
+        assert_eq!(list.records[2].event_id, 65658);
+        assert_eq!(list.records[3].kind, MouseKind::Tooltip);
+        assert_eq!(list.records[3].callback_rva, None);
+        assert_eq!(list.records[3].tooltip_text_rva, Some(0x1b10));
+        assert_eq!(list.records[3].api_data, u32::MAX);
+        assert_eq!(list.records[3].relative_box[2], 1234567);
+        rword(&mut b, 0x1200 + 80, 0);
+        assert!(GaugeLibrary::parse(b, false)
+            .unwrap()
+            .mouse_rects("Own Dial")
+            .unwrap()
+            .is_none());
+    }
+    #[test]
+    fn mouse_lists_reject_bad_spans_structure_geometry_callbacks_and_budgets() {
+        for kinds in [vec![2], vec![1, 0], vec![1, 3, 3], vec![1, 9]] {
+            let mut b = fixture();
+            for (i, kind) in kinds.into_iter().enumerate() {
+                rword(&mut b, 0x1800 + i as u32 * 44, kind);
+            }
+            assert!(MouseList::decode(&Pe::parse(&b).unwrap(), 0x1800).is_err());
+        }
+        for (offset, value) in [(12, u32::MAX), (8, 65537), (36, u32::MAX)] {
+            let mut b = fixture();
+            for (i, kind) in [1, 2, 3, 0].into_iter().enumerate() {
+                rword(&mut b, 0x1800 + i as u32 * 44, kind);
+            }
+            rword(&mut b, 0x1800 + 44 + offset, value);
+            assert!(MouseList::decode(&Pe::parse(&b).unwrap(), 0x1800).is_err());
+        }
+        assert!(MouseList::decode(&Pe::parse(&fixture()).unwrap(), 0x1ff0).is_err());
+        let mut b = fixture();
+        for i in 0..33 {
+            rword(&mut b, 0x1800 + i * 44, 1);
+        }
+        assert!(MouseList::decode(&Pe::parse(&b).unwrap(), 0x1800).is_err());
+        let mut b = fixture();
+        b.resize(0x20200, 0);
+        put32(&mut b, 0x98 + 56, 0x21000);
+        for offset in [8, 16] {
+            put32(&mut b, 0x98 + 224 + offset, 0x20000);
+        }
+        rword(&mut b, 0x1800, 1);
+        for i in 1..=2048 {
+            rword(&mut b, 0x1800 + i * 44, 2);
+        }
+        assert!(MouseList::decode(&Pe::parse(&b).unwrap(), 0x1800).is_err());
+    }
     #[test]
     fn selection_tables_resolve_inclusive_ranges_and_clip_short_strings() {
         let mut b = fixture();

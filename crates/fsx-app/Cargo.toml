@@ -60,5 +60,9 @@ name = "native-string-render-check"
 required-features = ["viewer"]
 test = true
 
+[[example]]
+name = "native-mouse-check"
+required-features = ["viewer"]
+
 [dev-dependencies]
 fsx-vehicle = { workspace = true, features = ["test-support"] }

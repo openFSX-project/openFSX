@@ -629,6 +629,26 @@ The width rule is implemented with fontdue; GDI/FSX pixel equivalence still
 requires original-game reference images. Installed fonts and generated images
 remain local, ignored evidence.
 
+## Native mouse metadata and coordinate check
+
+```powershell
+cargo run -p fsx-app --features viewer --example native-mouse-check --locked -- FSX target/native-mouse-check
+```
+
+The new output directory receives a read-only report of mouse lists in the five
+checked DLLs, including parent indices, boxes, flags, cursor/help/event IDs and
+callback/tooltip addresses. The command never loads a DLL, executes a callback
+or dispatches an event. The viewer feature supplies texture/panel coordinate
+helpers; no GPU or window is opened by this checker.
+
+The C172 clock check reads its actual root bitmap size and panel.cfg rectangle,
+maps all three button centers from VC texels to native gauge coordinates, and
+checks unique left-click candidates, right-click filtering, right/bottom edges,
+help-only display area and outside-panel rejection. No screen-ray picking,
+repeat/drag/capture behavior, installed zero-size subregions or callback services
+are provided. These checks establish coordinates/candidates; original-FSX mouse
+behavior and native button execution still require separate validation.
+
 ## Visibility inspection
 
 VISL conditions link to scene nodes through SGVL. The reader supports direct

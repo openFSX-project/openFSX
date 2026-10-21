@@ -5,6 +5,44 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 21 October 2026
 
+After `affcc16`, read-only native mouse metadata is available through an explicit
+GaugeLibrary::mouse_rects lookup. Ordinary gauge parsing retains its 52-byte
+header contract; mouse lookup separately requires the 84-byte prefix and reads
+the mouse-list pointer at offset 80. The independently decoded x86 MOUSERECT
+record is 44 bytes, with parent/child/end-parent/tooltip kinds, relative geometry,
+cursor/help IDs, activity flags, event/callback identity and opaque API data.
+Tooltip function slots are data/text addresses, never executable callbacks.
+Original function-slot bits are retained for every kind. No argument or runtime
+pointer graph is followed.
+
+Lists are file-span checked, limited to 2048 records/32 nested parents and must
+terminate with balanced parents. Unknown kinds, orphan children/end markers,
+invalid geometry, bad callback/text RVAs and unbounded lists fail explicitly.
+Action regions use gauge-relative parent positions, parent-local child positions
+and ancestor/gauge clipping. Candidate hit tests retain authored overlap order,
+filter activity flags and exclude right/bottom edges. Runtime-installed zero-size
+subregions fail explicitly. No overlap delivery, drag/repeat/wheel routing,
+callback execution or screen-ray picking is implied.
+
+`native-mouse-check` decoded all 88 gauge-header entries (including aliases) in
+the five checked libraries: 208 parents, 208 matching end markers, 205 children
+and 38 tooltip records. The installed C172 clock has a 54x54 root bitmap and
+three callback regions. The renderer maps VC texture pixels through actual
+panel.cfg placement/extents into these bitmap coordinates. All three centers
+resolve uniquely with child-local [3,3] positions, while right-clicks, exclusive
+edges, the display/help region and points outside the texture produce no false
+action hits (`target/native-mouse-check-02/`).
+
+158 all-feature Rust test executions pass, including overloaded tooltip slots,
+list structure, truncation, bounds/nesting/record budgets, clipping, overlapping
+candidate order and activity filtering. Existing connected clock/event flight
+regression passes (`target/native-mouse-flight-regression-01/`). This stage establishes passive metadata and texture-space
+hit candidates; native installation/callback ABI and actual screen input remain
+next. Original-FSX mouse behavior/pixel parity is unverified, acquisition remains
+deferred, and the complete 1:1 goal remains active.
+
+### Previous completed local-clock event stage
+
 After `109bbb7`, the bounded local-time state accepts seven published CLOCK_*
 events: hour/minute increment/decrement, hour/minute set and seconds zero.
 Increment/decrement ignore the payload; SET validates its field range and

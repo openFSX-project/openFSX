@@ -557,6 +557,37 @@ physics and the current clock value. A separate display-changed flag allows
 clock/selection edits to repaint during physics reuse. Legacy schemas 1/2 are
 unchanged; this is not a generic native event dispatch service.
 
+## Native mouse metadata and candidate hits
+
+Mouse reading is opt-in through `GaugeLibrary::mouse_rects(name)`: it requires
+the 84-byte x86 gauge-header prefix and reads the pointer at 80, leaving ordinary
+52-byte prefix parsing unchanged. Each 44-byte MOUSERECT has kind at 0, four
+signed geometry words at 4..19, cursor/help at 20/24, flags/event at 28/32,
+function slot at 36 and API data at 40. Parent/child/end-parent/EOL structure is
+validated with 2048-record and 32-parent limits. Child callback RVAs must be
+file-backed. USER tooltip records overload geometry/event/function slots with
+help IDs, argument count and text metadata; they are never treated as actions.
+Opaque API data and raw function-slot values are retained without dereferencing
+runtime/argument graphs. Tooltip text pointers are bounded but text is not read.
+
+The [published gauge reference](https://www.prepar3d.com/SDKv6/sdk/panels_and_user_interface/gauges/references/gauges_api_overview.html)
+and [mouse structure reference](https://prepar3d.com/SDKv2/LearningCenter/simobjects/panels_and_gauges/programming_c_gauges.html)
+describe native rectangles and their fields. Parent positions are gauge-relative;
+children use the containing parent's origin. The current candidate layout clips
+to gauge/ancestors and uses explicit root-bitmap dimensions for the zero-size
+main box. Zero-size subregions need runtime installation and are rejected by
+layout, while their metadata remains readable. Finite points and one activity
+flag are required; matching children/GETALL candidates retain authored order.
+Right/bottom edges are excluded by the current hit contract; original-FSX edge
+and overlap-delivery semantics remain unverified. Drag capture, repeat timing,
+wheel skip/flip and dispatch are not implemented by this candidate API.
+
+`panel::native_mouse_point` converts a top-left-origin VC texel through explicit
+panel/gauge extents to coordinates in the exact-language static root bitmap.
+It requires a zero-origin untransformed root, rejects invalid layouts and ignores
+points outside the panel/gauge. This is not a screen-ray/triangle intersection
+or an event dispatch implementation.
+
 ## Reference NDJSON
 
 The separate x86 recorder keeps schema 1 for title/elapsed time and 12 control
