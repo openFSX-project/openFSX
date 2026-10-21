@@ -589,6 +589,16 @@ requires distinct GPU pixels and identical restored pixels; report.json records
 font metrics, style, placement, comparisons and limitations. It opens no game
 window and starts no native helper during rendering.
 
+Add `--selection-check` as a fourth argument to the renderer to exercise the
+installed clock's hours/minutes/seconds selection records. It produces nine
+states, checks separate selected digit regions with identical glyph coverage,
+requires selected GPU pixels to change, and verifies exact restoration for an
+unrelated state and deselection. The report includes selection tables, raster
+comparisons and an inventory of native strings across the five libraries.
+These are explicit synthetic selection states; the checker dispatches no key
+or mouse events and implements no clock edit controls. Live flight continues
+to use the unselected path.
+
 Times are explicit synthetic inputs. Styling is explicitly unselected and
 uses authored colors; HILITE_LIST events, runtime color overrides, timer buttons,
 electrical/night states, live flight time and full panel services are absent.

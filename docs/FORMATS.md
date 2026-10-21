@@ -472,8 +472,12 @@ slots begin at 60/88/116, source callback pointers at 168/172/176, image extent
 at 192/196, COLORREFs at 208/212/216 and a 32-byte face name at 248. Weight,
 charset and DrawText flags occupy 280/284/288, maximum string length is u16 at
 292, selection-sequence pointer is at 300, font height at 308 and update callback
-at 312. Callbacks and the first sequence record are bounded within the PE image;
-the selection sequence is not traversed. Face names require a terminator and
+at 312. Callbacks and selection-table RVAs are bounded within the PE image.
+SEQ_REC entries contain three signed 32-bit values: state, first character and
+last inclusive character. A zero/zero/zero record terminates the list. At most
+256 entries per sequence and 65,536 per library are accepted. Negative/duplicate
+states, reversed/out-of-maximum ranges, invalid/truncated spans and malformed
+terminators fail explicitly. Face names require a terminator and
 explicit encoding. Zero font height remains authored automatic sizing.
 
 The three MODULE_VAR values are unions. The separate native string probe
@@ -505,9 +509,13 @@ The [published gauge API](https://www.prepar3d.com/SDKv6/sdk/panels_and_user_int
 defines automatic sizing by fitting NUMCHARS capital Ws into SIZE_X; fontdue
 advance/kerning metrics implement that width rule. GDI cell metrics, hinting
 and FSX pixels remain unverified. Nonzero fixed font height and unsupported
-font/effect flags are rejected. Selection tables may be present, but this API
-explicitly renders the unselected authored style; it does not run selection
-sequences, highlight events, runtime user colors or lighting transitions.
+font/effect flags are rejected. `rasterize_selected` additionally resolves an
+explicit global selection state through SEQ_REC and applies HILITECOLOR to the
+matching glyph range, retaining layout and alpha coverage. The same published
+API defines inclusive character indices and a highlight text color. Ranges
+clip to the current ASCII string; state zero or an unrelated state selects
+nothing. `rasterize_unselected` preserves the default path. Neither API dispatches
+selection/edit events or evaluates runtime user colors/lighting transitions.
 
 The panel compositor selects strings by RVA, requires a zero-origin static
 root and explicit gauge/panel extents, and scales the string position/size by

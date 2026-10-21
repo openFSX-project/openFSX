@@ -5,6 +5,45 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 21 October 2026
 
+After `7089893`, native ELEMENT_STRING selection tables are decoded and can
+select authored character ranges for highlighting. Each SEQ_REC has three
+32-bit signed fields (state, first character, last inclusive character); a
+zero/zero/zero record terminates the list. The decoder bounds each sequence to
+256 records and a library to 65,536, checks file-backed RVA spans, and rejects
+negative states, duplicate states, inverted/out-of-maximum ranges and malformed
+terminators. State zero and states belonging to other gauges leave text alone;
+valid ranges clip to the current shorter ASCII string.
+
+`native_text::rasterize_selected` paints the selected glyphs with authored
+HILITECOLOR using the existing shared layout/coverage. Unselected callers retain
+their prior API/output. The installed five-library check found 20 string entries
+(including aliases) and 22 selection records. C172's clock maps states 24/25/26
+to hours/minutes/seconds at inclusive character ranges 0..1 / 3..4 / 6..7.
+
+`native-string-render-check --selection-check` renders nine states: the existing
+four baselines, three selected digit pairs, an unrelated state and deselection.
+Selected rasters preserve identical alpha/coverage, with separate horizontal
+regions; GPU differences are 54 / 69 / 68 pixels in the corresponding digit
+pairs. Unrelated state/deselection restore exact baseline pixels. All four
+unselected GPU frames remain byte-identical to the previous checkpoint.
+Rasters and cockpit images were inspected (`target/native-selection-render-01/`).
+
+153 all-feature Rust test executions pass, including malformed tables, duplicate
+states, range clipping, truncated tables and traversal budgets. The first full
+build collided with a running example's Windows executable lock; the sequential
+rerun passed (`target/native-selection-workspace-tests-02.log`). The connected
+clock/121-frame flight regression retains pause/reset/view/ground/helper-close,
+midnight/minute/day and rewind checks (`target/native-selection-flight-regression-01/`).
+
+Selection inputs in this checker are explicit synthetic states; no keyboard or
+mouse selection/edit events are dispatched. Live flight remains unselected.
+Next work is event routing/selection state and clock edit controls, followed by
+remaining panel services and instrument systems. GDI/FSX pixel equivalence is
+unverified, original-FSX acquisition remains deferred, and the full 1:1 goal
+remains active.
+
+### Previous completed persistent clock/time stage
+
 After `32131cd`, opt-in native C172 local-time text runs in the same persistent
 x86 session as the five needles and three gyro sprites. `--clock-frames` schema 3
 adds explicit whole seconds of local time of day, guarded string results, native

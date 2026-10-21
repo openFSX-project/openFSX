@@ -39,13 +39,26 @@ fn automatic_em(width: u32, count: u16, advance: f32, kern: f32) -> Result<f32, 
 }
 
 /// Render explicitly unselected text with authored foreground/background colors.
-/// Selection sequences and runtime color overrides are not evaluated here.
+/// Runtime color overrides are not evaluated here.
 pub fn rasterize_unselected(
     font: &GaugeFont,
     style: &NativeText,
     image_flags: u32,
     value: &str,
 ) -> Result<Rasterized, String> {
+    rasterize_selected(font, style, image_flags, value, 0)
+}
+
+/// Resolve one global SEQ_REC state and paint selected glyphs with HILITECOLOR.
+/// An unrelated state leaves the string unselected. This does not dispatch events.
+pub fn rasterize_selected(
+    font: &GaugeFont,
+    style: &NativeText,
+    image_flags: u32,
+    value: &str,
+    selection_state: i32,
+) -> Result<Rasterized, String> {
+    let selected = style.selected_range(selection_state, value.len())?;
     if style.font_height != 0 {
         return Err("Native fixed-height/GDI text sizing is not yet validated".into());
     }
@@ -119,18 +132,35 @@ pub fn rasterize_unselected(
         horizontal,
         vertical,
         color: foreground,
-        alternate: None,
+        alternate: selected
+            .as_ref()
+            .map(|_| color(style.colors[2]))
+            .transpose()?,
         source: String::new(),
         visibility: None,
     };
-    font.paint_spans(
-        &mut image,
-        &layout,
-        &[Span {
+    let spans = if let Some(range) = selected {
+        vec![
+            Span {
+                text: value[..range.start].to_owned(),
+                color: Color::Default,
+            },
+            Span {
+                text: value[range.clone()].to_owned(),
+                color: Color::Alternate,
+            },
+            Span {
+                text: value[range.end..].to_owned(),
+                color: Color::Default,
+            },
+        ]
+    } else {
+        vec![Span {
             text: value.to_owned(),
             color: Color::Default,
-        }],
-    )?;
+        }]
+    };
+    font.paint_spans(&mut image, &layout, &spans)?;
     Ok(Rasterized {
         image,
         em_pixels: em,

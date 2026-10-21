@@ -16,6 +16,7 @@ const MAX_ELEMENTS: usize = 2048;
 const MAX_TOTAL_ELEMENTS: usize = 65536;
 const MAX_RESOURCES: usize = 8192;
 const MAX_NEEDLE_POINTS: usize = 65536;
+const MAX_SELECTION_RECORDS: usize = 65536;
 
 fn bytes(b: &[u8], offset: usize, size: usize) -> Result<&[u8]> {
     let end = offset.checked_add(size).ok_or("PE offset overflow")?;
@@ -239,6 +240,13 @@ pub struct Element {
     pub text: Option<NativeText>,
 }
 #[derive(Debug, Clone)]
+pub struct TextSelection {
+    pub state: i32,
+    /// Zero-based, inclusive character indices, before clipping to current text.
+    pub first: u16,
+    pub last: u16,
+}
+#[derive(Debug, Clone)]
 pub struct NativeText {
     pub tokens: [u32; 3],
     pub source_callbacks: [Option<u32>; 3],
@@ -253,8 +261,69 @@ pub struct NativeText {
     pub max_length: u16,
     /// COLORREF values remain in their original 0xBBGGRR representation.
     pub colors: [u32; 3],
-    /// Only the first record is bounded; sequence traversal is unsupported.
     pub selection_sequence_rva: Option<u32>,
+    pub selections: Vec<TextSelection>,
+}
+
+impl NativeText {
+    /// Resolve a global selection state; unrelated states leave this string alone.
+    /// Byte indices apply to the renderer's explicitly single-byte ASCII subset.
+    pub fn selected_range(&self, state: i32, length: usize) -> Result<Option<Range<usize>>> {
+        if state < 0 || length > usize::from(self.max_length) {
+            return Err("Invalid native selection state or string length".into());
+        }
+        if state == 0 {
+            return Ok(None);
+        }
+        let mut matches = self.selections.iter().filter(|s| s.state == state);
+        let Some(selection) = matches.next() else {
+            return Ok(None);
+        };
+        if matches.next().is_some()
+            || selection.first > selection.last
+            || selection.last >= self.max_length
+        {
+            return Err("Invalid or ambiguous native selection range".into());
+        }
+        let start = usize::from(selection.first).min(length);
+        let end = (usize::from(selection.last) + 1).min(length);
+        Ok((start < end).then_some(start..end))
+    }
+}
+
+fn text_selections(pe: &Pe<'_>, rva: u32, maximum: u16) -> Result<Vec<TextSelection>> {
+    let mut result = Vec::new();
+    let mut states = BTreeSet::new();
+    for index in 0..=256u32 {
+        let record = pe.slice(
+            rva.checked_add(index * 12)
+                .ok_or("Selection table RVA overflow")?,
+            12,
+        )?;
+        let state = u32_at(record, 0)? as i32;
+        let first = u32_at(record, 4)?;
+        let last = u32_at(record, 8)?;
+        if state == 0 {
+            if first != 0 || last != 0 {
+                return Err("Malformed native selection terminator".into());
+            }
+            return Ok(result);
+        }
+        if index == 256
+            || state < 0
+            || first > last
+            || last >= u32::from(maximum)
+            || !states.insert(state)
+        {
+            return Err("Invalid, duplicate or excessive native selection record".into());
+        }
+        result.push(TextSelection {
+            state,
+            first: first as u16,
+            last: last as u16,
+        });
+    }
+    Err("Unterminated native selection sequence".into())
 }
 
 fn native_text(pe: &Pe<'_>, rva: u32, windows_1252: bool) -> Result<NativeText> {
@@ -283,6 +352,11 @@ fn native_text(pe: &Pe<'_>, rva: u32, windows_1252: bool) -> Result<NativeText> 
             Some(rva)
         }
     };
+    let max_length = u16_at(b, 292)?;
+    let selections = selection_sequence_rva
+        .map(|rva| text_selections(pe, rva, max_length))
+        .transpose()?
+        .unwrap_or_default();
     Ok(NativeText {
         tokens: [u32_at(b, 60)?, u32_at(b, 88)?, u32_at(b, 116)?],
         source_callbacks: [
@@ -297,9 +371,10 @@ fn native_text(pe: &Pe<'_>, rva: u32, windows_1252: bool) -> Result<NativeText> 
         font_weight: u32_at(b, 280)? as i32,
         font_charset: b[284],
         draw_text_flags: u32_at(b, 288)?,
-        max_length: u16_at(b, 292)?,
+        max_length,
         colors: [u32_at(b, 208)?, u32_at(b, 212)?, u32_at(b, 216)?],
         selection_sequence_rva,
+        selections,
     })
 }
 #[derive(Debug, Clone)]
@@ -658,6 +733,7 @@ impl GaugeLibrary {
         let mut gauges = Vec::new();
         let mut total_elements = 0;
         let mut total_needle_points = 0;
+        let mut total_selection_records = 0;
         for rva in headers {
             let header = pe.slice(rva, 52)?;
             let version = u32_at(header, 0)?;
@@ -693,6 +769,14 @@ impl GaugeLibrary {
                 .filter_map(|e| e.needle.as_ref())
                 .map(|n| n.curve.len())
                 .sum::<usize>();
+            total_selection_records += elements
+                .iter()
+                .filter_map(|e| e.text.as_ref())
+                .map(|t| t.selections.len())
+                .sum::<usize>();
+            if total_selection_records > MAX_SELECTION_RECORDS {
+                return Err("Library exceeds 65536 native selection records".into());
+            }
             if total_needle_points > MAX_NEEDLE_POINTS {
                 return Err("Library exceeds 65536 native needle table points".into());
             }
@@ -766,6 +850,63 @@ impl GaugeLibrary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selection_tables_resolve_inclusive_ranges_and_clip_short_strings() {
+        let mut b = fixture();
+        b[at(0x1500)..at(0x1500) + 324].fill(0);
+        put16(&mut b, at(0x1500 + 292), 8);
+        rword(&mut b, 0x1500 + 300, BASE + 0x1660);
+        for (i, (state, first, last)) in
+            [(24, 0, 1), (25, 3, 4), (26, 6, 7)].into_iter().enumerate()
+        {
+            for (offset, value) in [(0, state), (4, first), (8, last)] {
+                rword(&mut b, 0x1660 + i as u32 * 12 + offset, value);
+            }
+        }
+        let pe = Pe::parse(&b).unwrap();
+        let text = native_text(&pe, 0x1500, false).unwrap();
+        assert_eq!(text.selections.len(), 3);
+        assert_eq!(text.selected_range(24, 8).unwrap(), Some(0..2));
+        assert_eq!(text.selected_range(25, 8).unwrap(), Some(3..5));
+        assert_eq!(text.selected_range(26, 8).unwrap(), Some(6..8));
+        assert_eq!(text.selected_range(26, 7).unwrap(), Some(6..7));
+        assert_eq!(text.selected_range(26, 6).unwrap(), None);
+        assert_eq!(text.selected_range(24, 0).unwrap(), None);
+        assert_eq!(text.selected_range(0, 8).unwrap(), None);
+        assert_eq!(text.selected_range(999, 8).unwrap(), None);
+        assert!(text.selected_range(-1, 8).is_err());
+        assert!(text.selected_range(24, 9).is_err());
+    }
+    #[test]
+    fn selection_tables_reject_invalid_ranges_duplicates_termination_and_budgets() {
+        for records in [
+            vec![(24, 2, 1)],
+            vec![(24, 0, 8)],
+            vec![(u32::MAX, 0, 1)],
+            vec![(24, 0, 1), (24, 3, 4)],
+            vec![(0, 0, 1)],
+        ] {
+            let mut b = fixture();
+            for (i, (state, first, last)) in records.into_iter().enumerate() {
+                for (offset, value) in [(0, state), (4, first), (8, last)] {
+                    rword(&mut b, 0x1660 + i as u32 * 12 + offset, value);
+                }
+            }
+            assert!(text_selections(&Pe::parse(&b).unwrap(), 0x1660, 8).is_err());
+        }
+        assert!(text_selections(&Pe::parse(&fixture()).unwrap(), 0x1ff8, 8).is_err());
+        // More than 256 distinct states cannot consume an unbounded PE region.
+        let mut b = fixture();
+        b.resize(0x2200, 0);
+        put32(&mut b, 0x98 + 56, 0x3000);
+        for (offset, value) in [(8, 0x2000), (16, 0x2000)] {
+            put32(&mut b, 0x98 + 224 + offset, value);
+        }
+        for i in 0..257 {
+            rword(&mut b, 0x1800 + i * 12, i + 1);
+        }
+        assert!(text_selections(&Pe::parse(&b).unwrap(), 0x1800, 8).is_err());
+    }
     #[test]
     fn native_string_fields_callbacks_and_runtime_pointers_are_distinct() {
         let mut b = fixture();
