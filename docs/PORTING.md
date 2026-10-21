@@ -5,6 +5,49 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 21 October 2026
 
+After `57eed45`, the isolated x86 helper can probe a checked C172 Clock mouse
+callback with the independently declared two-argument stdcall/32-bit BOOL ABI.
+The 28-byte MOUSECALLBACK context carries child-local coordinates, the actual
+gauge header and mouse-record pointers, explicit synthetic screen [0,0] and a
+null reserved field. Its body ends at a NOACCESS page; prefix guards detect
+underruns. Context and guarded string buffers outlive native module teardown.
+The synthetic self-test verifies argument fields/flags/full BOOL return,
+contains a deliberate overflow with exception address/access diagnostics and
+detects prefix damage. The helper build gate requires mouse_context_verified.
+
+`--sample-clock-mouse` accepts only the three encoded left-single C172 Clock
+children, in-bounds integer coordinates and explicit local seconds. It validates
+the complete bounded mouse list/executable callback, initializes/connects the
+original clock, records its baseline string, invokes the native mouse callback,
+and only updates the string afterward if that call completed. Both success and
+contained faults require original disconnect, pointer/header restoration and
+ModuleDeinit before a diagnostic record is emitted. Exit 2 denotes a contained
+native fault, not successful button execution.
+
+`native-mouse-callback-check` resolves children/callbacks from metadata, bounds
+process I/O/time, validates context/cleanup and explicitly distinguishes completed
+calls from contained faults. Three observations under
+`target/native-mouse-callback-check-02/` all contain 0xC0000005 at native RVAs
+0x226e / 0x237e / 0x23be, reading address 0x150. Local callback inspection and the
+published PANELS layout identify a null table access to process_shared_event_out
+(offset 0x150); the original clock also exposes event-size/process-event callbacks
+at RVAs 0x1fd0 / 0x1ff0. Original disassembly stays ignored; no original routine
+implementation is copied. This establishes a missing service dependency, not
+working clock buttons. No service table or private gauge object was fabricated.
+
+160 all-feature Rust test executions pass. Eight invalid mouse probe requests
+are rejected (`target/native-mouse-callback-negative-01.json`), the enhanced x86
+self-test passes, and the existing connected clock/event flight checks retain
+pause/reset/view/ground/helper-close and edited-clock pixel invariants
+(`target/native-mouse-callback-flight-regression-01/`).
+
+Next work is a checked PANELS import/service bridge and original shared-event
+callback delivery, including the required variable lookup semantics, followed by
+screen input routing. Shared-cockpit/local delivery semantics still need careful
+validation. Original-FSX acquisition is deferred; the full 1:1 goal stays active.
+
+### Previous completed mouse metadata/coordinate stage
+
 After `affcc16`, read-only native mouse metadata is available through an explicit
 GaugeLibrary::mouse_rects lookup. Ordinary gauge parsing retains its 52-byte
 header contract; mouse lookup separately requires the 84-byte prefix and reads

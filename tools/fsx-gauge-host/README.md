@@ -205,6 +205,39 @@ checks every field before committing the edited local-time origin. Frame pause
 rules still apply to the current value after an edit. This is an explicit source
 update, not execution of arbitrary native event handlers or PANELS services.
 
+## Guarded C172 mouse probe
+
+```powershell
+cargo run -p fsx-app --example native-mouse-callback-check --locked -- FSX target/fsx-gauge-host.exe target/native-mouse-callbacks
+```
+
+The Rust checker resolves the three mouse-record RVAs from installed metadata.
+Direct helper usage is `--sample-clock-mouse FSX_ROOT MOUSE_RVA LOCAL_SECONDS X Y`.
+Only checked C172 Clock child callbacks with LEFTSINGLE, integer in-bounds
+child-local coordinates and seconds 0..86399 are accepted. The whole mouse list
+and executable callback address are checked. A real clock connect creates its
+private state; the helper never constructs it. The callback receives the actual
+gauge header/record pointers in a guarded 28-byte context, screen [0,0] and null
+reserved. No OS mouse input or panel window is created.
+
+The self-test checks every context field, flags and full-width BOOL return,
+catches an intentional guard-page overflow, records access type/target and
+recognizes prefix overwrite. Build/CI now require mouse_context_verified.
+
+Probe schema 1/source native-mouse-probe distinguishes callback completion
+(exit 0) from contained native fault (exit 2). It records baseline/optional after
+strings, native fault RVA/access details, unchanged-context/guard guarantees and
+original module/gauge cleanup. A failed mouse callback is not followed by a
+string update on potentially partial state. Buffer pointer restoration is checked
+explicitly. Guarded allocations outlive native module deinitialization.
+
+Currently all three C172 calls fault while reading an absent PANELS table at
+0x150, the process_shared_event_out slot. The checker records this as unsupported
+button execution; it does not require faults as a desired successful outcome.
+A future service bridge needs real event-size/process-event delivery and variable
+lookup semantics. No service stubs or private-state changes are used to make the
+probe pass. Numeric/stream/string modes remain separate and retain their schema.
+
 ## What this does not establish
 
 This is an isolated update-call diagnostic, not a complete gauge host. No PANELS

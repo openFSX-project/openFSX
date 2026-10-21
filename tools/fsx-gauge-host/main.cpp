@@ -29,6 +29,7 @@ static_assert(sizeof(void*) == 4, "Native FSX gauges require the x86 helper.");
 using Update = double(__stdcall*)(void*);
 using ModuleCall = void(__stdcall*)();
 using GaugeCall = void(__stdcall*)(void*,int32_t,uint32_t);
+using MouseCall = int32_t(__stdcall*)(void*,uint32_t);
 
 // The public x86 MODULE_VAR layout, independently declared from ABI facts.
 #pragma pack(push, 4)
@@ -42,6 +43,19 @@ struct NumericSlot {
 #pragma pack(pop)
 static_assert(sizeof(NumericSlot) == 28 && offsetof(NumericSlot, value) == 12);
 
+#pragma pack(push,4)
+struct MouseContext {
+    int32_t relative_point[2];
+    void* user_data;
+    void* mouse;
+    int32_t screen_point[2];
+    void* reserved;
+};
+#pragma pack(pop)
+static_assert(sizeof(MouseContext)==28 && offsetof(MouseContext,user_data)==8
+    && offsetof(MouseContext,mouse)==12 && offsetof(MouseContext,screen_point)==16
+    && offsetof(MouseContext,reserved)==24);
+
 static bool invoke(Update fn, void* element, double* result, DWORD* exception) {
     __try { *result = fn(element); return true; }
     __except (EXCEPTION_EXECUTE_HANDLER) { *exception = GetExceptionCode(); return false; }
@@ -53,6 +67,19 @@ static bool invoke_module(ModuleCall fn, DWORD* exception) {
 static bool invoke_gauge(GaugeCall fn,void* header,int32_t service,uint32_t extra,DWORD* exception) {
     __try {fn(header,service,extra);return true;}
     __except(EXCEPTION_EXECUTE_HANDLER){*exception=GetExceptionCode();return false;}
+}
+struct MouseFault {DWORD code=0;uintptr_t address=0;ULONG_PTR operation=0,target=0;bool access=false;};
+static int capture_mouse_fault(EXCEPTION_POINTERS* info,MouseFault* fault) {
+    const auto record=info->ExceptionRecord;fault->code=record->ExceptionCode;
+    fault->address=reinterpret_cast<uintptr_t>(record->ExceptionAddress);
+    if(record->ExceptionCode==EXCEPTION_ACCESS_VIOLATION && record->NumberParameters>=2) {
+        fault->access=true;fault->operation=record->ExceptionInformation[0];fault->target=record->ExceptionInformation[1];
+    }
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+static bool invoke_mouse(MouseCall fn,void* context,uint32_t flags,int32_t* result,MouseFault* fault) {
+    __try {*result=fn(context,flags);return true;}
+    __except(capture_mouse_fault(GetExceptionInformation(),fault)){return false;}
 }
 static std::string hex(uintptr_t value) {
     std::ostringstream s; s << "0x" << std::hex << value; return s.str();
@@ -313,6 +340,28 @@ public:
         auto result=std::string(data,static_cast<size_t>(end-data));json(result);return result;
     }
 };
+// The documented callback context ends at a NOACCESS guard page. Prefix bytes
+// detect underruns; the allocation remains alive through native module teardown.
+class GuardedMouseContext {
+    unsigned char* allocation=nullptr;size_t page=0;
+public:
+    MouseContext* data=nullptr;
+    GuardedMouseContext() {
+        SYSTEM_INFO info{};GetSystemInfo(&info);page=info.dwPageSize;
+        allocation=static_cast<unsigned char*>(VirtualAlloc(nullptr,page*3,MEM_RESERVE,PAGE_NOACCESS));
+        if(!allocation)throw std::runtime_error("Cannot reserve guarded mouse context.");
+        if(!VirtualAlloc(allocation+page,page,MEM_COMMIT,PAGE_READWRITE)){VirtualFree(allocation,0,MEM_RELEASE);allocation=nullptr;throw std::runtime_error("Cannot commit guarded mouse context.");}
+        std::memset(allocation+page,0xa5,page);
+        data=reinterpret_cast<MouseContext*>(allocation+page*2-sizeof(MouseContext));
+        std::memset(data,0,sizeof(MouseContext));
+    }
+    void check() const {
+        for(size_t i=0;i<page-sizeof(MouseContext);++i)if(allocation[page+i]!=0xa5)throw std::runtime_error("Native mouse callback wrote before its context.");
+    }
+    ~GuardedMouseContext(){if(allocation)VirtualFree(allocation,0,MEM_RELEASE);}
+    GuardedMouseContext(const GuardedMouseContext&)=delete;
+    GuardedMouseContext& operator=(const GuardedMouseContext&)=delete;
+};
 struct StringInput { double value;uint64_t payload;const char* kind; };
 class GaugeConnection {
     const Module& module;uintptr_t header;GaugeCall callback=nullptr;uint32_t original=0;bool active=false;
@@ -460,9 +509,59 @@ public:
         std::cout<<R"({"library":"Cessna172.dll","gauge":"Clock","element_rva":)"<<rva
             <<R"(,"tokens":[3,4,5],"max_length":8,"local_seconds":)"<<seconds<<R"(,"guarded_buffer":true,"text":)"<<json(text)<<R"(,"callback_result":)"<<result<<'}';
     }
-    void close(){if(installed){std::memcpy(reinterpret_cast<void*>(element+184),&original_pointer,4);installed=false;}connection.close();}
+    void close(){if(installed){std::memcpy(reinterpret_cast<void*>(element+184),&original_pointer,4);installed=false;}connection.close();
+        if(module.word(element+184)!=original_pointer)throw std::runtime_error("Original string buffer pointer was not restored.");}
     ~ClockBinding(){try{close();}catch(const std::exception& e){std::cerr<<e.what()<<'\n';}}
 };
+static int clock_mouse_sample(const fs::path& root,uint32_t selected_rva,uint32_t seconds,int32_t x,int32_t y) {
+    if(seconds>=86400 || x<0 || y<0)throw std::runtime_error("Invalid clock mouse seconds or child-local point.");
+    GuardedMouseContext context;GuardedTextBuffer text_buffer(8);
+    InitializedModule owner(library_path(root,"Cessna172.dll"));auto& module=owner.module;
+    const auto header=gauge(module,owner.linkage,"Clock");module.check(header,84);
+    const auto list=module.word(header+80);if(!list)throw std::runtime_error("No native C172 clock mouse list.");
+    uintptr_t selected=0;size_t depth=0,children=0;bool ended=false;
+    for(size_t i=0;i<=2048;++i){
+        auto record=static_cast<uintptr_t>(list)+i*44;module.check(record,44);auto kind=module.word(record);
+        if(!kind){if(depth)throw std::runtime_error("Unclosed native mouse parent.");ended=true;break;}
+        if(i==2048 || kind>4)throw std::runtime_error("Invalid or excessive native mouse list.");
+        if(kind==1){if(++depth>32)throw std::runtime_error("Excessive native mouse nesting.");}
+        if(kind==3){if(!depth)throw std::runtime_error("Orphan native mouse end-parent.");--depth;}
+        if(kind==2){if(!depth)throw std::runtime_error("Orphan native mouse child.");++children;}
+        if(record-module.base==selected_rva){if(kind!=2)throw std::runtime_error("Selected mouse RVA is not a child.");selected=record;}
+    }
+    if(!ended || children!=3 || !selected)throw std::runtime_error("Expected the checked three-child C172 clock mouse list.");
+    module.check(header,244);
+    auto event_size=module.word(header+236),process_event=module.word(header+240);
+    module.check(event_size,1,false,true);module.check(process_event,1,false,true);
+    auto flags=module.word(selected+28);auto callback=module.word(selected+36);
+    auto width=static_cast<int32_t>(module.word(selected+12)),height=static_cast<int32_t>(module.word(selected+16));
+    if(flags!=(1u<<29) || module.word(selected+32)!=0 || module.word(selected+40)!=0
+        || width<=0 || height<=0 || width>65536 || height>65536 || x>=width || y>=height)
+        throw std::runtime_error("Only an in-bounds left-single callback in the checked clock profile is supported.");
+    module.check(callback,1,false,true);
+    ClockBinding clock(owner,text_buffer);clock.update(seconds);
+    auto before=clock.text;auto before_result=clock.result;
+    *context.data=MouseContext{{x,y},reinterpret_cast<void*>(header),reinterpret_cast<void*>(selected),{0,0},nullptr};
+    const auto original=*context.data;int32_t result=0;MouseFault fault{};
+    const bool completed=invoke_mouse(reinterpret_cast<MouseCall>(callback),context.data,flags,&result,&fault);
+    context.check();const bool unchanged=std::memcmp(&original,context.data,sizeof(original))==0;
+    std::string after;double after_result=0.;std::ostringstream after_numeric;after_numeric.imbue(std::locale::classic());
+    if(completed){clock.update(seconds);after=clock.text;after_result=clock.result;after_numeric<<std::setprecision(17)<<after_result;}
+    clock.close();if(module.word(header+88)!=0)throw std::runtime_error("Clock private header slot was not restored after mouse probe.");
+    owner.close();
+    std::cout<<std::setprecision(17)<<R"({"schema":1,"source":"native-mouse-probe","pointer_bits":32,"library":"Cessna172.dll","gauge":"Clock","header_rva":)"<<(header-module.base)
+        <<R"(,"event_size_callback_rva":)"<<(event_size-module.base)<<R"(,"process_event_callback_rva":)"<<(process_event-module.base)
+        <<R"(,"mouse_rva":)"<<selected_rva<<R"(,"callback_rva":)"<<(callback-module.base)<<R"(,"mouse_flags":)"<<flags
+        <<R"(,"child_local_point":[)"<<x<<','<<y<<R"(],"screen_point":[0,0],"synthetic_pointer_coordinates":true,"local_seconds":)"<<seconds
+        <<R"(,"mouse_callback_completed":)"<<(completed?"true":"false")<<R"(,"mouse_callback_result":)"<<(completed?std::to_string(result):"null")
+        <<R"(,"native_exception":)"<<fault.code<<R"(,"fault_rva":)"<<(fault.address>=module.base && fault.address-module.base<module.size?std::to_string(fault.address-module.base):"null")
+        <<R"(,"access_operation":)"<<(fault.access?std::to_string(fault.operation):"null")<<R"(,"access_target":)"<<(fault.access?std::to_string(fault.target):"null")
+        <<R"(,"context_unchanged":)"<<(unchanged?"true":"false")
+        <<R"(,"guarded_context":true,"guarded_string":true,"before_text":)"<<json(before)<<R"(,"before_callback_result":)"<<before_result
+        <<R"(,"after_text":)"<<(completed?json(after):"null")<<R"(,"after_callback_result":)"<<(completed?after_numeric.str():"null")
+        <<R"(,"module_init_called":true,"module_deinit_called":true,"gauge_connection_notifications":true,"private_header_slot_restored":true,"string_buffer_restored":true,"panel_window":false,"panel_services":false,"full_gauge_lifecycle":false})"<<'\n';
+    return completed?0:2;
+}
 static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=false,bool clock=false) {
     GuardedTextBuffer clock_buffer(8);
     InitializedModule cessna(library_path(root,"Cessna.dll"));
@@ -554,6 +653,18 @@ static void __stdcall synthetic_gauge_notification(void* state,int32_t service,u
     auto values=static_cast<uint32_t*>(state);values[0]=static_cast<uint32_t>(service)+extra;values[1]=static_cast<uint32_t>(service);++values[2];
 }
 static void __stdcall synthetic_gauge_notification_fault(void*,int32_t,uint32_t) {RaiseException(0xe0420002,0,0,nullptr);}
+static int32_t __stdcall synthetic_mouse(void* value,uint32_t flags) {
+    auto* context=static_cast<MouseContext*>(value);
+    if(context->relative_point[0]!=3 || context->relative_point[1]!=5 || context->screen_point[0]!=11 || context->screen_point[1]!=13
+        || context->mouse!=reinterpret_cast<void*>(0x1234) || context->reserved || flags!=(1u<<29))return 0;
+    auto output=static_cast<uint32_t*>(context->user_data);*output=flags+17;return 0x12345678;
+}
+static int32_t __stdcall synthetic_mouse_overflow(void* value,uint32_t) {
+    static_cast<volatile unsigned char*>(value)[sizeof(MouseContext)]=1;return 0;
+}
+static int32_t __stdcall synthetic_mouse_underflow(void* value,uint32_t) {
+    static_cast<volatile unsigned char*>(value)[-1]=1;return 0;
+}
 static int self_test() {
     double input = 4., result = 0.; DWORD exception = 0;
     if (!invoke(synthetic, &input, &result, &exception) || result != 11.) throw std::runtime_error("Synthetic x86 stdcall result failed.");
@@ -568,6 +679,13 @@ static int self_test() {
     if(!invoke_gauge(synthetic_gauge_notification,gauge_state.data(),14,2,&exception)||gauge_state!=std::array<uint32_t,3>{16,14,1})throw std::runtime_error("Gauge connect callback ABI failed.");
     if(!invoke_gauge(synthetic_gauge_notification,gauge_state.data(),15,0,&exception)||gauge_state!=std::array<uint32_t,3>{15,15,2})throw std::runtime_error("Gauge disconnect callback ABI failed.");
     if(invoke_gauge(synthetic_gauge_notification_fault,gauge_state.data(),14,0,&exception)||exception!=0xe0420002)throw std::runtime_error("Gauge notification exception containment failed.");
+    GuardedMouseContext mouse;uint32_t mouse_output=0;int32_t mouse_result=0;MouseFault mouse_fault{};
+    *mouse.data=MouseContext{{3,5},&mouse_output,reinterpret_cast<void*>(0x1234),{11,13},nullptr};
+    if(!invoke_mouse(synthetic_mouse,mouse.data,1u<<29,&mouse_result,&mouse_fault) || mouse_result!=0x12345678 || mouse_output!=(1u<<29)+17)throw std::runtime_error("Mouse callback context/flags/BOOL ABI failed.");
+    mouse.check();
+    if(invoke_mouse(synthetic_mouse_overflow,mouse.data,0,&mouse_result,&mouse_fault) || mouse_fault.code!=EXCEPTION_ACCESS_VIOLATION || !mouse_fault.access || mouse_fault.operation!=1 || mouse_fault.target!=reinterpret_cast<uintptr_t>(mouse.data)+sizeof(MouseContext))throw std::runtime_error("Mouse context overflow guard/fault reporting failed.");
+    if(!invoke_mouse(synthetic_mouse_underflow,mouse.data,0,&mouse_result,&mouse_fault))throw std::runtime_error("Mouse prefix overwrite fixture failed.");
+    bool mouse_underrun=false;try{mouse.check();}catch(...){mouse_underrun=true;}if(!mouse_underrun)throw std::runtime_error("Mouse context prefix overwrite was not detected.");
     if(string_input(L"u32:0x1825").payload!=0x1825 || string_input(L"f64:2.5").value!=2.5)throw std::runtime_error("String union interpretation failed.");
     for(const wchar_t* bad:{L"1",L"u32:-1",L"u32:4294967296",L"f64:NaN"}){bool rejected=false;try{string_input(bad);}catch(...){rejected=true;}if(!rejected)throw std::runtime_error("Invalid string union input accepted.");}
     if (json("a\\b\"c") != "\"a\\\\b\\\"c\"" || number(L"-2.5") != -2.5) throw std::runtime_error("Protocol scalar/escaping check failed.");
@@ -587,7 +705,7 @@ static int self_test() {
         bool rejected=false;try {parse_frame(bad);} catch (...) {rejected=true;}
         if (!rejected) throw std::runtime_error("Invalid frame input accepted.");
     }
-    std::cout << "{\"schema\":1,\"source\":\"synthetic\",\"pointer_bits\":32,\"stdcall_result\":11,\"exception_contained\":true,\"string_guard_verified\":true,\"gauge_notifications_verified\":true,\"game_loaded\":false}\n";
+    std::cout << "{\"schema\":1,\"source\":\"synthetic\",\"pointer_bits\":32,\"stdcall_result\":11,\"exception_contained\":true,\"string_guard_verified\":true,\"gauge_notifications_verified\":true,\"mouse_context_verified\":true,\"game_loaded\":false}\n";
     return 0;
 }
 int wmain(int argc, wchar_t** argv) {
@@ -603,9 +721,16 @@ int wmain(int argc, wchar_t** argv) {
             size_t end=0;auto rva=std::stoul(argv[5],&end,0);if(!rva || argv[5][end] || argv[5][0]==L'-' || argv[5][0]==L'+')throw std::runtime_error("Invalid string RVA.");
             return string_sample(argv[2],ascii(argv[3]),ascii(argv[4]),rva,{string_input(argv[6]),string_input(argv[7]),string_input(argv[8])},std::wstring(argv[1])==L"--sample-string-connected");
         }
+        if(argc==7 && std::wstring(argv[1])==L"--sample-clock-mouse") {
+            size_t end=0;auto rva=std::stoul(argv[3],&end,0);
+            if(!rva || argv[3][end] || argv[3][0]==L'-' || argv[3][0]==L'+')throw std::runtime_error("Invalid mouse RVA.");
+            auto seconds=number(argv[4]),x=number(argv[5]),y=number(argv[6]);
+            if(seconds<0 || seconds>=86400 || std::floor(seconds)!=seconds || x<0 || x>65536 || std::floor(x)!=x || y<0 || y>65536 || std::floor(y)!=y)throw std::runtime_error("Mouse probe requires integer local seconds and child-local pixel coordinates.");
+            return clock_mouse_sample(argv[2],rva,static_cast<uint32_t>(seconds),static_cast<int32_t>(x),static_cast<int32_t>(y));
+        }
         const bool sample = argc == 7 && std::wstring(argv[1]) == L"--sample";
         if (!sample && !(argc == 5 && std::wstring(argv[1]) == L"--probe"))
-            throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --sample-string[-connected] FSX_ROOT LIBRARY GAUGE ELEMENT_RVA INPUT1 INPUT2 INPUT3 (f64:VALUE or u32:VALUE) | --frames FSX_ROOT | --flight-frames FSX_ROOT | --clock-frames FSX_ROOT | --self-test");
+            throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --sample-string[-connected] FSX_ROOT LIBRARY GAUGE ELEMENT_RVA INPUT1 INPUT2 INPUT3 (f64:VALUE or u32:VALUE) | --frames FSX_ROOT | --flight-frames FSX_ROOT | --clock-frames FSX_ROOT | --sample-clock-mouse FSX_ROOT MOUSE_RVA LOCAL_SECONDS X Y | --self-test");
         auto library = ascii(argv[3]); auto name = ascii(argv[4]);
         uint32_t selected_id = 0; double raw = 0.;
         if (sample) {

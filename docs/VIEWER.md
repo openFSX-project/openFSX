@@ -649,6 +649,27 @@ repeat/drag/capture behavior, installed zero-size subregions or callback service
 are provided. These checks establish coordinates/candidates; original-FSX mouse
 behavior and native button execution still require separate validation.
 
+### Isolated native mouse callback observations
+
+```powershell
+cargo run -p fsx-app --example native-mouse-callback-check --locked -- FSX target/fsx-gauge-host.exe target/native-mouse-callbacks
+```
+
+This separate checker needs the x86 helper built above; its output directory
+must be new. It selects the three C172 Clock callbacks from read-only metadata,
+uses explicit center coordinates and local time 12:34:56, and records bounded
+native observations plus a summary. The tool opens no FSX window and injects
+no OS input. Each call has native connect/disconnect/ModuleInit/ModuleDeinit,
+a guarded mouse context/string buffer and independent parent timeout.
+
+The checker accepts and distinguishes a completed callback and a contained
+native fault; success of the diagnostic command does not mean buttons work.
+Currently all three calls fault on the absent PANELS shared-event service table.
+The reports say callbacks_completed=0, contained_native_faults=3 and
+operational_buttons=false. Event/lookup services, native event delivery and
+screen input routing remain to be implemented. Failed calls never produce a
+fabricated after-string result or a claim of original-FSX input parity.
+
 ## Visibility inspection
 
 VISL conditions link to scene nodes through SGVL. The reader supports direct

@@ -588,6 +588,35 @@ It requires a zero-origin untransformed root, rejects invalid layouts and ignore
 points outside the panel/gauge. This is not a screen-ray/triangle intersection
 or an event dispatch implementation.
 
+### Isolated mouse callback probe
+
+The public x86 MOUSECALLBACK layout is independently represented as 28 bytes:
+relative point at 0/4, gauge-header user_data pointer at 8, mouse-record pointer
+at 12, client/screen point at 16/20 and reserved pointer at 24. Mouse functions
+use two-argument stdcall and a 32-bit BOOL return. The headless checked profile
+uses explicit child-local coordinates, screen [0,0], the actual selected record
+and connected gauge header; it does not invent a window or private gauge state.
+Guard pages and prefix checks surround the context; the buffer remains valid
+through native deinitialization. A synthetic self-test verifies field offsets,
+arguments, full return width, access-violation reporting and prefix detection.
+
+Probe schema 1/source native-mouse-probe records exact metadata/input, baseline
+string, mouse_callback_completed, return or null, native exception/fault RVA and
+access operation/target, context integrity and lifecycle guarantees. After-string
+output is null on a mouse fault; it is not guessed or executed after partial
+native failure. Exit 0 means the callback completed; exit 2 means a contained
+fault with cleanup. Neither establishes operational native input. Event-size/
+process-event addresses are read only in this checked FS1000 helper profile,
+from the header's 236/240 offsets, with an explicit 244-byte extent check.
+
+The [published PANELS/gauge definitions](https://www.prepar3d.com/SDKv2/LearningCenter/simobjects/sample_code/gauges.html)
+and [shared-event API](https://prepar3d.com/SDKv2/LearningCenter/simobjects/panels_and_gauges/programming_c_gauges.html)
+identify process_shared_event_out at x86 table offset 0x150. The sampled clock
+mouse handlers access a missing PANELS pointer there; all three calls currently
+fault and are contained. A correct service bridge needs the original event-size/
+process-event callbacks and supported variable lookup, with explicit delivery
+semantics. No generic stub, fabricated packet or multiplayer behavior is supplied.
+
 ## Reference NDJSON
 
 The separate x86 recorder keeps schema 1 for title/elapsed time and 12 control
