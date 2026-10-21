@@ -3,8 +3,53 @@
 #[derive(Debug, Clone, Copy)]
 pub struct LocalClock {
     start: u32,
+    initial: u32,
+}
+/// Published legacy simulator clock events; payload is used only by SET.
+#[derive(Debug, Clone, Copy)]
+pub enum ClockEvent {
+    HoursDec,
+    HoursInc,
+    MinutesDec,
+    MinutesInc,
+    SecondsZero,
+    HoursSet,
+    MinutesSet,
+}
+impl ClockEvent {
+    pub fn from_name(name: &str) -> Result<Self, String> {
+        match name.to_ascii_uppercase().as_str() {
+            "CLOCK_HOURS_DEC" => Ok(Self::HoursDec),
+            "CLOCK_HOURS_INC" => Ok(Self::HoursInc),
+            "CLOCK_MINUTES_DEC" => Ok(Self::MinutesDec),
+            "CLOCK_MINUTES_INC" => Ok(Self::MinutesInc),
+            "CLOCK_SECONDS_ZERO" => Ok(Self::SecondsZero),
+            "CLOCK_HOURS_SET" => Ok(Self::HoursSet),
+            "CLOCK_MINUTES_SET" => Ok(Self::MinutesSet),
+            _ => Err("Unsupported local clock event".into()),
+        }
+    }
 }
 impl LocalClock {
+    pub fn reset(&mut self) {
+        self.start = self.initial;
+    }
+    pub fn apply(&mut self, event: ClockEvent, data: u32, elapsed: f64) -> Result<(), String> {
+        let current = self.seconds_at(elapsed)?;
+        let seconds = match event {
+            ClockEvent::HoursDec => (current + 86400 - 3600) % 86400,
+            ClockEvent::HoursInc => (current + 3600) % 86400,
+            ClockEvent::MinutesDec => (current + 86400 - 60) % 86400,
+            ClockEvent::MinutesInc => (current + 60) % 86400,
+            ClockEvent::SecondsZero => current - current % 60,
+            ClockEvent::HoursSet if data < 24 => data * 3600 + current % 3600,
+            ClockEvent::MinutesSet if data < 60 => current / 3600 * 3600 + data * 60 + current % 60,
+            _ => return Err("Clock SET payload is outside the hour/minute range".into()),
+        };
+        self.start = (seconds + 86400 - (elapsed.floor() as u64 % 86400) as u32) % 86400;
+        Ok(())
+    }
+
     pub fn parse(value: &str) -> Result<Self, String> {
         let b = value.as_bytes();
         if b.len() != 8
@@ -21,6 +66,7 @@ impl LocalClock {
         }
         Ok(Self {
             start: h * 3600 + m * 60 + s,
+            initial: h * 3600 + m * 60 + s,
         })
     }
     pub fn seconds_at(self, elapsed: f64) -> Result<u32, String> {
@@ -33,6 +79,38 @@ impl LocalClock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clock_events_wrap_preserve_other_fields_and_reject_invalid_sets_atomically() {
+        let mut clock = LocalClock::parse("23:59:59").unwrap();
+        clock.apply(ClockEvent::HoursInc, u32::MAX, 0.75).unwrap();
+        assert_eq!(clock.seconds_at(0.75).unwrap(), 3599);
+        clock.apply(ClockEvent::MinutesInc, 999, 0.75).unwrap();
+        assert_eq!(clock.seconds_at(0.75).unwrap(), 3659);
+        clock.apply(ClockEvent::MinutesDec, 0, 0.75).unwrap();
+        clock.apply(ClockEvent::HoursDec, 0, 0.75).unwrap();
+        assert_eq!(clock.seconds_at(0.75).unwrap(), 86399);
+        clock.apply(ClockEvent::HoursSet, 13, 0.75).unwrap();
+        clock.apply(ClockEvent::MinutesSet, 34, 0.75).unwrap();
+        assert_eq!(clock.seconds_at(0.75).unwrap(), 13 * 3600 + 34 * 60 + 59);
+        clock.apply(ClockEvent::SecondsZero, 0, 0.75).unwrap();
+        let saved = clock.seconds_at(0.75).unwrap();
+        assert_eq!(saved, 13 * 3600 + 34 * 60);
+        assert_eq!(clock.seconds_at(1.).unwrap(), saved + 1);
+        for (event, data) in [
+            (ClockEvent::HoursSet, 24),
+            (ClockEvent::MinutesSet, 60),
+            (ClockEvent::HoursSet, u32::MAX),
+        ] {
+            assert!(clock.apply(event, data, 0.75).is_err());
+            assert_eq!(clock.seconds_at(0.75).unwrap(), saved);
+        }
+        assert!(clock.apply(ClockEvent::HoursInc, 0, f64::NAN).is_err());
+        assert_eq!(clock.seconds_at(0.75).unwrap(), saved);
+        assert!(ClockEvent::from_name("clock_hours_inc").is_ok());
+        assert!(ClockEvent::from_name("CLOCK_SECONDS_SET").is_err());
+        clock.reset();
+        assert_eq!(clock.seconds_at(0.75).unwrap(), 86399);
+    }
     #[test]
     fn clock_rolls_over_at_whole_simulator_seconds_and_rewinds_deterministically() {
         let clock = LocalClock::parse("23:59:59").unwrap();

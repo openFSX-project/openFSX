@@ -456,6 +456,10 @@ public:
         if(module.word(element+184)!=reinterpret_cast<uintptr_t>(buffer.data) || !std::isfinite(result))throw std::runtime_error("Persistent clock pointer/result is invalid.");
         text=buffer.value();previous=values;previous_available=true;
     }
+    void write_json(uint32_t seconds) const {
+        std::cout<<R"({"library":"Cessna172.dll","gauge":"Clock","element_rva":)"<<rva
+            <<R"(,"tokens":[3,4,5],"max_length":8,"local_seconds":)"<<seconds<<R"(,"guarded_buffer":true,"text":)"<<json(text)<<R"(,"callback_result":)"<<result<<'}';
+    }
     void close(){if(installed){std::memcpy(reinterpret_cast<void*>(element+184),&original_pointer,4);installed=false;}connection.close();}
     ~ClockBinding(){try{close();}catch(const std::exception& e){std::cerr<<e.what()<<'\n';}}
 };
@@ -485,7 +489,7 @@ static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=fals
     auto clock_binding=clock?std::make_unique<ClockBinding>(c172,clock_buffer):nullptr;
     std::cout<<"{\"schema\":"<<schema<<",\"source\":\"native-gauge-stream\",\"kind\":\"ready\",\"pointer_bits\":32,\"pid\":"<<GetCurrentProcessId()
         <<",\"libraries_loaded\":"<<(flight?3:2)<<",\"bindings\":"<<count<<",\"panel_services\":false";
-    if(clock)std::cout<<",\"clock_connected\":true,\"string_bindings\":1,\"guarded_buffer\":true";
+    if(clock)std::cout<<",\"clock_connected\":true,\"string_bindings\":1,\"guarded_buffer\":true,\"clock_set\":true";
     std::cout<<'}'<<std::endl;
     uint64_t sequence=0,evaluated=0;double time=-1.;std::array<double,6> inputs{};std::array<double,14> results{};
     uint32_t local_seconds=0;
@@ -493,6 +497,15 @@ static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=fals
     while (true) {
         deadline.idle();bool available=line_bounded(line);deadline.active();
         if (!available || line=="quit") break;
+        if(clock && line.rfind("clock-set ",0)==0) {
+            std::istringstream edit(line);std::string command,extra;uint32_t seconds=0;
+            if(time<0. || !(edit>>command>>seconds) || seconds>=86400 || (edit>>extra))throw std::runtime_error("Clock edit requires an initialized frame and integer seconds 0..86399.");
+            clock_binding->update(seconds);local_seconds=seconds;
+            std::cout<<std::setprecision(17)<<R"({"schema":3,"source":"native-gauge-stream","kind":"clock-set","sequence":)"<<sequence
+                <<R"(,"time":)"<<time<<R"(,"frames_evaluated":)"<<evaluated<<R"(,"clock":)";
+            clock_binding->write_json(local_seconds);std::cout<<'}'<<std::endl;
+            continue;
+        }
         auto frame=parse_frame(line,flight,clock);
         if (frame.sequence!=sequence+1 || frame.time<time) throw std::runtime_error("Stream sequence/time must advance; reset requires a new session.");
         bool reused=frame.time==time;
@@ -513,8 +526,7 @@ static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=fals
             std::cout<<'}';
         }
         std::cout<<']';
-        if(clock_binding)std::cout<<R"(,"clock":{"library":"Cessna172.dll","gauge":"Clock","element_rva":)"<<clock_binding->rva
-            <<R"(,"tokens":[3,4,5],"max_length":8,"local_seconds":)"<<local_seconds<<R"(,"guarded_buffer":true,"text":)"<<json(clock_binding->text)<<R"(,"callback_result":)"<<clock_binding->result<<'}';
+        if(clock_binding){std::cout<<R"(,"clock":)";clock_binding->write_json(local_seconds);}
         std::cout<<'}'<<std::endl;
     }
     if(clock_binding)clock_binding->close();

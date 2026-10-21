@@ -14,9 +14,51 @@ pub struct FlightGauges {
     config: PanelConfig,
     libraries: BTreeMap<String, GaugeLibrary>,
     bases: Vec<(usize, panel::Preview)>,
+    clock_selection: i32,
+    display_dirty: bool,
+    last_clock_time: Option<f64>,
     clock: Option<(fsx_sim::clock::LocalClock, fsx_render::xml_text::GaugeFont)>,
 }
 impl FlightGauges {
+    pub fn select_clock(&mut self, state: i32) -> Result<(), String> {
+        if self.clock.is_none() || ![0, 24, 25, 26].contains(&state) {
+            return Err(
+                "Clock selection requires an enabled clock and none/hours/minutes/seconds state"
+                    .into(),
+            );
+        }
+        let gauge = self.libraries["cessna172"].gauge("Clock")?;
+        let style = gauge
+            .elements
+            .iter()
+            .filter_map(|e| e.text.as_ref())
+            .find(|t| t.tokens == [3, 4, 5])
+            .ok_or("Missing clock selection metadata")?;
+        if state != 0 && style.selected_range(state, 8)?.is_none() {
+            return Err("Installed clock does not define this selection state".into());
+        }
+        self.clock_selection = state;
+        self.display_dirty = true;
+        Ok(())
+    }
+    pub fn clock_event(
+        &mut self,
+        event: fsx_sim::clock::ClockEvent,
+        data: u32,
+        elapsed: f64,
+    ) -> Result<(), String> {
+        let (clock, _) = self
+            .clock
+            .as_mut()
+            .ok_or("Clock events require --native-clock-start")?;
+        let mut edited = *clock;
+        edited.apply(event, data, elapsed)?;
+        self.native
+            .set_clock_seconds(edited.seconds_at(elapsed)?, elapsed)?;
+        *clock = edited;
+        Ok(())
+    }
+
     /// Explicit local-time origin, unselected authored daylight clock styling.
     pub fn with_day_native_clock(
         mut self,
@@ -57,7 +99,7 @@ impl FlightGauges {
         }
         self.native.enable_clock()?;
         self.clock = Some((clock, font));
-        println!("Native clock: explicit local-time origin, installed Quartz, unselected authored daylight style; no timer buttons or FSX pixel parity");
+        println!("Native clock: explicit local-time origin, installed Quartz, authored daylight colors and SEQ_REC selection; no timer buttons or FSX pixel parity");
         Ok(self)
     }
 
@@ -175,6 +217,9 @@ impl FlightGauges {
             libraries,
             bases,
             clock: None,
+            clock_selection: 0,
+            display_dirty: false,
+            last_clock_time: None,
         })
     }
     pub fn pid(&self) -> u32 {
@@ -182,15 +227,33 @@ impl FlightGauges {
     }
     #[allow(dead_code)] // Explicit clock epochs are used by the offline recording consumer.
     pub fn restart(&mut self) -> Result<(), String> {
-        self.native.restart()
+        self.native.restart()?;
+        if let Some((clock, _)) = &mut self.clock {
+            clock.reset();
+        }
+        self.clock_selection = 0;
+        self.last_clock_time = None;
+        self.display_dirty = true;
+        Ok(())
     }
     pub fn update_inputs(&mut self, time: f64, inputs: [f64; 6]) -> Result<Frame, String> {
-        if let Some((clock, _)) = &self.clock {
-            self.native
-                .update_with_clock(time, inputs, Some(clock.seconds_at(time)?))
-        } else {
-            self.native.update(time, inputs)
+        if self.last_clock_time.is_some_and(|last| time < last) {
+            if let Some((clock, _)) = &mut self.clock {
+                clock.reset();
+            }
+            self.clock_selection = 0;
+            self.display_dirty = true;
         }
+        let mut frame = if let Some((clock, _)) = &self.clock {
+            self.native
+                .update_with_clock(time, inputs, Some(clock.seconds_at(time)?))?
+        } else {
+            self.native.update(time, inputs)?
+        };
+        frame.display_changed |= self.display_dirty;
+        self.display_dirty = false;
+        self.last_clock_time = Some(time);
+        Ok(frame)
     }
     pub fn update(&mut self, simulation: &Simulation) -> Result<Frame, String> {
         let telemetry = simulation.telemetry()?;
@@ -349,11 +412,12 @@ impl FlightGauges {
                         .as_ref()
                         .filter(|t| t.tokens == [3, 4, 5] && t.max_length == 8)
                         .ok_or("Native clock style mismatch")?;
-                    let raster = fsx_render::native_text::rasterize_unselected(
+                    let raster = fsx_render::native_text::rasterize_selected(
                         font,
                         style,
                         e.image_flags,
                         &value.text,
+                        self.clock_selection,
                     )?;
                     panel::paint_native_text(
                         &mut preview,

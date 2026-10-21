@@ -196,6 +196,15 @@ The viewer opts in with an explicit `--native-clock-start HH:MM:SS`; its local
 clock advances on simulator elapsed time. Timer/selection buttons, runtime
 colors, electrical/lighting state and full lifecycle services are not supplied.
 
+Schema-3 ready also advertises `clock_set=true`. After at least one frame,
+`clock-set SECONDS_OF_DAY` refreshes only the clock callback, retaining physics
+sequence/time/results and frame count. The acknowledgement has kind clock-set,
+the unchanged context and the guarded clock object. Seconds must be integer
+0..86399; extra/malformed input and edits before the first frame fail. The parent
+checks every field before committing the edited local-time origin. Frame pause
+rules still apply to the current value after an edit. This is an explicit source
+update, not execution of arbitrary native event handlers or PANELS services.
+
 ## What this does not establish
 
 This is an isolated update-call diagnostic, not a complete gauge host. No PANELS

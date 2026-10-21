@@ -43,6 +43,7 @@ pub struct Frame {
     pub sequence: u64,
     pub time: f64,
     pub reused: bool,
+    pub display_changed: bool,
     pub evaluated: u64,
     pub values: Vec<NeedleValue>,
     pub sprites: Vec<SpriteValue>,
@@ -78,6 +79,40 @@ fn packet(line: &str, kind: &str, clock: bool) -> Result<Value, String> {
         return Err("Unexpected native gauge response schema/source/kind".into());
     }
     Ok(v)
+}
+fn decode_clock(c: &Value, seconds: u32) -> Result<ClockValue, String> {
+    if seconds >= 86400 {
+        return Err("Invalid local clock seconds".into());
+    }
+
+    let expected = format!(
+        "{:02}:{:02}:{:02}",
+        seconds / 3600,
+        seconds / 60 % 60,
+        seconds % 60
+    );
+    let element_rva = c["element_rva"]
+        .as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|&n| n != 0)
+        .ok_or("Invalid native clock element RVA")?;
+    if c["library"] != "Cessna172.dll"
+        || c["gauge"] != "Clock"
+        || c["tokens"] != serde_json::json!([3, 4, 5])
+        || c["max_length"] != 8
+        || c["local_seconds"].as_u64() != Some(u64::from(seconds))
+        || c["guarded_buffer"] != true
+        || c["text"].as_str() != Some(expected.as_str())
+        || !c["callback_result"]
+            .as_f64()
+            .is_some_and(|n| close_number(n, f64::from(seconds)))
+    {
+        return Err("Native clock binding, text, guard or input echo mismatch".into());
+    }
+    Ok(ClockValue {
+        element_rva,
+        text: expected,
+    })
 }
 fn decode_frame(
     line: &str,
@@ -178,38 +213,7 @@ fn decode_frame(
         sprites.push(sprite);
     }
     let clock = if let Some(seconds) = clock_seconds {
-        if seconds >= 86400 {
-            return Err("Invalid local clock seconds".into());
-        }
-        let c = &v["clock"];
-        let expected = format!(
-            "{:02}:{:02}:{:02}",
-            seconds / 3600,
-            seconds / 60 % 60,
-            seconds % 60
-        );
-        let element_rva = c["element_rva"]
-            .as_u64()
-            .and_then(|n| u32::try_from(n).ok())
-            .filter(|&n| n != 0)
-            .ok_or("Invalid native clock element RVA")?;
-        if c["library"] != "Cessna172.dll"
-            || c["gauge"] != "Clock"
-            || c["tokens"] != serde_json::json!([3, 4, 5])
-            || c["max_length"] != 8
-            || c["local_seconds"].as_u64() != Some(u64::from(seconds))
-            || c["guarded_buffer"] != true
-            || c["text"].as_str() != Some(expected.as_str())
-            || !c["callback_result"]
-                .as_f64()
-                .is_some_and(|n| close_number(n, f64::from(seconds)))
-        {
-            return Err("Native clock binding, text, guard or input echo mismatch".into());
-        }
-        Some(ClockValue {
-            element_rva,
-            text: expected,
-        })
+        Some(decode_clock(&v["clock"], seconds)?)
     } else {
         if !v["clock"].is_null() {
             return Err("Unexpected native clock result".into());
@@ -220,6 +224,7 @@ fn decode_frame(
         sequence,
         time,
         reused,
+        display_changed: !reused,
         evaluated,
         values: out,
         sprites,
@@ -321,7 +326,8 @@ impl Process {
             || (clock
                 && (ready["clock_connected"] != true
                     || ready["string_bindings"] != 1
-                    || ready["guarded_buffer"] != true))
+                    || ready["guarded_buffer"] != true
+                    || ready["clock_set"] != true))
             || pid != process.child.id()
         {
             return Err("Unexpected native gauge helper capabilities/PID".into());
@@ -403,6 +409,7 @@ pub struct NativeGauges {
     evaluated: u64,
     last: Option<(f64, [f64; 6], Option<u32>)>,
     clock: bool,
+    display_dirty: bool,
 }
 impl NativeGauges {
     pub fn new(helper: &Path, root: &Path) -> Result<Self, String> {
@@ -414,6 +421,7 @@ impl NativeGauges {
             evaluated: 0,
             last: None,
             clock: false,
+            display_dirty: false,
         })
     }
     pub fn enable_clock(&mut self) -> Result<(), String> {
@@ -432,6 +440,38 @@ impl NativeGauges {
         self.sequence = 0;
         self.evaluated = 0;
         self.last = None;
+        self.display_dirty = false;
+        Ok(())
+    }
+    pub fn set_clock_seconds(&mut self, seconds: u32, elapsed: f64) -> Result<(), String> {
+        let (time, _, _) = self
+            .last
+            .ok_or("Clock events require an initialized native frame")?;
+        if !self.clock || seconds >= 86400 || elapsed != time {
+            return Err("Invalid native clock edit/profile".into());
+        }
+        let process = self
+            .process
+            .as_mut()
+            .ok_or("Native gauge session is closed")?;
+        let result = (|| -> Result<(), String> {
+            process.write(&format!("clock-set {seconds}\n"))?;
+            let v = packet(&process.receive()?, "clock-set", true)?;
+            if v["sequence"].as_u64() != Some(self.sequence)
+                || v["frames_evaluated"].as_u64() != Some(self.evaluated)
+                || !v["time"].as_f64().is_some_and(|n| close_number(n, time))
+            {
+                return Err("Native clock edit changed physics frame context".into());
+            }
+            decode_clock(&v["clock"], seconds)?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            self.process.take();
+            return Err(error);
+        }
+        self.last.as_mut().unwrap().2 = Some(seconds);
+        self.display_dirty = true;
         Ok(())
     }
     pub fn update(&mut self, time: f64, inputs: [f64; 6]) -> Result<Frame, String> {
@@ -485,13 +525,15 @@ impl NativeGauges {
                 clock_seconds,
             )
         })();
-        let frame = match result {
+        let mut frame = match result {
             Ok(frame) => frame,
             Err(error) => {
                 self.process.take();
                 return Err(error);
             }
         };
+        frame.display_changed |= self.display_dirty;
+        self.display_dirty = false;
         self.sequence = sequence;
         self.evaluated = evaluated;
         self.last = Some((time, inputs, clock_seconds));

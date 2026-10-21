@@ -5,6 +5,47 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 21 October 2026
 
+After `109bbb7`, the bounded local-time state accepts seven published CLOCK_*
+events: hour/minute increment/decrement, hour/minute set and seconds zero.
+Increment/decrement ignore the payload; SET validates its field range and
+preserves other fields. Events preserve simulator fractional-second phase,
+wrap within the local day and leave the configured reset origin intact.
+Invalid events/payloads/times leave the prior local-time state unchanged.
+
+The persistent schema-3 helper advertises clock_set and accepts `clock-set`
+only after a physics frame exists. This updates just the guarded native clock
+callback at unchanged simulator time, acknowledging the same sequence/time and
+frames_evaluated count. The Rust bridge validates the acknowledgement before
+committing the new local-time origin; stale-time edits fail without mutation.
+Display invalidation is separate from physics reuse, so paused edits and
+SEQ_REC selection changes update cockpit pixels without advancing flight or
+restarting DLLs. Reset explicitly restores origin and deselects even at time zero.
+
+The viewer exposes startup event injection through repeated
+`--clock-event CLOCK_EVENT[:u32]` plus `--native-clock-select
+none|hours|minutes|seconds`, requiring the opt-in local clock. Installed
+Standard.xml contains no direct CLOCK_* binding; no default keyboard shortcut
+has been invented. This is the event/state/render path, not native mouse/input
+routing or general SimConnect event support.
+
+154 all-feature Rust test executions pass, with the x86 synthetic self-test.
+The connected flight check exercises all seven events at paused elapsed 0.75,
+checks native PID/physics reuse and pixel invalidation, rejects invalid SET and
+stale-time edits atomically, checks selected/deselected GPU output and reset at elapsed zero to
+the configured origin (`target/native-clock-events-flight-02/`). Five malformed
+native mutations are rejected (`target/native-clock-events-negative-01.json`).
+The actual viewer startup event/selection command renders a checked cockpit
+snapshot (`target/native-clock-events-viewer-01.ppm`). Existing flight, midnight,
+minute/day wrap, pause, rewind, view, ground and helper-close checks still pass.
+
+Calendar/UTC/timezone and environment lighting are not driven by these local
+time events. Timer buttons, native keyboard/mouse routing, runtime user colors,
+full panel services/lifecycle and FSX pixel equivalence remain absent or
+unverified. Next work is native mouse rectangles/hit testing and input event
+routing. Original-FSX acquisition stays deferred; the full 1:1 goal stays active.
+
+### Previous completed native string selection stage
+
 After `7089893`, native ELEMENT_STRING selection tables are decoded and can
 select authored character ranges for highlighting. Each SEQ_REC has three
 32-bit signed fields (state, first character, last inclusive character); a

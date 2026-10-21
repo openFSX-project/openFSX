@@ -538,6 +538,25 @@ pointer before the three modules deinitialize. The buffer outlives those modules
 Schemas 1/2 are unchanged. This protocol does not supply a calendar, selection
 events, PANELS services or the full gauge lifecycle.
 
+### Local clock event subset
+
+The simulation layer supports the seven local clock events in the
+[published event table](https://www.prepar3d.com/SDKv6/sdk/references/variables/event_ids.html):
+hour/minute increment/decrement/set and seconds zero. SET replaces only its
+bounded field; increments/decrements advance local time with day wrap and ignore
+payload. The whole-second state preserves the simulator's fractional phase.
+Reset restores the original configured origin. Date, UTC, timezone and daylight
+are not synchronized by this subset.
+
+Schema 3 ready advertises clock_set. `clock-set SECONDS_OF_DAY` is accepted only
+after an initial frame, refreshes the guarded native string and acknowledges the
+unchanged sequence/time/physics frame counter plus the checked clock object.
+The parent rejects edits for a different elapsed time and commits local state
+only after acknowledgement. Equal-time frame requests still require unchanged
+physics and the current clock value. A separate display-changed flag allows
+clock/selection edits to repaint during physics reuse. Legacy schemas 1/2 are
+unchanged; this is not a generic native event dispatch service.
+
 ## Reference NDJSON
 
 The separate x86 recorder keeps schema 1 for title/elapsed time and 12 control

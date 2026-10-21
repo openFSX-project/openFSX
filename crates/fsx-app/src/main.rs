@@ -127,7 +127,7 @@ impl App {
             }
             if let Some(gauges) = &mut self.gauges {
                 let frame = gauges.update(&flight.simulation)?;
-                if !frame.reused {
+                if !frame.reused || frame.display_changed {
                     if self.cockpit {
                         gauges.apply(
                             &frame,
@@ -263,6 +263,12 @@ impl ApplicationHandler for App {
                                 self.error = Some(error);
                                 event_loop.exit();
                             }
+                            if let Some(gauges) = &mut self.gauges {
+                                if let Err(error) = gauges.restart() {
+                                    self.error = Some(error);
+                                    event_loop.exit();
+                                }
+                            }
                             self.last_frame = Instant::now();
                         }
                         _ => {}
@@ -393,7 +399,8 @@ fn run() -> Result<(), String> {
         println!("Pose inspector: repeat --pose-var NAME#units#value (XAPS/read-only XAPC; no flight override)");
         println!("Flight views: --cockpit starts inside; F9 virtual cockpit / recenter, F11 exterior; cockpit drag looks around, wheel changes FOV.");
         println!("Experimental Windows C172 instruments: --native-gauges [--gauge-host path/to/fsx-gauge-host.exe]. Five needles plus native attitude/heading sprites, ideal ISA air data and ideal gyros; no RPM, full panel services or needle lag.");
-        println!("Optional native C172 clock: --native-clock-start HH:MM:SS with --native-gauges. Explicit local time advanced by simulation seconds; Quartz daylight styling, timer/selection controls unavailable.");
+        println!("Optional native C172 clock: --native-clock-start HH:MM:SS with --native-gauges. Explicit local time advanced by simulation seconds; Quartz daylight styling; native timer buttons and mouse/keyboard routing unavailable.");
+        println!("Clock controls: repeat --clock-event CLOCK_EVENT[:u32] and --native-clock-select none|hours|minutes|seconds with --native-clock-start. Startup event injection; native mouse/keyboard bindings are not implemented.");
         println!("Optional daylight XML registration plaque: --xml-gauge-font path/to/font.ttf with --native-gauges. Explicit font mapping and pixels-per-em metrics; FSX default font/rasterization parity unverified.");
         return Ok(());
     }
@@ -406,6 +413,8 @@ fn run() -> Result<(), String> {
     let mut gauge_host = None;
     let mut xml_gauge_font = None;
     let mut native_clock = None;
+    let mut clock_events = Vec::new();
+    let mut clock_selection = None;
     let mut menu = false;
     let mut debug_hud = false;
     let mut animation = None;
@@ -419,6 +428,29 @@ fn run() -> Result<(), String> {
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--native-gauges") => native_gauges_enabled = true,
+            Some("--native-clock-select") => {
+                let value = args.next().ok_or("Expected none/hours/minutes/seconds")?;
+                clock_selection = Some(match value.to_str() {
+                    Some("none") => 0,
+                    Some("hours") => 24,
+                    Some("minutes") => 25,
+                    Some("seconds") => 26,
+                    _ => return Err("Expected none/hours/minutes/seconds".into()),
+                });
+            }
+            Some("--clock-event") => {
+                if clock_events.len() >= 128 {
+                    return Err("Too many startup clock events".into());
+                }
+                let value = args.next().ok_or("Expected CLOCK_EVENT[:u32 data]")?;
+                let value = value.to_str().ok_or("Invalid clock event text")?;
+                let (name, data) = value.split_once(':').unwrap_or((value, "0"));
+                let event = fsx_sim::clock::ClockEvent::from_name(name)?;
+                let data = data
+                    .parse::<u32>()
+                    .map_err(|_| "Invalid clock event u32 payload")?;
+                clock_events.push((event, data));
+            }
             Some("--native-clock-start") => {
                 let value = args.next().ok_or("Expected local clock HH:MM:SS")?;
                 native_clock = Some(fsx_sim::clock::LocalClock::parse(
@@ -562,6 +594,8 @@ fn run() -> Result<(), String> {
             || gauge_host.is_some()
             || xml_gauge_font.is_some()
             || native_clock.is_some()
+            || !clock_events.is_empty()
+            || clock_selection.is_some()
             || cockpit
             || ground
             || snapshot.is_some()
@@ -596,6 +630,9 @@ fn run() -> Result<(), String> {
         || (native_clock.is_some() && !native_gauges_enabled)
     {
         return Err("--native-gauges requires Windows --fly with textures; --gauge-host, --xml-gauge-font and --native-clock-start require --native-gauges".into());
+    }
+    if (!clock_events.is_empty() || clock_selection.is_some()) && native_clock.is_none() {
+        return Err("--clock-event and --native-clock-select require --native-clock-start".into());
     }
     let aircraft = if fly {
         Some(Aircraft::load(&path, variant, windows_1252)?)
@@ -885,7 +922,16 @@ fn run() -> Result<(), String> {
             alternate.update(flight)?;
         }
         if let Some(gauges) = &mut gauges {
-            let frame = gauges.update(&flight.simulation)?;
+            let mut frame = gauges.update(&flight.simulation)?;
+            if !clock_events.is_empty() || clock_selection.is_some() {
+                for (event, data) in clock_events {
+                    gauges.clock_event(event, data, flight.simulation.time)?;
+                }
+                if let Some(state) = clock_selection {
+                    gauges.select_clock(state)?;
+                }
+                frame = gauges.update(&flight.simulation)?;
+            }
             if cockpit {
                 gauges.apply(&frame, &model, &mut appearance, None)?;
             } else {

@@ -553,7 +553,7 @@ simulator seconds, wraps at midnight, pauses with flight and returns to the
 origin on reset. The helper maintains one connected C172 clock, writes its
 callback output into a guarded buffer and restores that pointer before native
 disconnect/module teardown. The renderer loads the matching installed Quartz
-font and uses explicitly unselected authored daylight styling. The option
+font and uses authored daylight styling, unselected by default. The option
 requires `--native-gauges`; it does not read or set the host's wall clock.
 
 For reproducible flight/GPU boundaries, include the explicit XML plaque font
@@ -566,9 +566,32 @@ cargo run -p fsx-app --features viewer --example native-gauge-flight-check --loc
 The check covers native session lifetime, flight/pause/reset/view/ground behavior,
 clock second/minute/day transitions and paused/rewound pixel equality while
 holding other instrument results fixed. Calendar, timezone, UTC synchronization,
-timer/selection controls, electrical/lighting changes, full panel services and
+native timer/selection buttons, electrical/lighting changes, full panel services and
 GDI/FSX pixel parity remain unsupported or unverified. Omitting the clock option
 preserves the existing schema-2 flight/replay profile.
+
+### Clock event injection and selection
+
+Repeated `--clock-event CLOCK_EVENT[:u32]` applies supported events after the
+initial native frame, in order. `--native-clock-select` selects none, hours,
+minutes or seconds through the installed SEQ_REC table. Both require
+`--native-clock-start`. For example:
+
+```powershell
+cargo run -p fsx-app --features viewer --bin openfsx-viewer --locked -- FSX/SimObjects/Airplanes/C172 --fly --cockpit --native-gauges --native-clock-start 23:59:59 --clock-event CLOCK_HOURS_SET:13 --clock-event CLOCK_MINUTES_SET:34 --clock-event CLOCK_SECONDS_ZERO --native-clock-select minutes --windows-1252 --seconds 0.1 --snapshot target/clock-events.ppm
+```
+
+Supported names are CLOCK_HOURS_INC/DEC/SET, CLOCK_MINUTES_INC/DEC/SET and
+CLOCK_SECONDS_ZERO. SET uses an unsigned hour 0..23 or minute 0..59; other events
+ignore their payload. Unsupported names/invalid values fail explicitly; at most
+128 startup events are accepted. This is startup injection, with no automatic
+keyboard or mouse binding and no SimConnect service exposed.
+
+The underlying clock event and selection APIs also work while physics is paused:
+only the native clock callback is updated, other instrument results remain
+cached, and dirty display state reaches the GPU. Invalid/stale-time edits leave
+local time unchanged. Reset restores the CLI origin and clears selection.
+Date/UTC/timezone and environment lighting remain outside this local-time subset.
 
 ## Recorded native clock text
 
@@ -596,10 +619,10 @@ requires selected GPU pixels to change, and verifies exact restoration for an
 unrelated state and deselection. The report includes selection tables, raster
 comparisons and an inventory of native strings across the five libraries.
 These are explicit synthetic selection states; the checker dispatches no key
-or mouse events and implements no clock edit controls. Live flight continues
-to use the unselected path.
+or mouse events and implements no clock edit controls. Live flight defaults
+to the unselected path; the explicit clock selection option is described above.
 
-Times are explicit synthetic inputs. Styling is explicitly unselected and
+Times are explicit synthetic inputs. Baseline styling is explicitly unselected and
 uses authored colors; HILITE_LIST events, runtime color overrides, timer buttons,
 electrical/night states, live flight time and full panel services are absent.
 The width rule is implemented with fontdue; GDI/FSX pixel equivalence still

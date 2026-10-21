@@ -230,6 +230,7 @@ fn run() -> Result<(), String> {
         "Reset did not restore initial cockpit pixels",
     )?;
     let mut clock_comparisons = Vec::new();
+    let mut clock_event_reports = Vec::new();
     if local_clock.is_some() {
         ensure(
             first.clock.as_ref().unwrap().text == reset.clock.as_ref().unwrap().text,
@@ -315,6 +316,139 @@ fn run() -> Result<(), String> {
             std::fs::read(path).map_err(|e| e.to_string())? == clock_pixels[0],
             "Clock rewind did not restore the same pixels",
         )?;
+        let edit_time = 0.75;
+        let edit_pid = gauges.pid();
+        for (name, data) in [
+            ("CLOCK_HOURS_SET", 13),
+            ("CLOCK_MINUTES_SET", 34),
+            ("CLOCK_SECONDS_ZERO", 0),
+            ("CLOCK_HOURS_INC", 123),
+            ("CLOCK_MINUTES_INC", 123),
+            ("CLOCK_MINUTES_DEC", 0),
+            ("CLOCK_HOURS_DEC", 0),
+        ] {
+            gauges.clock_event(
+                fsx_sim::clock::ClockEvent::from_name(name)?,
+                data,
+                edit_time,
+            )?;
+            let frame = gauges.update_inputs(edit_time, inputs)?;
+            ensure(
+                frame.reused
+                    && frame.display_changed
+                    && frame.evaluated == 1
+                    && gauges.pid() == edit_pid,
+                "Paused clock edit advanced/restarted physics or failed to invalidate pixels",
+            )?;
+            clock_event_reports.push(serde_json::json!({"event":name,"data":data,"text":frame.clock.as_ref().unwrap().text,"physics_reused":true}));
+        }
+        let edited = gauges.update_inputs(edit_time, inputs)?;
+        ensure(
+            !edited.display_changed && edited.clock.as_ref().unwrap().text == "13:34:00",
+            "Clock events produced the wrong final time",
+        )?;
+        for (event, data) in [
+            (fsx_sim::clock::ClockEvent::HoursSet, 24),
+            (fsx_sim::clock::ClockEvent::MinutesSet, 60),
+        ] {
+            ensure(
+                gauges.clock_event(event, data, edit_time).is_err(),
+                "Invalid clock SET was accepted",
+            )?;
+        }
+        ensure(
+            gauges
+                .clock_event(fsx_sim::clock::ClockEvent::HoursInc, 0, 1.25)
+                .is_err(),
+            "Clock event at a stale physics time was accepted",
+        )?;
+        let unchanged = gauges.update_inputs(edit_time, inputs)?;
+        ensure(
+            unchanged.clock.as_ref().unwrap().text == "13:34:00" && !unchanged.display_changed,
+            "Rejected clock event mutated state",
+        )?;
+        gauges.apply(
+            &edited,
+            &current.model,
+            &mut current.appearance,
+            Some(&mut gpu),
+        )?;
+        let path = output.join("c172-clock-edited.ppm");
+        gpu.snapshot(&orbit, &path)?;
+        let edited_pixels = std::fs::read(path).map_err(|e| e.to_string())?;
+        ensure(
+            edited_pixels != clock_pixels[0],
+            "Clock edit did not change GPU pixels",
+        )?;
+        gauges.select_clock(25)?;
+        let selected = gauges.update_inputs(edit_time, inputs)?;
+        ensure(
+            selected.reused
+                && selected.display_changed
+                && selected.evaluated == 1
+                && gauges.pid() == edit_pid,
+            "Paused selection changed physics/session",
+        )?;
+        gauges.apply(
+            &selected,
+            &current.model,
+            &mut current.appearance,
+            Some(&mut gpu),
+        )?;
+        let path = output.join("c172-clock-edited-selected.ppm");
+        gpu.snapshot(&orbit, &path)?;
+        ensure(
+            std::fs::read(path).map_err(|e| e.to_string())? != edited_pixels,
+            "Paused selection did not reach GPU pixels",
+        )?;
+        gauges.select_clock(0)?;
+        let unselected = gauges.update_inputs(edit_time, inputs)?;
+        gauges.apply(
+            &unselected,
+            &current.model,
+            &mut current.appearance,
+            Some(&mut gpu),
+        )?;
+        let path = output.join("c172-clock-edited-unselected.ppm");
+        gpu.snapshot(&orbit, &path)?;
+        ensure(
+            std::fs::read(path).map_err(|e| e.to_string())? == edited_pixels,
+            "Deselection did not restore edited clock pixels",
+        )?;
+        gauges.restart()?;
+        let restored = gauges.update_inputs(edit_time, inputs)?;
+        gauges.apply(
+            &restored,
+            &current.model,
+            &mut current.appearance,
+            Some(&mut gpu),
+        )?;
+        let path = output.join("c172-clock-edit-reset.ppm");
+        gpu.snapshot(&orbit, &path)?;
+        ensure(
+            std::fs::read(path).map_err(|e| e.to_string())? == clock_pixels[0],
+            "Reset did not restore the configured clock origin",
+        )?;
+        // Reset must also work before simulation time has ever advanced.
+        gauges.restart()?;
+        gauges.update_inputs(0., inputs)?;
+        gauges.clock_event(fsx_sim::clock::ClockEvent::HoursSet, 13, 0.)?;
+        gauges.select_clock(25)?;
+        gauges.update_inputs(0., inputs)?;
+        gauges.restart()?;
+        let zero_reset = gauges.update_inputs(0., inputs)?;
+        gauges.apply(
+            &zero_reset,
+            &current.model,
+            &mut current.appearance,
+            Some(&mut gpu),
+        )?;
+        let path = output.join("c172-clock-edit-zero-reset.ppm");
+        gpu.snapshot(&orbit, &path)?;
+        ensure(
+            std::fs::read(path).map_err(|e| e.to_string())? == clock_pixels[0],
+            "Reset at elapsed zero did not restore origin and clear selection",
+        )?;
     }
     gauges.close()?;
     ensure(gauges.pid() == 0, "Helper remained attached after close")?;
@@ -346,8 +480,8 @@ fn run() -> Result<(), String> {
     ground_gauges.close()?;
     let report = serde_json::json!({"schema":1,"source":"openfsx-native-gauge-flight-check",
         "forward_frames":121,"paused_reuses":10,"changed_rgb_bytes":changed_bytes,
-        "flight_driven_sprites":3,"native_local_clock":local_clock.is_some(),"clock_boundaries":clock_comparisons,
-        "clock_style":"unselected authored daylight","gdi_pixel_parity_verified":false,
+        "flight_driven_sprites":3,"native_local_clock":local_clock.is_some(),"clock_boundaries":clock_comparisons,"clock_events":clock_event_reports,
+        "clock_style":"authored daylight with explicit selection events","gdi_pixel_parity_verified":false,
         "xml_day_plaque":xml_font.is_some(),"xml_font_path":xml_font,"registration":aircraft.registration,
         "reset_restarted_helper":true,"reset_pixels_identical":true,"view_pixels_identical":true,
         "ground_airspeed_knots":ground_airspeed,"full_panel_services":false,"fsx_parity_validated":false});
