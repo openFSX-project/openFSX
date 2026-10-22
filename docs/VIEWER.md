@@ -775,6 +775,25 @@ has no electrical simulation yet. No normal bus voltage is silently supplied.
 Native character/selection limits count ANSI characters; XML text keeps its ASCII
 contract. Full native lifecycle and original-FSX pixel equivalence are unverified.
 
+## Legacy electrical circuit inspection
+
+The installed circuit schema and simulation-owned observation/load state can be
+checked without a window, renderer or original FSX process:
+
+```powershell
+cargo run -p fsx-app --example legacy-electrical-check --locked -- FSX target/legacy-electrical
+```
+
+Use a new output directory. The checked C172 has 17 authored consumer entries;
+source voltage/current parameters are absent and remain unknown. The checker
+supplies explicitly labeled inspection bus values to test thresholds, two
+requested loads, invalid-input atomicity and lifecycle. Its current sums are
+requested maxima of authored consumers, not measured/total aircraft current.
+It never fills MAIN_BUS_VOLTAGE with a nominal example value. Simulation starts
+with unknown electrical observations and holds them until a provider updates or
+clears them. Source generation, battery state, bus distribution and omitted
+legacy defaults still need implementation before this supplies live OAT/V data.
+
 ## Visibility inspection
 
 VISL conditions link to scene nodes through SGVL. The reader supports direct

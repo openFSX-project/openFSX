@@ -836,3 +836,48 @@ The observed OAT strings contain degree signs; actual outputs include 59 F,
 28.0/0.0/99.9 V. The renderer's --oat capture contract verifies all nine native
 observations before drawing; it does not produce sensor values or activate a live
 secondary flight binding. Electrical-bus behavior and FSX GDI parity remain open.
+
+## Authored legacy electrical data and circuit observations
+
+The [Prepar3D legacy aircraft configuration reference](https://www.prepar3d.com/SDKv5/sdk/simulation_objects/aircraft_configuration_files.html)
+and [Microsoft legacy electrical parameter reference](https://docs.flightsimulator.com/html/Content_Configuration/SimObjects/Aircraft_SimO/system/electrical.htm)
+identify the bus/current/minimum-voltage triples and optional source settings.
+The implementation reads declarations actually present in [electrical]; omitted
+SDK circuit defaults and source defaults remain unresolved. An absent source
+scalar is None, while authored zero stays Some(0). Values from SDK examples for
+other aircraft are not used as defaults.
+
+fsx-vehicle::electrical models bus codes 0..7 (main, avionics, battery, hot battery,
+then generator/alternator buses 1..4). Known consumer keys require exactly three
+fields. Numeric values must be finite/nonnegative; implementation bounds are
+1000 V and 1,000,000 A. Source settings preserve optional maximum battery voltage,
+generator voltage/current, numeric 0/1 availability and up to four engine-map
+entries (counts 0..4). These are current reader bounds, not general FSX rating
+limits. Unknown keys/values remain in unsupported metadata. The section budget is
+256 entries, keys 128 bytes and values 4096 bytes. Invalid values do not select a
+normal-voltage fallback. Flight Parameters retain this data; visual-only loading
+does not require an electrical model.
+
+Simulation owns a CircuitNetwork initialized from that schema. All bus readings
+and requested device states start unavailable. Callers may explicitly supply a
+finite observation or clear it with None; known 0 V denotes a deenergized bus.
+Device requests are case-insensitive and must name an authored circuit. A device
+is off when not requested or when a known bus is zero/below its threshold. With a
+known sufficient bus and a true request it is powered; otherwise the result is
+unknown. Exactly-at-minimum is included in this initial bus-fed profile. A
+requested powered consumer contributes its authored maximum amps; an off consumer
+contributes zero; unavailable positive-load demand propagates None to the sum.
+Zero authored maximum contributes known zero even when its state is unavailable.
+
+Snapshot.authored_bus_demand_amps covers only these declared/requested maxima.
+It is not total aircraft load, measured current, source capacity or a generator
+allocation. The caller must supply actual equipment activity/presence; the parser
+does not activate every CFG consumer (for example a fixed-gear aircraft's unused
+gear-motor entry). No implicit electrical source or bus-tie topology is created.
+An explicit always-available override is retained but fails this regular-mode
+circuit evaluation rather than silently pretending bypass semantics.
+
+Invalid observations/requests are atomic. Runtime reset clears observations and
+requests; new simulations start fresh. Ordinary physics stepping does not infer
+voltage from throttle or fabricate battery/generator behavior. Charge, RPM-driven
+generation, overload response, default resolution and FSX parity remain open.

@@ -17,6 +17,7 @@ pub const SLUG_FOOT_SQUARED: f64 = 1.3558179483314;
 
 #[derive(Debug, Clone)]
 pub struct Parameters {
+    pub electrical: crate::electrical::Electrical,
     pub loading: Loading,
     pub wing_area: f64,
     pub span: f64,
@@ -276,6 +277,7 @@ impl Parameters {
             reference_stall: required("reference speeds", "flaps_up_stall_speed", KNOT)?,
             ground_height: required("contact_points", "static_cg_height", FOOT)?,
             engine_position,
+            electrical: crate::electrical::Electrical::from_config(c)?,
             aero,
         };
         if p.power <= 0.
@@ -359,6 +361,7 @@ pub fn own_parameters() -> Parameters {
             ],
         },
         engine_position: [0.; 3],
+        electrical: crate::electrical::Electrical::default(),
         aero: AirFile::parse(&crate::air::own_air())
             .unwrap()
             .dynamics()

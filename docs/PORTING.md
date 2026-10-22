@@ -5,6 +5,48 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 22 October 2026
 
+After `59e362f`, authored legacy electrical data is loaded with flight parameters
+and a circuit-observation runtime is owned by Simulation. The checked C172 CFG
+contains 17 consumer declarations but omits battery voltage, generator voltage
+and generator current capability. They remain None rather than borrowing another
+aircraft's example voltage or treating an absent value as an authored zero.
+The source meanings/bus codes were cross-checked against the published legacy
+SDK references linked in FORMATS.md. Unlisted circuit defaults are not expanded.
+
+The new vehicle parser reads documented bus/amps/minimum-voltage triples, optional
+source scalars, the availability flag and engine-generator counts. It rejects
+malformed/nonfinite/out-of-profile fields and retains unsupported keys. Explicit
+zero scalars stay Some(0). Visual-only aircraft loading remains independent.
+The simulation circuit runtime starts with unknown bus observations and device
+requests. It distinguishes off/deenergized/below-minimum/unknown state, sums only
+requested authored maxima by bus, clears unavailable observations without stale
+values and rejects invalid writes atomically. A known 0 V is distinct from None.
+No source-generation, bus-tie, battery-charge, current-limit/droop or always-power
+bypass algorithm is invented. The latter explicitly fails circuit evaluation.
+
+`legacy-electrical-check` loads the installed C172, checks its 17 authored
+circuits and absent source parameters, then drives explicit inspection bus inputs
+through Simulation. At 17 V the requested pitot/nav-light maxima sum to 7 A;
+below threshold they contribute zero. Losing an observation returns unknown,
+invalid input leaves state unchanged, physics steps do not fabricate a supply,
+and a new simulation starts without old observations. These sums describe only
+the declared requested consumers, not total aircraft current or actual delivered
+power; unmodeled systems are not automatically switched on.
+
+177 all-feature Rust test executions pass. Installed evidence is in
+`target/legacy-electrical-check-02/`; the existing native clock/picking/button/
+GPU/121-frame flight/pause/reset/view/ground regression passes under
+`target/legacy-electrical-flight-regression-01/`. The default native flight stream
+still has only the main clock string; no live bus voltage is claimed.
+
+Next work is source/default resolution and battery/generator state, physical bus
+distribution and actual consumer requests, followed by live OAT/V input binding.
+Electrical generation/dynamics, omitted circuit defaults, source-driven voltage,
+actual-window mouse capture and the full FSX 1:1 objective remain unfinished.
+Original-FSX acquisition remains deferred by the user.
+
+### Previous completed native OAT/V and CP1252 stage
+
 After `5ceed9e`, the secondary C172 Clock element is identified and exercised:
 tokens 341/335/753 are AMBIENT_TEMP_DEGREES_C, DISPLAY_UNITS and MAIN_BUS_VOLTAGE
 in the installed public SDK. The element has a seven-byte maximum, a 33x9

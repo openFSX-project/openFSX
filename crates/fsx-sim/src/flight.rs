@@ -267,6 +267,7 @@ impl AircraftDynamics for Parameters {
 }
 #[derive(Debug)]
 pub struct Simulation {
+    pub electrical: crate::electrical::CircuitNetwork,
     pub parameters: Parameters,
     pub state: State,
     pub controls: Controls,
@@ -373,6 +374,7 @@ impl Simulation {
             ));
         }
         Ok(Self {
+            electrical: crate::electrical::CircuitNetwork::new(parameters.electrical.clone())?,
             parameters,
             state: State {
                 position: [0., 0., -altitude],
