@@ -698,3 +698,51 @@ changes the first main string to " 0:00:00" and performs one token lookup for
 the second. The service-free probe remains available as a fault baseline.
 Local delivery order is a host assumption requiring later reference validation;
 this does not claim operational viewer buttons or original shared-cockpit parity.
+
+### Retained local clock command stream
+
+--clock-local-frames loads one original Cessna172 Clock and emits a
+native-clock-local-stream/schema-1 ready packet with its actual PID, pointer
+width and explicit narrow capabilities. It accepts newline-delimited ASCII:
+
+```
+time SEQUENCE LOCAL_SECONDS
+click SEQUENCE LOCAL_SECONDS CHILD_INDEX
+reset SEQUENCE LOCAL_SECONDS
+quit
+```
+
+Sequences must advance exactly by one from 1 and stop at 4096. Local seconds are
+finite doubles in [0,86400), allowing fractional CLOCK_TOTAL_SECONDS lookup;
+whole HMS source slots are derived by truncating the nonnegative input. Child
+indices 0..2 resolve the actual authored records and centers. Each click arms
+exactly one shared-packet capture, invokes the original mouse handler, then
+passes its guarded packet to the original event handler. Time commands do not
+invoke mouse callbacks. No header-private clock object is synthesized. Native
+callbacks own the mode, format and stopwatch transitions.
+
+State responses echo sequence/generation/command/time, actual element and mouse
+RVAs, text/result, cumulative delivered-event count within the generation and
+per-command lookup count. time_unchanged compares explicit time within the
+current generation; display_changed compares the actual text/result and is true
+for the first state after a reset. Neither flag claims a physics evaluation or
+live GUI repaint. Nonclick mouse fields are null. Guard flags describe context,
+string and event buffers; panel_services/multiplayer/fsx_parity_verified remain
+false. The PANELS time setter rejects pending undelivered events and preserves
+fractional lookup values. Unsupported variable tokens still fail explicitly.
+
+Reset closes/disconnects the old clock, deinitializes/unloads the module and
+restores its import pointer before loading a fresh original module in the same
+helper PID. It increments generation and clears event state. Closed packets
+report the final sequence, module-deinitialization count and checked context,
+string/import restoration. Native operations have a five-second watchdog;
+waiting for the next command disarms only this activity deadline. Input lines
+remain bounded to 512 ASCII bytes; the Rust checker bounds output lines to 4 KiB
+and waits at most 5.5 seconds per response/exit, killing only its owned helper on
+failure. Invalid commands fail before a state transition is emitted.
+
+This explicit local profile checks an advancing stopwatch within one day, pauses,
+stop/reset/start, format changes and native reset. Running across midnight,
+changing the simulation clock while the stopwatch runs, secondary text and
+original-FSX shared-event delivery still require evidence. It is not yet the
+viewer flight bridge or a full PANELS implementation.

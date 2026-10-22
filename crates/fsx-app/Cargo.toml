@@ -68,5 +68,9 @@ required-features = ["viewer"]
 name = "native-mouse-callback-check"
 test = true
 
+[[example]]
+name = "native-clock-session-check"
+test = true
+
 [dev-dependencies]
 fsx-vehicle = { workspace = true, features = ["test-support"] }

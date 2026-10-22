@@ -266,6 +266,35 @@ fabricated. This probe does not enable viewer input, repeated/persistent button
 state, advancing stopwatch inputs or the secondary clock string. Full panel
 services remain absent; the no-service probe above still contains three faults.
 
+The retained local stream keeps the same original gauge/private state between
+commands and supports a complete bounded stopwatch inspection:
+
+```powershell
+cargo run -p fsx-app --example native-clock-session-check --locked -- FSX target/fsx-gauge-host.exe target/native-clock-session
+cargo run -p fsx-app --features viewer --example native-string-render-check --locked -- FSX target/native-clock-session-render target/native-clock-session/samples.ndjson --local-session
+```
+
+Direct --clock-local-frames FSX accepts time/click/reset with a strictly advancing
+sequence (1..4096), explicit finite local seconds [0,86400) and a click child
+index 0..2; quit closes the stream. Numeric tokens must be complete; input remains
+512-byte ASCII bounded. Mouse targets share the checked bounded decoder with the
+one-shot probe, and coordinates are synthetic centers. CLOCK_TOTAL_SECONDS now
+preserves fractional input, while string HMS sources use whole seconds. The
+stream reports actual native text/result, per-command lookup counts, delivered
+packet counts and time/display-change flags. Capture is armed only during a
+mouse invocation and consumes exactly one packet. Reset unloads/reloads the
+original module and increments generation in the same helper process; cleanup
+requires disconnect, ModuleDeinit, string/import restoration and guards. Guarded
+context/string buffers outlive module teardown. clock_commands_verified is a build self-test
+gate for fractional command decoding and malformed request rejection.
+
+Thirty checked states cover stopwatch start, 1.25/61.25-second progress, pause,
+stop/freeze, zero/reset/restart, 12/24-hour format and full native reset. Recorded
+states reach GPU through authored Quartz/placement with pause/stop/reset pixel
+equality. This does not connect live viewer input or the secondary clock string.
+Running midnight and simulation-clock edits still need verification. Broad
+PANELS, multiplayer and original-FSX lifecycle/input/pixel parity are unfinished.
+
 This is an isolated update-call diagnostic, not a complete gauge host. No full PANELS
 import services are supplied; the protocol reports panel_services=false. Gauge
 query/install/initialize/update/generate/draw/kill stages, panel service callbacks,

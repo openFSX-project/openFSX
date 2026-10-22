@@ -26,16 +26,16 @@ class ClockPanels {
     uintptr_t header,import_slot=0;
     unsigned char* table=nullptr;
     size_t table_bytes=0;
-    bool installed=false,delivering=false;
-    uint32_t seconds;
+    bool installed=false,delivering=false,accepting_event=false;
+    double seconds;
     std::string error;
     inline static thread_local ClockPanels* active=nullptr;
     void put(size_t offset,uintptr_t value){uint32_t word=static_cast<uint32_t>(value);std::memcpy(table+offset,&word,4);}
     static bool __stdcall shared(void* gauge_header,unsigned char* packet,uint32_t size) {
         auto self=active;if(!self)return false;
-        if(gauge_header!=reinterpret_cast<void*>(self->header) || !packet || size!=4 || self->events || self->delivering){self->error="Unsupported shared-event context, size or recursion.";return false;}
+        if(!self->accepting_event || gauge_header!=reinterpret_cast<void*>(self->header) || !packet || size!=4 || self->events || self->delivering){self->error="Unsupported shared-event context, size or recursion.";return false;}
         // The caller's packet is consumed synchronously while its stack is alive.
-        std::memcpy(&self->packet_word,packet,4);++self->events;return true;
+        std::memcpy(&self->packet_word,packet,4);++self->events;self->accepting_event=false;return true;
     }
     static void __stdcall lookup(NumericSlot* slot) {
         auto self=active;if(!self)return;
@@ -50,9 +50,9 @@ class ClockPanels {
 public:
     uint32_t events=0,packet_word=0,lookups=0,master_calls=0;
     bool delivered=false,process_result=false;
-    ClockPanels(InitializedModule& owner_,uintptr_t header_,uint32_t seconds_)
+    ClockPanels(InitializedModule& owner_,uintptr_t header_,double seconds_)
         :owner(owner_),module(owner_.module),header(header_),seconds(seconds_) {
-        if(active || seconds>=86400)throw std::runtime_error("Invalid local PANELS profile context.");
+        if(active || !std::isfinite(seconds) || seconds<0 || seconds>=86400)throw std::runtime_error("Invalid local PANELS profile context.");
         auto imports=module.symbol("ImportTable");module.check(imports,16,true);
         if(module.word(imports)!=15 || module.word(imports+4) || module.word(imports+8) || module.word(imports+12))
             throw std::runtime_error("Expected an unbound PANELS-only import table.");
@@ -73,6 +73,11 @@ public:
         std::memcpy(reinterpret_cast<void*>(import_slot),&address,4);installed=true;active=this;
     }
     void check(){if(!error.empty())throw std::runtime_error(error);if(module.word(import_slot)!=reinterpret_cast<uintptr_t>(table))throw std::runtime_error("Native PANELS import pointer changed.");}
+    void set_time(double value){
+        check();if(delivering || (events && !delivered) || !std::isfinite(value) || value<0 || value>=86400)throw std::runtime_error("Invalid local PANELS time or undelivered packet.");
+        seconds=value;lookups=0;master_calls=0;accepting_event=false;
+    }
+    void begin_event(double value){set_time(value);events=0;packet_word=0;delivered=false;process_result=false;accepting_event=true;}
     void deliver() {
         check();if(events!=1 || delivered)throw std::runtime_error("Expected exactly one original mouse packet.");
         GuardedWord packet;packet.set(packet_word);DWORD fault=0;delivering=true;

@@ -515,35 +515,20 @@ public:
     ~ClockBinding(){try{close();}catch(const std::exception& e){std::cerr<<e.what()<<'\n';}}
 };
 #include "clock-panels.hpp"
+#include "clock-mouse.hpp"
+#include "clock-session.hpp"
 static int clock_mouse_sample(const fs::path& root,uint32_t selected_rva,uint32_t seconds,int32_t x,int32_t y,bool local=false) {
     if(seconds>=86400 || x<0 || y<0)throw std::runtime_error("Invalid clock mouse seconds or child-local point.");
     GuardedMouseContext context;GuardedTextBuffer text_buffer(8);
     InitializedModule owner(library_path(root,"Cessna172.dll"));auto& module=owner.module;
-    const auto header=gauge(module,owner.linkage,"Clock");module.check(header,84);
-    const auto list=module.word(header+80);if(!list)throw std::runtime_error("No native C172 clock mouse list.");
-    uintptr_t selected=0;size_t depth=0,children=0;bool ended=false;
-    for(size_t i=0;i<=2048;++i){
-        auto record=static_cast<uintptr_t>(list)+i*44;module.check(record,44);auto kind=module.word(record);
-        if(!kind){if(depth)throw std::runtime_error("Unclosed native mouse parent.");ended=true;break;}
-        if(i==2048 || kind>4)throw std::runtime_error("Invalid or excessive native mouse list.");
-        if(kind==1){if(++depth>32)throw std::runtime_error("Excessive native mouse nesting.");}
-        if(kind==3){if(!depth)throw std::runtime_error("Orphan native mouse end-parent.");--depth;}
-        if(kind==2){if(!depth)throw std::runtime_error("Orphan native mouse child.");++children;}
-        if(record-module.base==selected_rva){if(kind!=2)throw std::runtime_error("Selected mouse RVA is not a child.");selected=record;}
-    }
-    if(!ended || children!=3 || !selected)throw std::runtime_error("Expected the checked three-child C172 clock mouse list.");
-    module.check(header,244);
-    auto event_size=module.word(header+236),process_event=module.word(header+240);
+    const auto header=gauge(module,owner.linkage,"Clock");ClockMouse mouse(module,header);
+    const auto target=mouse.target(selected_rva,x,y);auto selected=target.record,callback=target.callback;auto flags=target.flags;
+    module.check(header,244);auto event_size=module.word(header+236),process_event=module.word(header+240);
     module.check(event_size,1,false,true);module.check(process_event,1,false,true);
-    auto flags=module.word(selected+28);auto callback=module.word(selected+36);
-    auto width=static_cast<int32_t>(module.word(selected+12)),height=static_cast<int32_t>(module.word(selected+16));
-    if(flags!=(1u<<29) || module.word(selected+32)!=0 || module.word(selected+40)!=0
-        || width<=0 || height<=0 || width>65536 || height>65536 || x>=width || y>=height)
-        throw std::runtime_error("Only an in-bounds left-single callback in the checked clock profile is supported.");
-    module.check(callback,1,false,true);
     auto panels=local?std::make_unique<ClockPanels>(owner,header,seconds):nullptr;
     ClockBinding clock(owner,text_buffer);clock.update(seconds);
     auto before=clock.text;auto before_result=clock.result;
+    if(panels)panels->begin_event(seconds);
     *context.data=MouseContext{{x,y},reinterpret_cast<void*>(header),reinterpret_cast<void*>(selected),{0,0},nullptr};
     const auto original=*context.data;int32_t result=0;MouseFault fault{};
     const bool completed=invoke_mouse(reinterpret_cast<MouseCall>(callback),context.data,flags,&result,&fault);
@@ -708,6 +693,11 @@ static int self_test() {
     }
     if(invoke_event_size(synthetic_event_overflow,nullptr,reinterpret_cast<uint32_t*>(event_word.data()),&exception) || exception!=EXCEPTION_ACCESS_VIOLATION)throw std::runtime_error("Event packet overflow guard failed.");
     event_word.data()[-1]=0;bool event_underrun=false;try{event_word.check();}catch(...){event_underrun=true;}if(!event_underrun)throw std::runtime_error("Event packet prefix guard failed.");
+    auto local_command=parse_clock_command("click 17 45296.25 2");
+    if(local_command.name!="click" || local_command.sequence!=17 || local_command.seconds!=45296.25 || local_command.child!=2)throw std::runtime_error("Local clock command decode failed.");
+    for(const char* bad:{"time 0 1","time -1 1","time 4097 1","time 1.5","time 1 1tail","time 1 NaN","time 1 inf","time 1 -1","time 1 86400","time 1 0 extra","click 1 0","click 1 0 -1","click 1 0 3","click 1 0 1.5","click 1 0 2 extra","bogus 1 0","reset 1 0 1"}){
+        bool rejected=false;try{parse_clock_command(bad);}catch(...){rejected=true;}if(!rejected)throw std::runtime_error("Invalid local clock command accepted.");
+    }
     if(string_input(L"u32:0x1825").payload!=0x1825 || string_input(L"f64:2.5").value!=2.5)throw std::runtime_error("String union interpretation failed.");
     for(const wchar_t* bad:{L"1",L"u32:-1",L"u32:4294967296",L"f64:NaN"}){bool rejected=false;try{string_input(bad);}catch(...){rejected=true;}if(!rejected)throw std::runtime_error("Invalid string union input accepted.");}
     if (json("a\\b\"c") != "\"a\\\\b\\\"c\"" || number(L"-2.5") != -2.5) throw std::runtime_error("Protocol scalar/escaping check failed.");
@@ -727,7 +717,7 @@ static int self_test() {
         bool rejected=false;try {parse_frame(bad);} catch (...) {rejected=true;}
         if (!rejected) throw std::runtime_error("Invalid frame input accepted.");
     }
-    std::cout << "{\"schema\":1,\"source\":\"synthetic\",\"pointer_bits\":32,\"stdcall_result\":11,\"exception_contained\":true,\"string_guard_verified\":true,\"gauge_notifications_verified\":true,\"mouse_context_verified\":true,\"event_abi_verified\":true,\"game_loaded\":false}\n";
+    std::cout << "{\"schema\":1,\"source\":\"synthetic\",\"pointer_bits\":32,\"stdcall_result\":11,\"exception_contained\":true,\"string_guard_verified\":true,\"gauge_notifications_verified\":true,\"mouse_context_verified\":true,\"event_abi_verified\":true,\"clock_commands_verified\":true,\"game_loaded\":false}\n";
     return 0;
 }
 int wmain(int argc, wchar_t** argv) {
@@ -736,6 +726,7 @@ int wmain(int argc, wchar_t** argv) {
     try {
         Deadline deadline;
         if (argc == 2 && std::wstring(argv[1]) == L"--self-test") return self_test();
+        if (argc==3 && std::wstring(argv[1])==L"--clock-local-frames") return clock_local_stream(argv[2],deadline);
         if (argc==3 && std::wstring(argv[1])==L"--frames") return frame_stream(argv[2],deadline);
         if (argc==3 && std::wstring(argv[1])==L"--clock-frames") return frame_stream(argv[2],deadline,true,true);
         if (argc==3 && std::wstring(argv[1])==L"--flight-frames") return frame_stream(argv[2],deadline,true);
@@ -752,7 +743,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         const bool sample = argc == 7 && std::wstring(argv[1]) == L"--sample";
         if (!sample && !(argc == 5 && std::wstring(argv[1]) == L"--probe"))
-            throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --sample-string[-connected] FSX_ROOT LIBRARY GAUGE ELEMENT_RVA INPUT1 INPUT2 INPUT3 (f64:VALUE or u32:VALUE) | --frames FSX_ROOT | --flight-frames FSX_ROOT | --clock-frames FSX_ROOT | --sample-clock-mouse[-local] FSX_ROOT MOUSE_RVA LOCAL_SECONDS X Y | --self-test");
+            throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --sample-string[-connected] FSX_ROOT LIBRARY GAUGE ELEMENT_RVA INPUT1 INPUT2 INPUT3 (f64:VALUE or u32:VALUE) | --frames FSX_ROOT | --flight-frames FSX_ROOT | --clock-frames FSX_ROOT | --clock-local-frames FSX_ROOT | --sample-clock-mouse[-local] FSX_ROOT MOUSE_RVA LOCAL_SECONDS X Y | --self-test");
         auto library = ascii(argv[3]); auto name = ascii(argv[4]);
         uint32_t selected_id = 0; double raw = 0.;
         if (sample) {

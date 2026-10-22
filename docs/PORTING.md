@@ -3,7 +3,58 @@
 The target remains FSX 1:1 across interface, flight behavior, content and APIs.
 This is a long-term acceptance target; no subsystem claims complete parity.
 
-## Current stage — 21 October 2026
+## Current stage — 22 October 2026
+
+After `671a5b3`, --clock-local-frames retains one connected original C172 Clock,
+its guarded main string/context, checked mouse metadata and narrow PANELS bridge
+across time/click commands. A bounded explicit local-seconds input now preserves
+fractional seconds for CLOCK_TOTAL_SECONDS lookup; the displayed HMS source
+slots use whole seconds. Original mouse records/callbacks and their own packets
+remain the source of all mode, format and stopwatch state transitions. There is
+no replacement private timer algorithm.
+
+The local stream uses exact sequence numbers (1..4096), explicit seconds in
+[0,86400), and metadata child indices 0..2. Each click uses the authored child's
+center and one left-single activity. Packet capture is armed only for that
+mouse call; unsolicited, duplicate, wrong-header/size and recursive traffic
+fails. Repeated events reset packet bookkeeping without replacing native gauge
+state. Reset disconnects/deinitializes/unloads the old module, restores the
+import pointer and loads/connects a fresh original module in the same helper
+process. Context/string buffers outlive teardown. State packets include dirty/time-unchanged
+flags, actual string/result, lookup/event counters and actual child/element RVAs.
+
+`native-clock-session-check` drives 30 commands in one verified PID with four
+module generations (`target/native-clock-session-check-03/`). Native behavior
+covers mode change, start, 1.25/61.25 seconds of stopwatch progress, identical-time
+pause, stop/freeze, reset, repeat start, 24/12-hour format and native module reset.
+The running stopwatch returns 6125.6 and displays " 0:01:01" at 61.25 seconds;
+stopping preserves both as explicit local time advances. These are observations
+of the original DLL under host-supplied time, not FSX flight captures. Secondary
+clock text and running-stopwatch day wrap/time edits remain unverified.
+
+`native-string-render-check --local-session` renders all 30 captured states plus
+a restored baseline through installed Quartz, actual panel placement and GPU
+(`target/native-clock-session-render-01/`). Mode/progress/format changes affect
+190/45/56 cockpit pixels respectively, confined to the clock display. Paused,
+stopped and reset pairs match exactly, including native reinitialization. The
+rendered stopwatch image was visually inspected. This is recorded-state render
+evidence; live viewer mouse input/invalidation is not connected yet.
+
+163 all-feature Rust test executions pass, along with the guarded helper ABI/
+command self-test. Eighteen malformed/invalid stream commands are rejected
+without emitting a state (`target/native-clock-session-negative-01.json`). The
+previous one-shot local-event probe still completes all three original callbacks.
+The existing 121-frame flight/clock-event/selection/pause/reset/view regression
+passes under `target/native-clock-session-flight-regression-01/`. No original
+assets or routine implementations are committed.
+
+Next work is integrating persistent native button state and fractional clock
+lookup into the flight gauge bridge/renderer, then screen mouse routing. Broad
+PANELS services, secondary text, multiplayer, full gauge lifecycle, original-FSX
+pixel/input parity and the wider 1:1 objective remain unfinished. Original-FSX
+acquisition remains deferred by the user.
+
+### Previous completed isolated local event bridge
 
 After `4ec6d7c`, an opt-in isolated C172 local event bridge binds the checked
 exported PANELS import entry. It resolves ImportTable by export, requires the

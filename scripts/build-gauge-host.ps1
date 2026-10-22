@@ -22,6 +22,6 @@ if ($LASTEXITCODE -ne 0) { throw 'Native x86 gauge helper compilation failed.' }
 $gaugeSelfTest = & $gaugeOutput --self-test
 if ($LASTEXITCODE -ne 0) { throw 'Native gauge helper self-test failed.' }
 $gaugeDecoded = $gaugeSelfTest | ConvertFrom-Json
-if ($gaugeDecoded.schema -ne 1 -or $gaugeDecoded.source -ne 'synthetic' -or $gaugeDecoded.pointer_bits -ne 32 -or $gaugeDecoded.stdcall_result -ne 11 -or -not $gaugeDecoded.exception_contained -or -not $gaugeDecoded.string_guard_verified -or -not $gaugeDecoded.gauge_notifications_verified -or -not $gaugeDecoded.mouse_context_verified -or -not $gaugeDecoded.event_abi_verified -or $gaugeDecoded.game_loaded) { throw 'Unexpected native gauge helper self-test protocol.' }
+if ($gaugeDecoded.schema -ne 1 -or $gaugeDecoded.source -ne 'synthetic' -or $gaugeDecoded.pointer_bits -ne 32 -or $gaugeDecoded.stdcall_result -ne 11 -or -not $gaugeDecoded.exception_contained -or -not $gaugeDecoded.string_guard_verified -or -not $gaugeDecoded.gauge_notifications_verified -or -not $gaugeDecoded.mouse_context_verified -or -not $gaugeDecoded.event_abi_verified -or -not $gaugeDecoded.clock_commands_verified -or $gaugeDecoded.game_loaded) { throw 'Unexpected native gauge helper self-test protocol.' }
 Write-Output $gaugeSelfTest
 Write-Output 'Built independent target/fsx-gauge-host.exe. Self-test uses original synthetic code, no FSX DLL or process.'

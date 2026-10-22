@@ -683,6 +683,32 @@ Persistent button state, advancing stopwatch inputs, secondary clock text,
 screen routing and original-FSX delivery parity remain unfinished. Failed calls
 never produce a fabricated after-string result.
 
+## Retained native clock state and recorded rendering
+
+The separate local clock stream retains the original C172 gauge across time and
+button commands. This checker verifies actual mode/stopwatch/12–24-hour changes,
+fractional local-time lookup, paused/stopped values and module reinitialization:
+
+```powershell
+cargo run -p fsx-app --example native-clock-session-check --locked -- FSX target/fsx-gauge-host.exe target/native-clock-session
+cargo run -p fsx-app --features viewer --example native-string-render-check --locked -- FSX target/native-clock-session-render target/native-clock-session/samples.ndjson --local-session
+```
+
+Use new output directories. The first command runs 30 steps in one hidden helper
+PID, checks four native module generations and requires clean disconnect,
+ModuleDeinit, context/string guards and import-pointer restoration. Original
+mouse packets drive the native clock state; no substitute timer is used. The
+second command renders all captured states and a restored baseline with installed
+Quartz and the actual cockpit placement. Mode/progress/format must change GPU
+pixels; paused, stopped and reset pairs must match exactly. Capture parsing
+requires the checked element metadata, guards and completed teardown.
+
+This is a retained native session plus recorded rendering, not mouse input in
+the live viewer. Live flight integration, picking, secondary clock text and
+stopwatch behavior across midnight or clock edits are still unfinished. The
+viewer keeps its existing explicit local clock/event path until that integration
+is verified. No original-FSX pixel/input parity is claimed.
+
 ## Visibility inspection
 
 VISL conditions link to scene nodes through SGVL. The reader supports direct
