@@ -1,5 +1,7 @@
 //! Explicit source primitives, not an inferred FSX bus topology or default model.
 //! Positive terminal current discharges the battery; negative current charges it.
+use crate::electrical_distribution::Feed;
+use fsx_vehicle::electrical::Bus;
 use fsx_vehicle::electrical::Electrical;
 
 fn bounded(value: Option<f64>, max: f64) -> bool {
@@ -172,6 +174,17 @@ impl Generator {
     /// Availability must come from an engine/regulator provider, not throttle.
     pub fn set_online(&mut self, online: Option<bool>) {
         self.online = online;
+    }
+    /// Feed the explicit distribution solver from this same source state.
+    /// The bus is caller-supplied; legacy engine maps do not define bus ties.
+    pub fn feed(&self, bus: Bus) -> Result<Feed, String> {
+        bus.index()?;
+        Ok(Feed {
+            bus,
+            online: self.online,
+            voltage: self.voltage,
+            capacity_amps: self.capacity_amps,
+        })
     }
     /// Ideal regulated source for known demand within capability. Overload has
     /// no guessed droop curve. Offline means disconnected, not a dead bus.

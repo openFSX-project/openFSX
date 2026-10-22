@@ -5,6 +5,56 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 22 October 2026
 
+After `fac489c`, explicit source distribution is available for a caller-supplied
+complete inventory of up to eight feeds and 28 bus contacts. Closed contacts
+are ideal bidirectional conductors; open contacts isolate groups. A sole known
+online source supplies connected fixed-current requests within its rating, with
+current conservation across the group. All groups without a connected source
+are deenergized only because the caller explicitly declares the full inventory.
+No aircraft graph is synthesized from bus names or engine-generator counts.
+
+Unknown contacts propagate uncertainty through all possibly connected groups;
+redundant unknown contacts within an already connected group do not invalidate
+known paths. Unknown availability/load/rating, overload and parallel sources
+remain unresolved. No source priority, equal sharing, charging path, voltage
+droop, battery internal resistance or automatic consumer activation is invented.
+The solver takes independent constant-current requests, never silently treating
+CFG requested maxima as actual current. This remains an ideal distribution
+profile, not verified FSX electrical behavior.
+
+Generator.feed exports its existing configured ratings and explicit availability
+for the caller-selected bus. CircuitNetwork.distribute solves and publishes all
+eight bus results atomically; invalid input preserves the preceding readings.
+Authored circuit evaluation then observes those bus results normally. Clearing a
+contact observation or demand removes stale resolved voltage; reset clears all
+published distribution. Providers must supply a fresh inventory on each solve.
+Ordinary flight stepping still has no source/default/activity providers and does
+not call the solver or infer C172's missing source parameters/topology.
+
+The installed checker adds seven separately labeled synthetic distribution cases:
+closed main/avionics paths carry 7 A + 5 A from one 28 V / 60 A source; opening
+avionics drops source current to 7 A; opening the main feed isolates both loads.
+Unknown contact/load, overload and an offline generator have distinct expected
+results. These values and wiring are not installed C172 defaults or original-FSX
+measurements. Unit checks additionally cover reverse contact orientation, chains
+of unknown contacts, redundant paths, parallel-source refusal, malformed inputs,
+current conservation, circuit power publication, atomicity and reset.
+
+The next work remains real source/default/activity providers, engine/regulator
+availability and integration with flight time, then live secondary OAT/V binding.
+C172 live electrical generation, battery/load coupling, source sharing/charging,
+FSX voltage behavior and the full 1:1 objective remain unfinished. Original-FSX
+acquisition stays deferred by the user.
+
+189 all-feature Rust test executions pass in
+`target/electrical-distribution-workspace-tests-01.log`. The installed C172 and
+synthetic source/distribution checks pass in
+`target/electrical-distribution-check-01/report.json`. Formatting, architecture
+and generated documentation checks pass. Default flight behavior remains outside
+this explicit solver path; this milestone does not claim new native/GPU parity.
+
+### Previous explicit battery and generator stage
+
 After `2d982d7`, the simulation-owned electrical network also owns explicit
 battery/generator primitives. Authored battery capacity (Ah) and charging-current
 limit are parsed as optional finite nonnegative values, including explicit zero.

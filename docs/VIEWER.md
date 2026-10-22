@@ -794,9 +794,13 @@ with unknown electrical observations and holds them until a provider updates or
 clears them. A separate synthetic fixture checks explicit source primitives:
 40 Ah discharge conservation, a 4 A charge limit, a supplied open-circuit curve,
 generator capacity/overload and reset. These are not installed C172 ratings.
-Sources remain separate from bus observations and ordinary physics stepping.
-Terminal-current allocation, engine/regulator availability, bus distribution and
-omitted legacy defaults still need implementation before live OAT/V binding.
+Seven more synthetic cases check explicit distribution from one generator through
+main/avionics contacts: 12 A combined load, 7 A with avionics isolated, main-feed
+isolation, unknown contact/load, overload and offline supply. The solver publishes
+all bus results atomically; it does not derive the aircraft graph or actual loads.
+Sources/distribution remain separate from ordinary physics stepping. Equipment
+activity, engine/regulator availability, C172 topology and omitted legacy defaults
+still need implementation before live OAT/V binding.
 
 ## Visibility inspection
 

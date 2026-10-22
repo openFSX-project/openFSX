@@ -1,6 +1,7 @@
 //! Legacy circuit loads from known bus observations and explicit device requests.
 //! Explicit source primitives remain separate from bus ties and overload voltage
 //! response: unknown supply/state never becomes normal voltage.
+use crate::electrical_distribution::{self, Contact, Distribution, Feed};
 use crate::electrical_sources::{Battery, Generator};
 use fsx_vehicle::electrical::{Bus, Electrical};
 use std::collections::BTreeMap;
@@ -90,6 +91,20 @@ impl CircuitNetwork {
     }
     pub fn bus_voltage(&self, bus: Bus) -> Result<Option<f64>, String> {
         Ok(self.voltage[bus.index()?])
+    }
+    /// Resolve an explicit complete inventory and publish all bus results
+    /// atomically. Does not use authored circuit maxima as actual load or
+    /// silently select aircraft source ratings/topology. Call only when a
+    /// provider can supply the full inventory, including disconnected buses.
+    pub fn distribute(
+        &mut self,
+        feeds: &[Feed],
+        contacts: &[Contact],
+        requested_amps: [Option<f64>; 8],
+    ) -> Result<Distribution, String> {
+        let result = electrical_distribution::solve(feeds, contacts, requested_amps)?;
+        self.voltage = result.bus_voltage;
+        Ok(result)
     }
     pub fn request(&mut self, circuit: &str, enabled: Option<bool>) -> Result<(), String> {
         if circuit.len() > 128 {
@@ -254,5 +269,45 @@ mod tests {
         assert_eq!(n.battery.open_circuit_voltage(), None);
         n.battery.set_charge_fraction(Some(1.)).unwrap();
         assert_eq!(n.battery.open_circuit_voltage(), Some(24.));
+    }
+    #[test]
+    fn explicit_distribution_is_atomic_and_updates_authored_circuit_power() {
+        let mut n = network();
+        for name in ["pitot_heat", "light_nav", "avionics"] {
+            n.request(name, Some(true)).unwrap();
+        }
+        let config = Electrical {
+            generator_voltage: Some(28.),
+            max_generator_amps: Some(60.),
+            ..Electrical::default()
+        };
+        n.generator = Generator::new(&config).unwrap();
+        n.generator.set_online(Some(true));
+        let contact = Contact {
+            from: Bus::Generator(1),
+            to: Bus::Main,
+            closed: Some(true),
+        };
+        let feeds = [n.generator.feed(Bus::Generator(1)).unwrap()];
+        let mut requests = [Some(0.); 8];
+        requests[0] = Some(7.);
+        let d = n.distribute(&feeds, &[contact], requests).unwrap();
+        assert_eq!(d.feed_amps, vec![Some(7.)]);
+        assert_eq!(n.snapshot().unwrap().authored_bus_demand_amps[0], Some(7.));
+        assert_eq!(n.snapshot().unwrap().authored_bus_demand_amps[1], Some(0.));
+        let before = n.snapshot().unwrap();
+        requests[1] = Some(f64::NAN);
+        assert!(n.distribute(&feeds, &[contact], requests).is_err());
+        assert_eq!(n.snapshot().unwrap(), before);
+        requests[1] = Some(0.);
+        let unknown = Contact {
+            closed: None,
+            ..contact
+        };
+        n.distribute(&feeds, &[unknown], requests).unwrap();
+        assert_eq!(n.bus_voltage(Bus::Main).unwrap(), None);
+        assert_eq!(n.snapshot().unwrap().authored_bus_demand_amps[0], None);
+        n.reset();
+        assert_eq!(n.bus_voltage(Bus::Main).unwrap(), None);
     }
 }

@@ -1,5 +1,6 @@
 //! Installed authored circuit schema and explicit bus-observation runtime check.
 //! No implicit battery/generator voltage or FSX process is used.
+use fsx_sim::electrical_distribution::Contact;
 use fsx_sim::flight::Simulation;
 use fsx_sim::{electrical::CircuitNetwork, electrical_sources::VoltageCurve};
 use fsx_vehicle::{
@@ -181,17 +182,136 @@ fn main() -> Result<(), String> {
         "requested_discharge_amps":10,"discharge_seconds":3600,"average_discharge_amps":discharge.average_terminal_amps,"discharged_fraction":discharged_fraction,
         "requested_charge_amps":-20,"charge_seconds":3600,"average_charge_amps":charge.average_terminal_amps,"charged_fraction":charged_fraction,
         "generator_capacity_amps":60,"regulated_voltage_at_capacity":regulated,"overload_voltage":overloaded,"main_bus_voltage":sources.bus_voltage(Bus::Main)?,"reset_clears_state":true});
-    let report = json!({"schema":2,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
+    let mut distribution_cases = Vec::new();
+    for (
+        name,
+        online,
+        main,
+        avionics,
+        main_load,
+        expected_main,
+        expected_avionics,
+        expected_feed,
+    ) in [
+        (
+            "closed",
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(7.),
+            Some(28.),
+            Some(28.),
+            Some(12.),
+        ),
+        (
+            "avionics_open",
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(7.),
+            Some(28.),
+            Some(0.),
+            Some(7.),
+        ),
+        (
+            "main_open",
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(7.),
+            Some(0.),
+            Some(0.),
+            Some(0.),
+        ),
+        (
+            "main_unknown",
+            Some(true),
+            None,
+            Some(true),
+            Some(7.),
+            None,
+            None,
+            None,
+        ),
+        (
+            "overload",
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(60.),
+            None,
+            None,
+            None,
+        ),
+        (
+            "load_unknown",
+            Some(true),
+            Some(true),
+            Some(true),
+            None,
+            None,
+            None,
+            None,
+        ),
+        (
+            "offline",
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(7.),
+            Some(0.),
+            Some(0.),
+            Some(0.),
+        ),
+    ] {
+        sources.generator.set_online(online);
+        let feeds = [sources.generator.feed(Bus::Generator(1))?];
+        let contacts = [
+            Contact {
+                from: Bus::Generator(1),
+                to: Bus::Main,
+                closed: main,
+            },
+            Contact {
+                from: Bus::Main,
+                to: Bus::Avionics,
+                closed: avionics,
+            },
+        ];
+        let mut requested = [Some(0.); 8];
+        requested[0] = main_load;
+        requested[1] = Some(5.);
+        let d = sources.distribute(&feeds, &contacts, requested)?;
+        ensure(
+            d.bus_voltage[0] == expected_main
+                && d.bus_voltage[1] == expected_avionics
+                && d.feed_amps == vec![expected_feed],
+            "Explicit distribution voltage/current mismatch",
+        )?;
+        ensure(
+            sources.bus_voltage(Bus::Main)? == expected_main,
+            "Distribution was not published",
+        )?;
+        distribution_cases.push(json!({"case":name,"generator_online":online,"main_contact_closed":main,"avionics_contact_closed":avionics,"requested_amps":requested,"bus_voltage":d.bus_voltage,"delivered_amps":d.delivered_amps,"feed_amps":d.feed_amps}));
+    }
+    sources.reset();
+    ensure(
+        sources.bus_voltage(Bus::Main)?.is_none(),
+        "Distribution survived reset",
+    )?;
+    let report = json!({"schema":3,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
         "battery_max_capacity_amph":configuration.battery_max_capacity_amph,"battery_charging_current":configuration.battery_charging_current,
         "generator_voltage":configuration.generator_voltage,"max_generator_amps":configuration.max_generator_amps,"engine_generator_map":configuration.engine_generator_map,"electric_always_available":configuration.always_available,
         "unsupported":configuration.unsupported,"cases":cases,"inputs":"explicit synthetic bus observations and requested authored loads",
-        "synthetic_source_primitives":synthetic_sources,"source_generation":false,"battery_dynamics":false,"sdk_omitted_circuit_defaults_resolved":false,"total_aircraft_current":false,"fsx_parity_verified":false});
+        "synthetic_source_primitives":synthetic_sources,"synthetic_distribution_cases":distribution_cases,
+        "distribution_inputs":"complete synthetic graph and independent constant-current requests; not installed C172 wiring or automatic CFG consumer activation",
+        "installed_source_generation":false,"installed_battery_dynamics":false,"sdk_omitted_circuit_defaults_resolved":false,"total_aircraft_current":false,"fsx_parity_verified":false});
     fs::create_dir(&output).map_err(|e| e.to_string())?;
     fs::write(
         output.join("report.json"),
         serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    println!("PASS: 17 authored circuits, unknown-state propagation, 17 V threshold, source primitive conservation/limits/reset; installed source and bus coupling remain unresolved.");
+    println!("PASS: 17 authored circuits; source conservation/limits/reset; seven explicit distribution cases; installed source providers/topology remain unresolved.");
     Ok(())
 }
