@@ -75,7 +75,7 @@ Source native-string-probe identifies token IDs, input kinds/values, maximum
 length, output text and numeric callback return. String capacity is 1..256 plus
 NUL; the output ends at an inaccessible page, with a checked prefix. The caller
 restores the original output pointer before module deinitialization. Source
-callbacks, pointer replacement, non-ASCII output, oversized/unterminated text,
+callbacks, pointer replacement, non-ASCII output in ASCII profiles, oversized/unterminated text,
 faults and non-finite results fail. The buffer outlives native module teardown.
 The parent Rust checker also bounds output and enforces a ten-second timeout.
 
@@ -328,3 +328,31 @@ values. The vertical-speed callback returned +/-196.8504 for raw inputs +/-256.
 Altimeter resources 1031, 1032 and 1033 returned different results for the same
 raw source inputs. Those observations demonstrate execution of the installed
 functions; they do not prove unit bindings, full gauge lifecycle or FSX parity.
+
+## Secondary OAT/V inspection and CP1252
+
+```powershell
+cargo run -p fsx-app --example native-string-check --locked -- FSX target/fsx-gauge-host.exe target/native-oat --oat
+cargo run -p fsx-app --features viewer --example native-string-render-check --locked -- FSX target/native-oat-render target/native-oat/samples.ndjson --oat
+```
+
+The connected probe also recognizes the checked secondary Clock string with
+[341,335,753] and maximum 7. Slots are explicit f64 ambient Celsius, display-units
+enum (0 English, 1/2 metric) and voltage. Bounds are -273.15..1000 C and 0..99.9 V;
+undefined enum/kind/nonfinite inputs fail. This is inspection, not simulated
+weather or electricity. --sample-string-connected-volts uses the same argument
+shape as --sample-string-connected, but requires this secondary descriptor and
+runs the actual third mouse callback and original packet 2 through the bounded
+local event bridge before updating text. Guarded mouse/string buffers outlive
+native teardown; string and import pointers are restored. Reports include the
+actual mode/packet and context/import guarantees.
+
+Ordinary output remains ASCII-only. Secondary text explicitly decodes printable
+Windows-1252 with MultiByteToWideChar and emits Unicode JSON escapes, preserving
+0xb0 as a degree sign without depending on the process code page. Undefined and
+control bytes fail. The build self-test requires ansi_text_verified. Native
+rasterization counts ANSI characters, converts selection indices safely to UTF-8
+boundaries and checks glyph availability in the matching font. XML painting
+still requires ASCII. Nine checked observations reach GPU with original placement
+and Quartz; the first state restores identical pixels after voltage/degree changes.
+The live flight stream is unchanged and still exposes only the main clock text.

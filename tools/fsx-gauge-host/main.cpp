@@ -103,6 +103,20 @@ static std::string json(const std::string& value) {
     }
     return out + '"';
 }
+// Native ANSI output is decoded explicitly, independent of the host locale.
+// JSON escapes retain an ASCII wire format while preserving printable CP1252.
+static std::string json_ansi(const std::string& value) {
+    std::ostringstream out;out<<'"';
+    for(unsigned char byte:value){
+        char raw=static_cast<char>(byte);wchar_t ch=0;
+        if(MultiByteToWideChar(1252,MB_ERR_INVALID_CHARS,&raw,1,&ch,1)!=1 || ch<32 || (ch>=127 && ch<160))
+            throw std::runtime_error("Native ANSI output contains an undefined/control character.");
+        if(ch=='"' || ch=='\\')out<<'\\'<<static_cast<char>(ch);
+        else if(ch<127)out<<static_cast<char>(ch);
+        else out<<"\\u"<<std::hex<<std::setfill('0')<<std::setw(4)<<static_cast<uint32_t>(ch)<<std::dec;
+    }
+    out<<'"';return out.str();
+}
 static bool equal_ascii(std::string a, std::string b) {
     auto lower = [](unsigned char c) -> char { return static_cast<char>(c >= 'A' && c <= 'Z' ? c + ('a'-'A') : c); };
     std::transform(a.begin(), a.end(), a.begin(), lower);
@@ -334,11 +348,11 @@ public:
     ~GuardedTextBuffer(){if(allocation)VirtualFree(allocation,0,MEM_RELEASE);}
     GuardedTextBuffer(const GuardedTextBuffer&)=delete;
     GuardedTextBuffer& operator=(const GuardedTextBuffer&)=delete;
-    std::string value() const {
+    std::string value(bool ansi=false) const {
         for(size_t i=0;i<page-capacity;++i)if(allocation[page+i]!=0xa5)throw std::runtime_error("Native string callback wrote before its output buffer.");
         auto end=static_cast<const char*>(std::memchr(data,0,capacity));
         if(!end)throw std::runtime_error("Native string output exceeds declared length or lacks NUL.");
-        auto result=std::string(data,static_cast<size_t>(end-data));json(result);return result;
+        auto result=std::string(data,static_cast<size_t>(end-data));if(ansi)json_ansi(result);else json(result);return result;
     }
 };
 // The documented callback context ends at a NOACCESS guard page. Prefix bytes
@@ -394,42 +408,7 @@ static StringInput string_input(const wchar_t* raw) {
     if(text.rfind(L"u32:",0)==0){auto value_text=text.substr(4);if(value_text.empty() || value_text[0]==L'-' || value_text[0]==L'+')throw std::runtime_error("Invalid unsigned string slot.");size_t end=0;int base=value_text.rfind(L"0x",0)==0 || value_text.rfind(L"0X",0)==0?16:10;auto value=std::stoull(value_text,&end,base);if(end!=value_text.size() || value>UINT32_MAX)throw std::runtime_error("String integer slot exceeds u32.");return {static_cast<double>(value),value,"u32"};}
     throw std::runtime_error("String inputs require explicit f64:VALUE or u32:VALUE union interpretation.");
 }
-static int string_sample(const fs::path& root,const std::string& library,const std::string& name,uint32_t rva,const std::array<StringInput,3>& inputs,bool connected=false) {
-    // Buffer precedes module lifetime so native deinitialization cannot outlive it.
-    GuardedTextBuffer buffer(256);
-    InitializedModule owner(library_path(root,library));auto& module=owner.module;
-    auto header=gauge(module,owner.linkage,name);uintptr_t selected=0;
-    for(auto element:elements(module,header))if(element-module.base==rva && module.word(element)==2)selected=element;
-    if(!selected)throw std::runtime_error("No selected string RVA in the gauge graph.");
-    module.check(selected,324,true);
-    auto maximum=module.word(selected+292)&0xffff;
-    if(!maximum || maximum>256)throw std::runtime_error("Selected native string length is outside 1..256.");
-    buffer.reset(maximum);
-    auto callback=module.word(selected+312);module.check(callback,1,false,true);
-    for(size_t i=0;i<3;++i)if(module.word(selected+168+i*4))throw std::runtime_error("String source callbacks are unsupported by explicit-input sampling.");
-    std::array<uint32_t,3> tokens{};
-    for(size_t i=0;i<3;++i){tokens[i]=module.word(selected+60+i*28);module.check(selected+72+i*28,16,true);std::memcpy(reinterpret_cast<void*>(selected+72+i*28),&inputs[i].payload,8);std::memcpy(reinterpret_cast<void*>(selected+80+i*28),&inputs[i].payload,8);}
-    GaugeConnection connection(module,header);
-    if(connected){
-        if(!equal_ascii(library,"Cessna172.dll") || !equal_ascii(name,"Clock") || tokens!=std::array<uint32_t,3>{3,4,5} || maximum!=8)
-            throw std::runtime_error("Headless connect is limited to the checked C172 clock/time string.");
-        for(size_t i=0;i<3;++i)if(std::string(inputs[i].kind)!="f64" || inputs[i].value<0. || inputs[i].value>=(i==0?24.:60.) || std::floor(inputs[i].value)!=inputs[i].value)
-            throw std::runtime_error("Connected clock inputs require integer f64 hours 0..23 and minutes/seconds 0..59.");
-        connection.connect();
-    }
-    auto original=module.word(selected+184);auto pointer=buffer.data;std::memcpy(reinterpret_cast<void*>(selected+184),&pointer,4);
-    double result=0.;DWORD exception=0;
-    const bool success=invoke(reinterpret_cast<Update>(callback),reinterpret_cast<void*>(selected),&result,&exception);
-    const bool pointer_unchanged=module.word(selected+184)==reinterpret_cast<uintptr_t>(pointer);
-    std::memcpy(reinterpret_cast<void*>(selected+184),&original,4);
-    if(!success)throw std::runtime_error("Native string callback failed or needs unsupported services: "+hex(exception));
-    if(!pointer_unchanged || !std::isfinite(result))throw std::runtime_error("Native string callback changed its buffer or returned a non-finite value.");
-    auto text=buffer.value();connection.close();
-    if(connected && module.word(header+88)!=0)throw std::runtime_error("Gauge user_data was not restored after disconnect.");
-    owner.close();
-    std::cout<<std::setprecision(17)<<"{\"schema\":1,\"source\":\"native-string-probe\",\"pointer_bits\":32,\"library\":"<<json(library)<<",\"gauge\":"<<json(name)<<",\"element_rva\":"<<rva<<",\"tokens\":["<<tokens[0]<<','<<tokens[1]<<','<<tokens[2]<<"],\"raw_inputs\":["<<inputs[0].value<<','<<inputs[1].value<<','<<inputs[2].value<<"],\"input_kinds\":["<<json(inputs[0].kind)<<','<<json(inputs[1].kind)<<','<<json(inputs[2].kind)<<"],\"max_length\":"<<maximum<<",\"callback_result\":"<<result<<",\"text\":"<<json(text)<<",\"module_init_called\":true,\"module_deinit_called\":true,\"guarded_buffer\":true,\"gauge_connection_notifications\":"<<(connected?"true":"false")<<",\"private_state_created_by_original\":"<<(connected?"true":"false")<<",\"panel_window\":false,\"panel_services\":false,\"full_gauge_lifecycle\":false}\n";
-    return 0;
-}
+
 struct Binding {
     InitializedModule* owner;
     const char* library;
@@ -517,6 +496,60 @@ public:
 #include "clock-panels.hpp"
 #include "clock-mouse.hpp"
 #include "clock-session.hpp"
+static int string_sample(const fs::path& root,const std::string& library,const std::string& name,uint32_t rva,const std::array<StringInput,3>& inputs,bool connected=false,bool volts=false) {
+    // Buffer precedes module lifetime so native deinitialization cannot outlive it.
+    GuardedMouseContext context;GuardedTextBuffer buffer(256);
+    InitializedModule owner(library_path(root,library));auto& module=owner.module;
+    auto header=gauge(module,owner.linkage,name);uintptr_t selected=0;
+    for(auto element:elements(module,header))if(element-module.base==rva && module.word(element)==2)selected=element;
+    if(!selected)throw std::runtime_error("No selected string RVA in the gauge graph.");
+    module.check(selected,324,true);
+    auto maximum=module.word(selected+292)&0xffff;
+    if(!maximum || maximum>256)throw std::runtime_error("Selected native string length is outside 1..256.");
+    buffer.reset(maximum);
+    auto callback=module.word(selected+312);module.check(callback,1,false,true);
+    for(size_t i=0;i<3;++i)if(module.word(selected+168+i*4))throw std::runtime_error("String source callbacks are unsupported by explicit-input sampling.");
+    std::array<uint32_t,3> tokens{};
+    for(size_t i=0;i<3;++i){tokens[i]=module.word(selected+60+i*28);module.check(selected+72+i*28,16,true);std::memcpy(reinterpret_cast<void*>(selected+72+i*28),&inputs[i].payload,8);std::memcpy(reinterpret_cast<void*>(selected+80+i*28),&inputs[i].payload,8);}
+    std::unique_ptr<ClockPanels> panels;
+    GaugeConnection connection(module,header);
+    const bool secondary=connected && tokens==std::array<uint32_t,3>{341,335,753} && maximum==7;
+    if(volts && !secondary)throw std::runtime_error("Voltage sampling requires the connected secondary C172 string.");
+    if(connected){
+        if(!equal_ascii(library,"Cessna172.dll") || !equal_ascii(name,"Clock") || (!secondary && (tokens!=std::array<uint32_t,3>{3,4,5} || maximum!=8)))
+            throw std::runtime_error("Headless connect is limited to checked C172 time/OAT strings.");
+        if(secondary){
+            for(const auto& input:inputs)if(std::string(input.kind)!="f64")throw std::runtime_error("OAT inputs require explicit f64 slots.");
+            if(inputs[0].value< -273.15 || inputs[0].value>1000 || inputs[1].value<0 || inputs[1].value>2 || std::floor(inputs[1].value)!=inputs[1].value || inputs[2].value<0 || inputs[2].value>99.9)
+                throw std::runtime_error("OAT probe requires bounded temperature, display-units enum 0..2 and explicit voltage 0..99.9.");
+        }else for(size_t i=0;i<3;++i)if(std::string(inputs[i].kind)!="f64" || inputs[i].value<0. || inputs[i].value>=(i==0?24.:60.) || std::floor(inputs[i].value)!=inputs[i].value)
+            throw std::runtime_error("Connected clock inputs require integer f64 hours 0..23 and minutes/seconds 0..59.");
+        if(volts)panels=std::make_unique<ClockPanels>(owner,header,0);
+        connection.connect();
+        if(volts){
+            ClockMouse mouse(module,header);auto mouse_rva=mouse.rva(2);auto target=mouse.target(mouse_rva,0,0);
+            *context.data=MouseContext{{target.width/2,target.height/2},reinterpret_cast<void*>(header),reinterpret_cast<void*>(target.record),{0,0},nullptr};
+            auto original_context=*context.data;int32_t mouse_result=0;MouseFault fault{};panels->begin_event(0);
+            if(!invoke_mouse(reinterpret_cast<MouseCall>(target.callback),context.data,target.flags,&mouse_result,&fault))throw std::runtime_error("OAT/V native mouse callback failed: "+hex(fault.code));
+            context.check();if(mouse_result!=1 || std::memcmp(context.data,&original_context,sizeof(original_context)))throw std::runtime_error("OAT/V mouse context/result changed.");
+            panels->deliver();if(panels->packet_word!=2)throw std::runtime_error("Unexpected OAT/V original packet.");
+        }
+    }
+    auto original=module.word(selected+184);auto pointer=buffer.data;std::memcpy(reinterpret_cast<void*>(selected+184),&pointer,4);
+    double result=0.;DWORD exception=0;
+    const bool success=invoke(reinterpret_cast<Update>(callback),reinterpret_cast<void*>(selected),&result,&exception);
+    const bool pointer_unchanged=module.word(selected+184)==reinterpret_cast<uintptr_t>(pointer);
+    std::memcpy(reinterpret_cast<void*>(selected+184),&original,4);
+    if(!success)throw std::runtime_error("Native string callback failed or needs unsupported services: "+hex(exception));
+    if(!pointer_unchanged || !std::isfinite(result))throw std::runtime_error("Native string callback changed its buffer or returned a non-finite value.");
+    auto text=buffer.value(secondary);connection.close();
+    if(module.word(selected+184)!=original)throw std::runtime_error("Sample string buffer pointer was not restored.");
+    if(connected && module.word(header+88)!=0)throw std::runtime_error("Gauge user_data was not restored after disconnect.");
+    owner.close();if(panels){context.check();panels->close();}
+    std::cout<<std::setprecision(17)<<"{\"schema\":1,\"source\":\"native-string-probe\",\"pointer_bits\":32,\"library\":"<<json(library)<<",\"gauge\":"<<json(name)<<",\"element_rva\":"<<rva<<",\"tokens\":["<<tokens[0]<<','<<tokens[1]<<','<<tokens[2]<<"],\"raw_inputs\":["<<inputs[0].value<<','<<inputs[1].value<<','<<inputs[2].value<<"],\"input_kinds\":["<<json(inputs[0].kind)<<','<<json(inputs[1].kind)<<','<<json(inputs[2].kind)<<"],\"max_length\":"<<maximum<<",\"callback_result\":"<<result<<",\"text\":"<<(secondary?json_ansi(text):json(text))<<",\"secondary_mode\":"<<(secondary?json(volts?"volts":"oat"):"null")<<",\"original_packet_word\":"<<(volts?"2":"null")<<",\"mouse_event_dispatched\":"<<(volts?"true":"false")<<",\"local_event_bridge\":"<<(volts?"true":"false")<<",\"mouse_context_verified\":"<<(volts?"true":"false")<<",\"import_pointer_restored\":"<<(volts?"true":"false")<<",\"text_encoding\":"<<json(secondary?"windows-1252":"ascii")<<",\"string_buffer_restored\":true,\"module_init_called\":true,\"module_deinit_called\":true,\"guarded_buffer\":true,\"gauge_connection_notifications\":"<<(connected?"true":"false")<<",\"private_state_created_by_original\":"<<(connected?"true":"false")<<",\"panel_window\":false,\"panel_services\":false,\"full_gauge_lifecycle\":false}\n";
+    return 0;
+}
+
 static int clock_mouse_sample(const fs::path& root,uint32_t selected_rva,uint32_t seconds,int32_t x,int32_t y,bool local=false) {
     if(seconds>=86400 || x<0 || y<0)throw std::runtime_error("Invalid clock mouse seconds or child-local point.");
     GuardedMouseContext context;GuardedTextBuffer text_buffer(8);
@@ -681,6 +714,12 @@ static void __stdcall synthetic_event_size(void* header,uint32_t* size){if(heade
 static bool __stdcall synthetic_process_event(void* header,unsigned char* packet){uint32_t word;std::memcpy(&word,packet,4);return header==reinterpret_cast<void*>(0x1234) && word==0xabcdef01;}
 static void __stdcall synthetic_event_overflow(void*,uint32_t* size){size[1]=4;}
 static int self_test() {
+    const std::string degree="-40\xb0 C";
+    if(json_ansi(degree)!="\"-40\\u00b0 C\"" || json_ansi(std::string(1,static_cast<char>(0x80)))!="\"\\u20ac\"")throw std::runtime_error("Explicit CP1252 JSON conversion failed.");
+    for(uint32_t byte:{0x01,0x7f,0x81,0x8d,0x8f,0x90,0x9d}){bool rejected=false;try{json_ansi(std::string(1,static_cast<char>(byte)));}catch(...){rejected=true;}if(!rejected)throw std::runtime_error("Undefined/control ANSI character accepted.");}
+    GuardedTextBuffer ansi(7);std::memcpy(ansi.data,degree.c_str(),degree.size()+1);
+    if(ansi.value(true)!=degree)throw std::runtime_error("Guarded ANSI text failed.");
+    bool ascii_rejected=false;try{ansi.value();}catch(...){ascii_rejected=true;}if(!ascii_rejected)throw std::runtime_error("ANSI text silently entered an ASCII profile.");
     double input = 4., result = 0.; DWORD exception = 0;
     if (!invoke(synthetic, &input, &result, &exception) || result != 11.) throw std::runtime_error("Synthetic x86 stdcall result failed.");
     if (invoke(synthetic_fault, &input, &result, &exception) || exception != 0xe0420001) throw std::runtime_error("Structured exception containment failed.");
@@ -735,7 +774,7 @@ static int self_test() {
         bool rejected=false;try {parse_frame(bad);} catch (...) {rejected=true;}
         if (!rejected) throw std::runtime_error("Invalid frame input accepted.");
     }
-    std::cout << "{\"schema\":1,\"source\":\"synthetic\",\"pointer_bits\":32,\"stdcall_result\":11,\"exception_contained\":true,\"string_guard_verified\":true,\"gauge_notifications_verified\":true,\"mouse_context_verified\":true,\"event_abi_verified\":true,\"clock_commands_verified\":true,\"game_loaded\":false}\n";
+    std::cout << "{\"schema\":1,\"source\":\"synthetic\",\"pointer_bits\":32,\"stdcall_result\":11,\"exception_contained\":true,\"string_guard_verified\":true,\"gauge_notifications_verified\":true,\"mouse_context_verified\":true,\"event_abi_verified\":true,\"clock_commands_verified\":true,\"ansi_text_verified\":true,\"game_loaded\":false}\n";
     return 0;
 }
 int wmain(int argc, wchar_t** argv) {
@@ -748,9 +787,9 @@ int wmain(int argc, wchar_t** argv) {
         if (argc==3 && std::wstring(argv[1])==L"--frames") return frame_stream(argv[2],deadline);
         if (argc==3 && std::wstring(argv[1])==L"--clock-frames") return frame_stream(argv[2],deadline,true,true);
         if (argc==3 && std::wstring(argv[1])==L"--flight-frames") return frame_stream(argv[2],deadline,true);
-        if(argc==9 && (std::wstring(argv[1])==L"--sample-string" || std::wstring(argv[1])==L"--sample-string-connected")) {
+        if(argc==9 && (std::wstring(argv[1])==L"--sample-string" || std::wstring(argv[1])==L"--sample-string-connected" || std::wstring(argv[1])==L"--sample-string-connected-volts")) {
             size_t end=0;auto rva=std::stoul(argv[5],&end,0);if(!rva || argv[5][end] || argv[5][0]==L'-' || argv[5][0]==L'+')throw std::runtime_error("Invalid string RVA.");
-            return string_sample(argv[2],ascii(argv[3]),ascii(argv[4]),rva,{string_input(argv[6]),string_input(argv[7]),string_input(argv[8])},std::wstring(argv[1])==L"--sample-string-connected");
+            return string_sample(argv[2],ascii(argv[3]),ascii(argv[4]),rva,{string_input(argv[6]),string_input(argv[7]),string_input(argv[8])},std::wstring(argv[1])!=L"--sample-string",std::wstring(argv[1])==L"--sample-string-connected-volts");
         }
         if(argc==7 && (std::wstring(argv[1])==L"--sample-clock-mouse" || std::wstring(argv[1])==L"--sample-clock-mouse-local")) {
             size_t end=0;auto rva=std::stoul(argv[3],&end,0);
@@ -761,7 +800,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         const bool sample = argc == 7 && std::wstring(argv[1]) == L"--sample";
         if (!sample && !(argc == 5 && std::wstring(argv[1]) == L"--probe"))
-            throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --sample-string[-connected] FSX_ROOT LIBRARY GAUGE ELEMENT_RVA INPUT1 INPUT2 INPUT3 (f64:VALUE or u32:VALUE) | --frames FSX_ROOT | --flight-frames FSX_ROOT | --clock-frames FSX_ROOT | --clock-local-frames FSX_ROOT | --sample-clock-mouse[-local] FSX_ROOT MOUSE_RVA LOCAL_SECONDS X Y | --self-test");
+            throw std::runtime_error("Usage: fsx-gauge-host --probe FSX_ROOT LIBRARY GAUGE | --sample FSX_ROOT LIBRARY GAUGE NEEDLE_RESOURCE_ID RAW_VALUE | --sample-string[-connected[-volts]] FSX_ROOT LIBRARY GAUGE ELEMENT_RVA INPUT1 INPUT2 INPUT3 (f64:VALUE or u32:VALUE) | --frames FSX_ROOT | --flight-frames FSX_ROOT | --clock-frames FSX_ROOT | --clock-local-frames FSX_ROOT | --sample-clock-mouse[-local] FSX_ROOT MOUSE_RVA LOCAL_SECONDS X Y | --self-test");
         auto library = ascii(argv[3]); auto name = ascii(argv[4]);
         uint32_t selected_id = 0; double raw = 0.;
         if (sample) {

@@ -751,6 +751,30 @@ the live viewer. Secondary clock text and
 stopwatch behavior across midnight or clock edits are still unfinished. The flight profile now integrates persistent native buttons through startup/local
 API input as described above; direct left-press screen routing is now connected as described above. No original-FSX pixel/input parity is claimed.
 
+## Recorded secondary OAT/voltage display
+
+The original C172 secondary text can now be inspected with explicit temperature,
+units and voltage slots, including its original third-button switch to volts:
+
+```powershell
+cargo run -p fsx-app --example native-string-check --locked -- FSX target/fsx-gauge-host.exe target/native-oat --oat
+cargo run -p fsx-app --features viewer --example native-string-render-check --locked -- FSX target/native-oat-render target/native-oat/samples.ndjson --oat
+```
+
+Use new output directories. Nine observations cover Fahrenheit/Celsius, native
+clamping and three voltages. The helper preserves original degree bytes through
+explicit Windows-1252 JSON conversion; the painter uses actual Quartz glyphs and
+authored secondary placement. Voltage mode is reached with the original mouse
+handler/packet, with guarded context and verified import/string restoration.
+All rendered states must differ as expected and returning to the first must
+restore identical pixels.
+
+This is explicit-input/recorded rendering. The default live flight profile still
+renders only the main clock text: ISA temperature is available, while bus voltage
+has no electrical simulation yet. No normal bus voltage is silently supplied.
+Native character/selection limits count ANSI characters; XML text keeps its ASCII
+contract. Full native lifecycle and original-FSX pixel equivalence are unverified.
+
 ## Visibility inspection
 
 VISL conditions link to scene nodes through SGVL. The reader supports direct

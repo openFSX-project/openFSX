@@ -132,6 +132,23 @@ impl GaugeFont {
         text: &fsx_vehicle::xml_text::TextElement,
         spans: &[Span],
     ) -> Result<(), String> {
+        self.paint_spans_profile(image, text, spans, false)
+    }
+    pub(crate) fn paint_ansi_spans(
+        &self,
+        image: &mut Image,
+        text: &fsx_vehicle::xml_text::TextElement,
+        spans: &[Span],
+    ) -> Result<(), String> {
+        self.paint_spans_profile(image, text, spans, true)
+    }
+    fn paint_spans_profile(
+        &self,
+        image: &mut Image,
+        text: &fsx_vehicle::xml_text::TextElement,
+        spans: &[Span],
+        ansi: bool,
+    ) -> Result<(), String> {
         let mut glyphs = Vec::new();
         let mut width = 0f32;
         let mut previous = None;
@@ -143,8 +160,14 @@ impl GaugeFont {
                     .ok_or("Text selects an absent alternate color")?,
             };
             for ch in span.text.chars() {
-                if !ch.is_ascii() || ch.is_control() {
-                    return Err("XML rasterizer currently requires single-line ASCII text".into());
+                if !(if ansi {
+                    ansi_printable(ch)
+                } else {
+                    ch.is_ascii() && !ch.is_control()
+                }) {
+                    return Err(
+                        "Rasterizer character is outside the selected ASCII/CP1252 profile".into(),
+                    );
                 }
                 if !self.font.has_glyph(ch) {
                     return Err(format!("Selected font lacks glyph {ch:?}"));
@@ -281,6 +304,41 @@ fn aligned(align: Align, space: f32) -> f32 {
         Align::Center => space / 2.,
         Align::End => space,
     }
+}
+pub(crate) fn ansi_printable(ch: char) -> bool {
+    (ch.is_ascii() && !ch.is_control())
+        || matches!(
+            ch,
+            '\u{a0}'
+                ..='\u{ff}'
+                    | '€'
+                    | '‚'
+                    | 'ƒ'
+                    | '„'
+                    | '…'
+                    | '†'
+                    | '‡'
+                    | 'ˆ'
+                    | '‰'
+                    | 'Š'
+                    | '‹'
+                    | 'Œ'
+                    | 'Ž'
+                    | '‘'
+                    | '’'
+                    | '“'
+                    | '”'
+                    | '•'
+                    | '–'
+                    | '—'
+                    | '˜'
+                    | '™'
+                    | 'š'
+                    | '›'
+                    | 'œ'
+                    | 'ž'
+                    | 'Ÿ'
+        )
 }
 pub(crate) fn source_over(target: &mut [u8], color: [u8; 3], coverage: u8) {
     let a = u32::from(coverage);

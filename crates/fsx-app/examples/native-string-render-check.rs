@@ -157,15 +157,96 @@ fn session_samples(text: &str, rva: u32) -> Result<Vec<Value>, String> {
     Ok(records[..30].to_vec())
 }
 
+fn oat_samples(text: &str, rva: u32) -> Result<Vec<Value>, String> {
+    if text.len() > 65536 {
+        return Err("OAT record budget exceeded".into());
+    }
+    let rows: Vec<Value> = text
+        .lines()
+        .map(|line| {
+            if line.len() > 4096 {
+                Err("OAT line budget exceeded".into())
+            } else {
+                serde_json::from_str(line).map_err(|e| e.to_string())
+            }
+        })
+        .collect::<Result<_, _>>()?;
+    let cases = [
+        ([15., 0., 28.], " 59° F", 59.),
+        ([-40., 1., 28.], "-40° C", -40.),
+        ([15., 2., 0.], " 15° C", 15.),
+        ([37.8, 0., 24.], "100° F", 100.04),
+        ([-273.15, 1., 28.], "-99° C", -99.),
+        ([1000., 0., 28.], "999° F", 999.),
+        ([15., 0., 28.], " 28.0 V", 28.),
+        ([15., 0., 0.], " 0.0 V", 0.),
+        ([15., 0., 99.9], " 99.9 V", 99.9),
+    ];
+    if rows.len() != cases.len() {
+        return Err("Expected nine OAT/voltage observations".into());
+    }
+    for (index, (row, (input, text, result))) in rows.iter().zip(cases).enumerate() {
+        let volts = index >= 6;
+        if row["schema"] != 1
+            || row["source"] != "native-string-probe"
+            || row["pointer_bits"] != 32
+            || row["library"] != "Cessna172.dll"
+            || row["gauge"] != "Clock"
+            || row["element_rva"] != rva
+            || row["tokens"] != json!([341, 335, 753])
+            || row["max_length"] != 7
+            || row["input_kinds"] != json!(["f64", "f64", "f64"])
+            || !row["raw_inputs"].as_array().is_some_and(|v| {
+                v.len() == 3 && v.iter().zip(input).all(|(v, n)| v.as_f64() == Some(n))
+            })
+            || row["text"] != text
+            || row["text_encoding"] != "windows-1252"
+            || row["secondary_mode"] != if volts { "volts" } else { "oat" }
+            || row["mouse_event_dispatched"] != volts
+            || row["local_event_bridge"] != volts
+            || (volts
+                && (row["original_packet_word"] != 2
+                    || row["mouse_context_verified"] != true
+                    || row["import_pointer_restored"] != true))
+            || !row["callback_result"]
+                .as_f64()
+                .is_some_and(|n| (n - result).abs() < 1e-9)
+        {
+            return Err("OAT metadata/input/text mismatch".into());
+        }
+        for key in [
+            "module_init_called",
+            "module_deinit_called",
+            "guarded_buffer",
+            "gauge_connection_notifications",
+            "private_state_created_by_original",
+            "string_buffer_restored",
+        ] {
+            if row[key] != true {
+                return Err(format!("Missing OAT guarantee: {key}"));
+            }
+        }
+        for key in ["panel_window", "panel_services", "full_gauge_lifecycle"] {
+            if row[key] != false {
+                return Err(format!("Unexpected OAT context: {key}"));
+            }
+        }
+    }
+    Ok(rows)
+}
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if !(3..=4).contains(&args.len())
-        || (args.len() == 4 && args[3] != "--selection-check" && args[3] != "--local-session")
+        || (args.len() == 4
+            && args[3] != "--selection-check"
+            && args[3] != "--local-session"
+            && args[3] != "--oat")
     {
-        return Err("Usage: native-string-render-check <local FSX root> <new output directory> <clock NDJSON> [--selection-check | --local-session]".into());
+        return Err("Usage: native-string-render-check <local FSX root> <new output directory> <clock NDJSON> [--selection-check | --local-session | --oat]".into());
     }
     let selection_check = args.len() == 4 && args[3] == "--selection-check";
     let local_session = args.len() == 4 && args[3] == "--local-session";
+    let oat = args.len() == 4 && args[3] == "--oat";
     let root = PathBuf::from(&args[0]);
     let output = PathBuf::from(&args[1]);
     let mut bytes = Vec::new();
@@ -193,20 +274,27 @@ fn run() -> Result<(), String> {
     let candidates: Vec<_> = gauge
         .elements
         .iter()
-        .filter(|e| e.kind == 2 && e.text.as_ref().is_some_and(|s| s.tokens == [3, 4, 5]))
+        .filter(|e| {
+            e.kind == 2
+                && e.text
+                    .as_ref()
+                    .is_some_and(|s| s.tokens == if oat { [341, 335, 753] } else { [3, 4, 5] })
+        })
         .collect();
     if candidates.len() != 1 {
         return Err("Expected a unique C172 main clock string".into());
     }
     let element = candidates[0];
     let style = element.text.as_ref().unwrap();
-    if style.max_length != 8
+    if style.max_length != if oat { 7 } else { 8 }
         || style.source_callbacks.iter().any(Option::is_some)
         || style.update_callback_rva.is_none()
     {
         return Err("Unsupported C172 clock descriptor".into());
     }
-    let records = if local_session {
+    let records = if oat {
+        oat_samples(text, element.rva)?
+    } else if local_session {
         session_samples(text, element.rva)?
     } else {
         samples(text, element.rva)?
@@ -231,7 +319,7 @@ fn run() -> Result<(), String> {
     let mut snapshots = Vec::new();
     let mut rasters = Vec::new();
     let mut selection_reports = Vec::new();
-    let mut cases = if local_session {
+    let mut cases = if local_session || oat {
         (0..records.len())
             .map(|index| (index, 0))
             .chain([(0, 0)])
@@ -360,11 +448,19 @@ fn run() -> Result<(), String> {
     {
         return Err("Unexpected GPU snapshot format".into());
     }
-    if snapshots[0] != snapshots[if local_session { records.len() } else { 3 }] {
+    if snapshots[0]
+        != snapshots[if local_session || oat {
+            records.len()
+        } else {
+            3
+        }]
+    {
         return Err("Restoring the first clock state changed pixels".into());
     }
     let mut comparisons = Vec::new();
-    let pairs: Vec<_> = if local_session {
+    let pairs: Vec<_> = if oat {
+        (1..records.len()).map(|i| (i - 1, i)).collect()
+    } else if local_session {
         for (a, b) in [
             (4, 5),
             (6, 7),
@@ -449,6 +545,7 @@ fn run() -> Result<(), String> {
         "states":reports,"gpu_comparisons":comparisons,"restored_pixels_identical":true,
         "synthetic_time_inputs":true,"authored_style_only":true,"gdi_pixel_parity_verified":false,
         "recorded_local_session":local_session,"session_pause_stop_reset_pixels_verified":local_session,
+        "recorded_oat":oat,"native_encoding":if oat {"windows-1252"}else{"ascii"},
         "selection_check":selection_check,"synthetic_selection_states":selection_check,
         "selection_sequence_rva":style.selection_sequence_rva,"selection_table":selection_table,
         "selection_rasters":selection_reports,"native_string_inventory":inventory,
@@ -469,6 +566,52 @@ fn main() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn oat_records_require_encoding_original_switch_packets_and_cleanup() {
+        let cases = [
+            ([15., 0., 28.], " 59° F", 59.),
+            ([-40., 1., 28.], "-40° C", -40.),
+            ([15., 2., 0.], " 15° C", 15.),
+            ([37.8, 0., 24.], "100° F", 100.04),
+            ([-273.15, 1., 28.], "-99° C", -99.),
+            ([1000., 0., 28.], "999° F", 999.),
+            ([15., 0., 28.], " 28.0 V", 28.),
+            ([15., 0., 0.], " 0.0 V", 0.),
+            ([15., 0., 99.9], " 99.9 V", 99.9),
+        ];
+        let rows:Vec<_>=cases.into_iter().enumerate().map(|(index,(inputs,text,result))| {
+            let volts=index>=6;
+            json!({"schema":1,"source":"native-string-probe","pointer_bits":32,"library":"Cessna172.dll","gauge":"Clock",
+                "element_rva":100,"tokens":[341,335,753],"max_length":7,"input_kinds":["f64","f64","f64"],"raw_inputs":inputs,
+                "text":text,"callback_result":result,"text_encoding":"windows-1252","secondary_mode":if volts {"volts"}else{"oat"},
+                "mouse_event_dispatched":volts,"local_event_bridge":volts,"original_packet_word":if volts {Some(2)}else{None},
+                "mouse_context_verified":volts,"import_pointer_restored":volts,"module_init_called":true,"module_deinit_called":true,
+                "guarded_buffer":true,"gauge_connection_notifications":true,"private_state_created_by_original":true,"string_buffer_restored":true,
+                "panel_window":false,"panel_services":false,"full_gauge_lifecycle":false})
+        }).collect();
+        let encode = |rows: &[Value]| rows.iter().map(|r| format!("{r}\n")).collect::<String>();
+        assert_eq!(oat_samples(&encode(&rows), 100).unwrap().len(), 9);
+        assert!(oat_samples(&encode(&rows), 101).is_err());
+        assert!(oat_samples(&encode(&rows[..8]), 100).is_err());
+        for (index, key) in [
+            (0, "text_encoding"),
+            (0, "tokens"),
+            (0, "input_kinds"),
+            (0, "raw_inputs"),
+            (0, "guarded_buffer"),
+            (0, "string_buffer_restored"),
+            (0, "secondary_mode"),
+            (6, "mouse_event_dispatched"),
+            (6, "original_packet_word"),
+            (6, "import_pointer_restored"),
+            (6, "mouse_context_verified"),
+            (6, "module_deinit_called"),
+        ] {
+            let mut bad = rows.clone();
+            bad[index][key] = Value::Null;
+            assert!(oat_samples(&encode(&bad), 100).is_err(), "{index} {key}");
+        }
+    }
     fn fixture() -> String {
         [([0,0,0],"00:00:00",0),([12,34,56],"12:34:56",45296),([23,59,59],"23:59:59",86399)]
             .into_iter().map(|(input,text,result)| json!({"schema":1,"source":"native-string-probe",

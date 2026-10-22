@@ -5,6 +5,51 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 22 October 2026
 
+After `5ceed9e`, the secondary C172 Clock element is identified and exercised:
+tokens 341/335/753 are AMBIENT_TEMP_DEGREES_C, DISPLAY_UNITS and MAIN_BUS_VOLTAGE
+in the installed public SDK. The element has a seven-byte maximum, a 33x9
+regular Quartz descriptor and its own original callback. Native connect supplies
+the real private state. Six explicit OAT cases prove English/metric display and
+native formatting/clamping; three voltage cases use the original third mouse
+handler and its own packet 2, delivered through the existing checked local event
+bridge. No private state or event packet is synthesized.
+
+A missing encoding path was exposed: the original temperature strings contain
+ANSI byte 0xb0. The helper now explicitly decodes printable Windows-1252 through
+the Windows code-page API and emits JSON Unicode escapes on the ASCII wire.
+Undefined/control bytes still fail; ordinary ASCII profiles remain strict.
+Native rasterization counts decoded ANSI characters rather than UTF-8 bytes and
+uses character-safe selection boundaries. Only the native font-paint path gains
+printable CP1252; XML text remains ASCII. Missing font glyphs still fail. The
+build gate adds ansi_text_verified with degree/euro, undefined/control rejection
+and guarded ANSI-buffer checks.
+
+`native-string-check --oat` records nine guarded original callbacks under
+`target/native-oat-check-02/`: 59 F, -40 C, 15 C, 100 F, native endpoint clamps
+-99/999 and 28.0/0.0/99.9 V. Temperature strings retain their degree glyph.
+Voltage records additionally require the original packet, native context and
+import restoration. `native-string-render-check --oat` paints all nine captured
+strings through authored placement/Quartz into cockpit GPU pixels and restores
+the first state identically (`target/native-oat-render-02/`). The degree-bearing
+render was visually inspected. All sensor values in these probes are explicit
+inspection inputs, not simulated electrical measurements.
+
+172 all-feature Rust test executions pass. Eight invalid OAT requests are
+rejected without a sample (`target/native-oat-negative-01.json`). Existing main
+clock and Nav-Comm probes, the SEQ_REC selection/GPU regression and the complete
+flight/picking/button/pause/reset/ground/clock-event checker pass under the
+native-oat-* evidence directories. No installed font/DLL/asset is committed.
+
+Next work is wiring secondary environmental inputs into live flight with honest
+variable availability: ISA temperature already exists, but MAIN_BUS_VOLTAGE
+requires electrical state (or an explicitly declared inspection input), not an
+invented normal voltage. The default flight stream still emits/renders only the
+main clock string. Actual-window input capture, further gauge services, native
+color/lifecycle behavior and original-FSX parity remain unfinished. The broad
+1:1 objective stays intact; original-game acquisition remains deferred.
+
+### Previous completed screen picking stage
+
 After `53f9d2d`, left-button press in the native-clock cockpit is routed through
 current screen/geometry picking to the original native clock mouse handler.
 The renderer's new CPU picker uses its actual camera and model matrices,

@@ -14,6 +14,21 @@ pub struct Rasterized {
     pub em_pixels: f32,
     pub capital_w_width: f32,
 }
+fn native_boundaries(value: &str, maximum: u16) -> Result<Vec<usize>, String> {
+    if maximum == 0 || maximum > 256 || value.chars().any(|ch| !crate::xml_text::ansi_printable(ch))
+    {
+        return Err("Native text requires bounded printable Windows-1252 characters".into());
+    }
+    let boundaries: Vec<_> = value
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain([value.len()])
+        .collect();
+    if boundaries.len() - 1 > usize::from(maximum) {
+        return Err("Native text exceeds the declared ANSI character count".into());
+    }
+    Ok(boundaries)
+}
 
 fn automatic_em(width: u32, count: u16, advance: f32, kern: f32) -> Result<f32, String> {
     if width == 0
@@ -58,18 +73,16 @@ pub fn rasterize_selected(
     value: &str,
     selection_state: i32,
 ) -> Result<Rasterized, String> {
-    let selected = style.selected_range(selection_state, value.len())?;
+    let boundaries = native_boundaries(value, style.max_length)?;
+    let selected = style.selected_range(selection_state, boundaries.len() - 1)?;
     if style.font_height != 0 {
         return Err("Native fixed-height/GDI text sizing is not yet validated".into());
     }
     if style.size.iter().any(|&v| v == 0 || v > 4096)
         || style.max_length == 0
         || style.max_length > 256
-        || value.len() > style.max_length as usize
-        || !value.is_ascii()
-        || value.chars().any(char::is_control)
     {
-        return Err("Native string rasterization bounds or ASCII contract failed".into());
+        return Err("Native string rasterization bounds failed".into());
     }
     if !font
         .name()
@@ -140,6 +153,7 @@ pub fn rasterize_selected(
         visibility: None,
     };
     let spans = if let Some(range) = selected {
+        let range = boundaries[range.start]..boundaries[range.end];
         vec![
             Span {
                 text: value[..range.start].to_owned(),
@@ -160,7 +174,7 @@ pub fn rasterize_selected(
             color: Color::Default,
         }]
     };
-    font.paint_spans(&mut image, &layout, &spans)?;
+    font.paint_ansi_spans(&mut image, &layout, &spans)?;
     Ok(Rasterized {
         image,
         em_pixels: em,
@@ -172,6 +186,19 @@ pub fn rasterize_selected(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ansi_character_limits_and_selection_boundaries_use_characters_not_utf8_bytes() {
+        let text = "é°€";
+        let boundaries = native_boundaries(text, 3).unwrap();
+        assert_eq!(boundaries, [0, 2, 4, 7]);
+        assert_eq!(&text[boundaries[1]..boundaries[3]], "°€");
+        assert_eq!(native_boundaries("1234° C", 7).unwrap().len(), 8);
+        assert!(native_boundaries("1234° C", 6).is_err());
+        for bad in ["\n", "\u{81}", "λ", "😀"] {
+            assert!(native_boundaries(bad, 7).is_err());
+        }
+        assert!(native_boundaries("ok", 0).is_err());
+    }
     #[test]
     fn auto_font_uses_declared_w_count_and_rejects_unbounded_inputs() {
         assert_eq!(automatic_em(48, 8, 0.5, 0.).unwrap(), 12.);

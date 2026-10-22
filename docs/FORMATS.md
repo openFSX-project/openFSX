@@ -483,7 +483,8 @@ explicit encoding. Zero font height remains authored automatic sizing.
 The three MODULE_VAR values are unions. The separate native string probe
 requires f64 or u32 payload interpretation for every slot; it does not resolve
 token types, BCD units, source callbacks or live simulator state. Its guarded
-ASCII output and explicit lifecycle checks are described in the helper README.
+Strict ASCII profiles plus an explicit printable Windows-1252 secondary-clock
+profile and lifecycle checks are described in the helper README.
 Successful text samples are not native font/GDI or instrument-parity validation.
 The optional headless C172 clock profile calls the original GAUGE_CALLBACK
 (header, service_id, extra_data) using the x86 stdcall ABI. Header callback and
@@ -501,7 +502,8 @@ declarations; no installed header, DLL, font or native sample source is committe
 ### Native string rasterization subset
 
 `native_text::rasterize_unselected` accepts an explicit matching local regular
-font, automatic height, ANSI/default charset and bounded single-line ASCII.
+font, automatic height, ANSI/default charset and bounded printable single-line
+Windows-1252 text. Decoded characters, not UTF-8 bytes, count toward NUMCHARS.
 It maps authored foreground/background COLORREFs and horizontal/vertical text
 alignment, clips glyph coverage, and leaves transparent backgrounds clear.
 The callback result is literal text, never parsed as GaugeString or RPN.
@@ -513,7 +515,7 @@ font/effect flags are rejected. `rasterize_selected` additionally resolves an
 explicit global selection state through SEQ_REC and applies HILITECOLOR to the
 matching glyph range, retaining layout and alpha coverage. The same published
 API defines inclusive character indices and a highlight text color. Ranges
-clip to the current ASCII string; state zero or an unrelated state selects
+clip to the current decoded ANSI character sequence; state zero or an unrelated state selects
 nothing. `rasterize_unselected` preserves the default path. Neither API dispatches
 selection/edit events or evaluates runtime user colors/lighting transitions.
 
@@ -805,3 +807,32 @@ Window-exit/focus events clear stale cursor state. Native state/display update
 uses the current simulation frame and then repaints the existing gauge texture.
 No cursor icon, tooltip, drag/repeat/double-click semantics, other gauge controls,
 HUD/procedural-ground hit testing or full FSX input parity is supplied by this stage.
+
+### Connected C172 OAT/voltage text inspection
+
+The checked secondary descriptor uses tokens [341,335,753], maximum 7 and
+source-callback slots zero. The public token/units enums identify ambient Celsius,
+display units (0 English, 1/2 metric) and main bus voltage. Explicit probes require
+f64 union slots, temperature -273.15..1000, an integer units enum 0..2 and voltage
+0..99.9. These are inspection bounds, not a weather/electrical model. Normal
+connected OAT sampling needs only original gauge connect/disconnect. The voltage
+profile additionally binds the narrow local PANELS bridge, invokes the original
+third authored mouse child and delivers its own packet 2 before the secondary
+string callback. Context, packet acceptance, string/import restoration and module
+teardown are checked. No private clock flag or event packet is fabricated.
+
+Native output is bounded in original ANSI bytes. A specific CP1252 decoder maps
+it to Unicode JSON escapes while keeping the transport ASCII. C0/DEL/C1 and
+undefined CP1252 bytes fail. Metadata/ordinary string profiles stay ASCII.
+Records add text_encoding, secondary_mode, mouse_event_dispatched,
+original_packet_word and applicable local-event/context/import guarantees.
+
+The native painter accepts only printable CP1252 code points and an installed
+matching font with every requested glyph. Character indices are converted to
+UTF-8 boundaries for SEQ_REC slices, so a degree sign occupies one ANSI selection
+position despite two UTF-8 bytes. XML painting continues to use its ASCII gate.
+The observed OAT strings contain degree signs; actual outputs include 59 F,
+-40 C and native clamp endpoints -99/999, while selected voltage samples produce
+28.0/0.0/99.9 V. The renderer's --oat capture contract verifies all nine native
+observations before drawing; it does not produce sensor values or activate a live
+secondary flight binding. Electrical-bus behavior and FSX GDI parity remain open.
