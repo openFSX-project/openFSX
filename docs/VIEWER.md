@@ -616,8 +616,21 @@ configured time origin and discards button state by restarting the helper.
 
 The installed-content flight checker above now exercises all three handlers,
 1.25/61.25-second progress, pause/stop/reset/restart and live GPU texture updates.
-This startup/local API path does not yet implement screen mouse picking, drag,
-repeat, wheel, secondary text or original-FSX input parity. If --seconds is used,
+With the clock enabled in cockpit view, left press now picks the current visible
+clock button from the rendered geometry and sends its actual child-local point
+to the native handler. This works while physics is paused. Release, right mouse
+and wheel do not invoke native clock handlers. Exterior view and nonflight orbit
+retain their existing controls. Cursor exit/focus loss clears stale pointer state.
+The nearest surviving surface blocks input, so hidden/covered buttons do not
+receive a click through opaque foreground geometry.
+
+The checker independently projects authored UV centers and sends those screen
+points through production picking/native/GPU paths at multiple physical viewport
+sizes and a rolled/translated camera. It also checks the nonactionable clock
+display and hidden geometry. It does not inject OS input; manual window-event
+interaction capture and original-FSX input parity remain unverified. Cursor
+feedback/tooltips, drag/repeat/double-click/wheel, secondary text and other gauge
+controls remain unfinished. If --seconds is used,
 startup clicks happen at that initialized simulation time, before subsequent
 interactive frames; they are not backdated through the offline advance.
 
@@ -707,9 +720,10 @@ once to the original event callback after mouse return, then updates the main
 string. All three original callbacks complete and accept delivery. The first
 switches to " 0:00:00"; the second performs a local-time lookup. Guarded event
 words, readonly table and import restoration are checked. This is isolated
-local delivery evidence: operational_buttons=false still applies to the viewer.
-Screen routing, secondary clock text,
-screen routing and original-FSX delivery parity remain unfinished. Failed calls
+local delivery evidence: operational_buttons=false describes this isolated
+probe, not the aggregate viewer state. The flight profile now connects clock
+screen presses as described above. Secondary text, generic gauge routing and
+original-FSX delivery parity remain unfinished. Failed calls
 never produce a fabricated after-string result.
 
 ## Retained native clock state and recorded rendering
@@ -733,9 +747,9 @@ pixels; paused, stopped and reset pairs must match exactly. Capture parsing
 requires the checked element metadata, guards and completed teardown.
 
 This is a retained native session plus recorded rendering, not mouse input in
-the live viewer. Picking, secondary clock text and
+the live viewer. Secondary clock text and
 stopwatch behavior across midnight or clock edits are still unfinished. The flight profile now integrates persistent native buttons through startup/local
-API input as described above; direct screen routing is still pending. No original-FSX pixel/input parity is claimed.
+API input as described above; direct left-press screen routing is now connected as described above. No original-FSX pixel/input parity is claimed.
 
 ## Visibility inspection
 

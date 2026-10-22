@@ -218,7 +218,7 @@ Pause leaves physics cached; the display is dirtied after accepted clicks.
 Close additionally checks clock_events_delivered, clock_import_restored and
 clock_context_guards_verified. The service table remains bound through native
 ModuleDeinit. The viewer exposes startup --native-clock-click child indices;
-screen picking is still pending. Running midnight/time-edit behavior and the
+the viewer now maps cockpit screen/triangle/UV hits to these validated points. Running midnight/time-edit behavior and the
 secondary clock string require further evidence. Isolated diagnostic profiles
 below keep their existing protocol.
 

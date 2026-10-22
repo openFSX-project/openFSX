@@ -13,6 +13,7 @@ use winit::window::Window;
 pub mod hud;
 pub mod native_text;
 pub mod panel;
+pub mod picking;
 pub mod xml_text;
 // GPU initialization and map_async don't need a general-purpose async runtime.
 pub fn block_on<T>(future: impl Future<Output = T>) -> T {

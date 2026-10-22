@@ -21,6 +21,153 @@ use winit::keyboard::KeyCode;
 fn ensure(condition: bool, message: &str) -> Result<(), String> {
     condition.then_some(()).ok_or_else(|| message.into())
 }
+// Independently locate authored button centers in the model's UV triangles,
+// then use the production screen picker to check the entire inverse path.
+fn clock_screen_points(
+    root: &std::path::Path,
+    panel_path: &std::path::Path,
+    model: &fsx_model::Model,
+    geometry: &fsx_model::Geometry,
+    appearance: &fsx_render::Appearance,
+    gauges: &flight_gauges::FlightGauges,
+    orbit: &Orbit,
+    transform: fsx_geometry::Mat4,
+    viewport: [u32; 2],
+) -> Result<Vec<[f64; 2]>, String> {
+    use fsx_vehicle::{
+        gauge::GaugeLibrary,
+        panel::{Kind, PanelConfig},
+    };
+    let config = PanelConfig::load(panel_path, true)?;
+    let library = GaugeLibrary::load(&root.join("Gauges/Cessna172.dll"), true)?;
+    let mut placements = Vec::new();
+    for p in &config.panels {
+        if let Kind::VirtualCockpit { texture } = &p.kind {
+            for g in &p.gauges {
+                if g.module.eq_ignore_ascii_case("Cessna172")
+                    && g.name.eq_ignore_ascii_case("Clock")
+                {
+                    placements.push((p, g, texture));
+                }
+            }
+        }
+    }
+    ensure(
+        placements.len() == 1,
+        "Expected one clock placement for screen picking",
+    )?;
+    let (p, g, texture) = placements[0];
+    let [Some(mw), Some(mh)] = p.size_mm.ok_or("No panel mm extent")? else {
+        return Err("Incomplete mm extent".into());
+    };
+    let [Some(gw), Some(gh)] = g.size else {
+        return Err("No clock extent".into());
+    };
+    let [Some(pw), Some(ph)] = p.pixel_size.ok_or("No panel pixel extent")? else {
+        return Err("Incomplete pixel extent".into());
+    };
+    let origin = [g.position[0] / mw * pw, g.position[1] / mh * ph];
+    let size = [gw / mw * pw, gh / mh * ph];
+    let native = fsx_render::panel::native_mouse_point(
+        p,
+        g,
+        &library,
+        1033,
+        [origin[0] + size[0] / 2., origin[1] + size[1] / 2.],
+    )?
+    .ok_or("No native clock mapping")?;
+    let regions = library
+        .mouse_rects("Clock")?
+        .ok_or("No native mouse list")?
+        .regions(native.native_size)?;
+    ensure(regions.len() == 3, "Expected three clock regions")?;
+    let mut result = Vec::new();
+    let native_points = regions
+        .iter()
+        .map(|region| {
+            let r = region.rectangle;
+            [r[0] + r[2] * 0.5, r[1] + r[3] * 0.5]
+        })
+        .chain([[27., 29.]]);
+    for (child, xy) in native_points.enumerate() {
+        let uv = [
+            (origin[0] + xy[0] / f64::from(native.native_size[0]) * size[0]) / pw,
+            (origin[1] + xy[1] / f64::from(native.native_size[1]) * size[1]) / ph,
+        ];
+        let mut selected = None;
+        let mut diagnostics = Vec::new();
+        for batch in geometry.batches.iter().filter(|b| {
+            b.visible
+                && model.materials[b.material]
+                    .diffuse_texture
+                    .is_some_and(|i| model.textures[i].eq_ignore_ascii_case(texture))
+        }) {
+            for tri in geometry.vertices[batch.range.start as usize..batch.range.end as usize]
+                .chunks_exact(3)
+            {
+                let q = std::array::from_fn::<_, 3, _>(|i| {
+                    [f64::from(tri[i][6]), f64::from(tri[i][7])]
+                });
+                let a = [q[1][0] - q[0][0], q[1][1] - q[0][1]];
+                let b = [q[2][0] - q[0][0], q[2][1] - q[0][1]];
+                let d = [uv[0] - q[0][0], uv[1] - q[0][1]];
+                let det = a[0] * b[1] - a[1] * b[0];
+                if det.abs() < 1e-12 {
+                    continue;
+                }
+                let u = (d[0] * b[1] - d[1] * b[0]) / det;
+                let v = (a[0] * d[1] - a[1] * d[0]) / det;
+                if u < 0. || v < 0. || u + v > 1. {
+                    continue;
+                }
+                let point = std::array::from_fn(|j| {
+                    (1. - u - v) * f64::from(tri[0][j])
+                        + u * f64::from(tri[1][j])
+                        + v * f64::from(tri[2][j])
+                });
+                let Some(screen) = fsx_render::picking::project(orbit, transform, viewport, point)?
+                else {
+                    continue;
+                };
+                let target = gauges.clock_target(
+                    model, geometry, appearance, orbit, transform, viewport, screen,
+                )?;
+                if let Some(hit) = target {
+                    if hit.child == child
+                        && (hit.surface.uv[0] - uv[0]).abs() < 1e-5
+                        && (hit.surface.uv[1] - uv[1]).abs() < 1e-5
+                    {
+                        selected = Some(screen);
+                        break;
+                    }
+                } else {
+                    let front = fsx_render::picking::surface(
+                        geometry, appearance, orbit, transform, viewport, screen,
+                    )?;
+                    if child == 3
+                        && front.as_ref().is_some_and(|hit| {
+                            hit.texture
+                                .is_some_and(|i| model.textures[i].eq_ignore_ascii_case(texture))
+                                && (hit.uv[0] - uv[0]).abs() < 1e-5
+                                && (hit.uv[1] - uv[1]).abs() < 1e-5
+                        })
+                    {
+                        selected = Some(screen);
+                        break;
+                    }
+                    diagnostics.push(format!("screen={screen:?} surface={:?}", front));
+                }
+            }
+            if selected.is_some() {
+                break;
+            }
+        }
+        result.push(selected.ok_or_else(|| {
+            format!("Clock child {child} has no visible screen hit: {diagnostics:?}")
+        })?);
+    }
+    Ok(result)
+}
 fn run() -> Result<(), String> {
     let mut args = std::env::args_os().skip(1);
     let root = PathBuf::from(args.next().ok_or(
@@ -64,6 +211,7 @@ fn run() -> Result<(), String> {
     }
     let first_pid = gauges.pid();
     let mut button_reports = Vec::new();
+    let mut picking_reports = Vec::new();
     let first = gauges.update(&flight.simulation)?;
     ensure(
         first.clock.is_some() == local_clock.is_some(),
@@ -469,6 +617,124 @@ fn run() -> Result<(), String> {
         let path = output.join("c172-clock-button-before.ppm");
         gpu.snapshot(&orbit, &path)?;
         let button_baseline = std::fs::read(path).map_err(|e| e.to_string())?;
+        let screen_points = clock_screen_points(
+            &root,
+            &aircraft.panel,
+            &current.model,
+            &current.geometry,
+            &current.appearance,
+            &gauges,
+            &orbit,
+            gpu.model_matrix,
+            [960, 720],
+        )?;
+        for size in [[1920, 1440], [1280, 720]] {
+            let points = clock_screen_points(
+                &root,
+                &aircraft.panel,
+                &current.model,
+                &current.geometry,
+                &current.appearance,
+                &gauges,
+                &orbit,
+                gpu.model_matrix,
+                size,
+            )?;
+            if size == [1920, 1440] {
+                ensure(
+                    points.iter().zip(&screen_points).all(|(a, b)| {
+                        (a[0] - b[0] * 2.).abs() < 1e-5 && (a[1] - b[1] * 2.).abs() < 1e-5
+                    }),
+                    "Physical viewport scaling changed mouse mapping",
+                )?;
+            }
+            picking_reports.push(serde_json::json!({"viewport":size,"screen_points":points,"targets":3,"display_nonactionable":true}));
+        }
+        ensure(
+            gauges
+                .click_clock_at(
+                    &current.model,
+                    &current.geometry,
+                    &current.appearance,
+                    &orbit,
+                    gpu.model_matrix,
+                    [960, 720],
+                    screen_points[3],
+                    0.5,
+                )?
+                .is_none(),
+            "Clock display/help region invoked a mouse action",
+        )?;
+        let visible_hit = gauges
+            .clock_target(
+                &current.model,
+                &current.geometry,
+                &current.appearance,
+                &orbit,
+                gpu.model_matrix,
+                [960, 720],
+                screen_points[0],
+            )?
+            .ok_or("No visible clock hit")?;
+        current.geometry.batches[visible_hit.surface.batch].visible = false;
+        let hidden = gauges.clock_target(
+            &current.model,
+            &current.geometry,
+            &current.appearance,
+            &orbit,
+            gpu.model_matrix,
+            [960, 720],
+            screen_points[0],
+        );
+        current.geometry.batches[visible_hit.surface.batch].visible = true;
+        ensure(
+            hidden?.is_none(),
+            "Hidden cockpit batch still received input",
+        )?;
+        let mut rolled = desktop_flight::FlightSession::new(aircraft.parameters.clone())?;
+        rolled.simulation.state.position = [1200., 400., -350.];
+        rolled.simulation.state.orientation =
+            fsx_geometry::Quaternion([0.2_f64.cos(), 0.2_f64.sin(), 0., 0.]);
+        let mut rolled_orbit = Orbit::new(&current.geometry);
+        flight_view::camera(
+            &rolled,
+            &mut rolled_orbit,
+            Some(eye),
+            flight_view::Look {
+                pitch: -0.3,
+                ..Default::default()
+            },
+        )?;
+        let rolled_points = clock_screen_points(
+            &root,
+            &aircraft.panel,
+            &current.model,
+            &current.geometry,
+            &current.appearance,
+            &gauges,
+            &rolled_orbit,
+            rolled.model_matrix(),
+            [960, 720],
+        )?;
+        picking_reports.push(serde_json::json!({"viewport":[960,720],"screen_points":rolled_points,"rolled_translated_camera":true,"targets":3}));
+        let transform = gpu.model_matrix;
+        gpu.model_matrix = rolled.model_matrix();
+        gpu.snapshot(&rolled_orbit, &output.join("c172-clock-picking-rolled.ppm"))?;
+        gpu.model_matrix = transform;
+        ensure(
+            gauges
+                .clock_target(
+                    &current.model,
+                    &current.geometry,
+                    &current.appearance,
+                    &orbit,
+                    gpu.model_matrix,
+                    [960, 720],
+                    [-1., 0.],
+                )?
+                .is_none(),
+            "Outside viewport produced a clock hit",
+        )?;
         ensure(
             gauges.click_clock(3, 0.5).is_err() && gauges.click_clock(0, 0.75).is_err(),
             "Invalid/stale mouse input was accepted",
@@ -498,8 +764,27 @@ fn run() -> Result<(), String> {
         .enumerate()
         {
             let context = gauges.update_inputs(time, inputs)?;
+            let mut picked = None;
             let frame = if let Some(child) = child {
-                gauges.click_clock(child, time)?;
+                let hit = gauges
+                    .click_clock_at(
+                        &current.model,
+                        &current.geometry,
+                        &current.appearance,
+                        &orbit,
+                        gpu.model_matrix,
+                        [960, 720],
+                        screen_points[child],
+                        time,
+                    )?
+                    .ok_or("Clock screen input missed authored child")?;
+                ensure(
+                    hit.child == child && hit.child_local.iter().all(|&v| (0..6).contains(&v)),
+                    "Screen mouse mapped to the wrong child/local point",
+                )?;
+                picked = Some(
+                    serde_json::json!({"screen":screen_points[child],"mouse_rva":hit.mouse_rva,"child_local":hit.child_local,"texture":hit.texture,"triangle_vertex":hit.surface.triangle_vertex}),
+                );
                 let frame = gauges.update_inputs(time, inputs)?;
                 ensure(
                     frame.reused && frame.display_changed && frame.evaluated == context.evaluated,
@@ -545,7 +830,7 @@ fn run() -> Result<(), String> {
                 )?;
             }
             previous_pixels = Some(pixels);
-            button_reports.push(serde_json::json!({"time":time,"child":child,"text":value.text,"callback_result":value.result,"events":events,"evaluated":frame.evaluated,"physics_reused":frame.reused,"display_changed":frame.display_changed}));
+            button_reports.push(serde_json::json!({"time":time,"child":child,"picked":picked,"text":value.text,"callback_result":value.result,"events":events,"evaluated":frame.evaluated,"physics_reused":frame.reused,"display_changed":frame.display_changed}));
         }
         gauges.restart()?;
         let reset_pid = gauges.pid();
@@ -599,7 +884,7 @@ fn run() -> Result<(), String> {
     ground_gauges.close()?;
     let report = serde_json::json!({"schema":1,"source":"openfsx-native-gauge-flight-check",
         "forward_frames":121,"paused_reuses":10,"changed_rgb_bytes":changed_bytes,
-        "flight_driven_sprites":3,"native_local_clock":local_clock.is_some(),"clock_boundaries":clock_comparisons,"clock_events":clock_event_reports,"native_clock_buttons":button_reports,
+        "flight_driven_sprites":3,"native_local_clock":local_clock.is_some(),"clock_boundaries":clock_comparisons,"clock_events":clock_event_reports,"native_clock_buttons":button_reports,"clock_picking":picking_reports,
         "clock_style":"authored daylight with explicit selection events","gdi_pixel_parity_verified":false,
         "xml_day_plaque":xml_font.is_some(),"xml_font_path":xml_font,"registration":aircraft.registration,
         "reset_restarted_helper":true,"reset_pixels_identical":true,"view_pixels_identical":true,

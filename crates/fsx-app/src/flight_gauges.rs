@@ -19,7 +19,114 @@ pub struct FlightGauges {
     last_clock_time: Option<f64>,
     clock: Option<(fsx_sim::clock::LocalClock, fsx_render::xml_text::GaugeFont)>,
 }
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Detailed surface metadata is also consumed by installed-content diagnostics.
+pub struct ClockHit {
+    pub surface: fsx_render::picking::SurfaceHit,
+    pub texture: String,
+    pub child: usize,
+    pub mouse_rva: u32,
+    pub child_local: [i32; 2],
+}
 impl FlightGauges {
+    pub fn clock_target(
+        &self,
+        model: &Model,
+        geometry: &fsx_model::Geometry,
+        appearance: &Appearance,
+        orbit: &fsx_render::Orbit,
+        transform: fsx_geometry::Mat4,
+        viewport: [u32; 2],
+        point: [f64; 2],
+    ) -> Result<Option<ClockHit>, String> {
+        if self.clock.is_none() {
+            return Ok(None);
+        }
+        let Some(surface) =
+            fsx_render::picking::surface(geometry, appearance, orbit, transform, viewport, point)?
+        else {
+            return Ok(None);
+        };
+        let Some(texture) = surface.texture.and_then(|i| model.textures.get(i)) else {
+            return Ok(None);
+        };
+        for (index, preview) in &self.bases {
+            let p = &self.config.panels[*index];
+            let Kind::VirtualCockpit { texture: name } = &p.kind else {
+                continue;
+            };
+            if !name.eq_ignore_ascii_case(texture) {
+                continue;
+            }
+            for placement in p.gauges.iter().filter(|g| {
+                g.module.eq_ignore_ascii_case("Cessna172") && g.name.eq_ignore_ascii_case("Clock")
+            }) {
+                let dimensions = [preview.image.width, preview.image.height];
+                let pixel = std::array::from_fn(|i| {
+                    let edge = f64::from(dimensions[i]);
+                    (surface.sample_uv[i] * edge).min(f64::from_bits(edge.to_bits() - 1))
+                });
+                let library = &self.libraries["cessna172"];
+                let Some(native) = panel::native_mouse_point(p, placement, library, 1033, pixel)?
+                else {
+                    continue;
+                };
+                let list = library
+                    .mouse_rects("Clock")?
+                    .ok_or("Missing clock mouse metadata")?;
+                let hits = list.hit_candidates(native.native_size, native.point, 1 << 29)?;
+                if hits.len() > 1 {
+                    return Err(
+                        "Overlapping clock actions require unsupported delivery semantics".into(),
+                    );
+                }
+                if let Some(hit) = hits.first() {
+                    let record = &list.records[hit.record_index];
+                    if record.callback_rva.is_none()
+                        || record.event_id != 0
+                        || record.mouse_flags != 1 << 29
+                        || record.api_data != 0
+                    {
+                        return Err("Unsupported native clock action".into());
+                    }
+                    let child = list
+                        .records
+                        .iter()
+                        .filter(|r| r.kind == fsx_vehicle::gauge::MouseKind::Child)
+                        .position(|r| r.rva == record.rva)
+                        .ok_or("Missing clock child index")?;
+                    return Ok(Some(ClockHit {
+                        surface,
+                        texture: texture.clone(),
+                        child,
+                        mouse_rva: record.rva,
+                        child_local: hit.child_local_point.map(|v| v.floor() as i32),
+                    }));
+                }
+            }
+        }
+        Ok(None)
+    }
+    pub fn click_clock_at(
+        &mut self,
+        model: &Model,
+        geometry: &fsx_model::Geometry,
+        appearance: &Appearance,
+        orbit: &fsx_render::Orbit,
+        transform: fsx_geometry::Mat4,
+        viewport: [u32; 2],
+        point: [f64; 2],
+        elapsed: f64,
+    ) -> Result<Option<ClockHit>, String> {
+        let hit = self.clock_target(
+            model, geometry, appearance, orbit, transform, viewport, point,
+        )?;
+        if let Some(hit) = &hit {
+            self.native
+                .click_clock(hit.mouse_rva, hit.child_local, elapsed)?;
+        }
+        Ok(hit)
+    }
     pub fn click_clock(&mut self, child: usize, elapsed: f64) -> Result<(), String> {
         if self.clock.is_none() || self.last_clock_time != Some(elapsed) {
             return Err("Clock mouse requires an enabled current flight frame".into());

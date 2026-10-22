@@ -5,6 +5,52 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 22 October 2026
 
+After `53f9d2d`, left-button press in the native-clock cockpit is routed through
+current screen/geometry picking to the original native clock mouse handler.
+The renderer's new CPU picker uses its actual camera and model matrices,
+Direct3D near-inclusive/far-exclusive depth, a model-space near/far ray and
+current visible posed triangles. It intersects two-sided geometry, interpolates
+UVs in model space, applies repeat/clamp and linear single-mip alpha sampling,
+and follows the current shader's alpha-test rules. The nearest surviving surface
+blocks input, including nonpanel geometry and nonzero-alpha blended foregrounds.
+No fixed screen rectangles or arbitrary native callback addresses are used.
+
+FlightGauges resolves the picked model texture against its actual VC panel,
+converts UV through preview dimensions and existing CFG/native bitmap mapping,
+then requires one authored left-single clock child. Child-local coordinates are
+floored for the x86 POINT ABI. The helper rechecks the actual mouse record/point.
+Viewer routing requires flight/cockpit/visible-window/known-cursor context; only
+left press sends the callback. Release/right/wheel do not enter this native path,
+CursorLeft clears the point, and focus loss retains existing flight pause/key
+cleanup. An accepted click updates the native clock and GPU texture at the same
+simulation time, including physics pause. Exterior/nonflight orbit behavior is
+retained. The helper ABI/protocol is unchanged by this stage.
+
+170 all-feature Rust test executions pass. Picker tests cover perspective UVs,
+translation, viewport scaling, both windings, near/far clipping, nearest/hidden/
+alpha-discard/transparent occlusion, alpha addressing and invalid ranges/values.
+`target/native-screen-picking-flight-04/` drives the entire screen -> triangle ->
+UV -> panel -> native child -> original mouse/event callbacks -> GPU path for all
+three clock buttons. Their actual child-local centers resolve to [3,3]. It also
+checks 2x physical viewport scale, a different aspect, a rolled/translated camera,
+a hidden real cockpit batch, a nonactionable display/help point and an outside
+viewport miss. Mode/start/progress/stop/reset/restart still preserve helper PID,
+physics counters and expected changed/equal pixels; the existing 121-frame flight,
+view/ground, clock edit/day-boundary and selection regressions pass. The rolled
+cockpit render was visually inspected. Viewer compilation succeeds. The checker
+calls the production screen handler path without injecting OS mouse input; an
+actual window-event/manual interaction capture remains to be done.
+
+Next work is actual-window input validation, secondary clock text/state and
+broader native control/lifecycle coverage. Only the three C172 left-single clock
+handlers are routed: cursor feedback/tooltips, drag/repeat/double-click/wheel,
+generic gauge actions, complex transparent overlay parity and original-FSX
+input/pixel parity remain unfinished. Running-stopwatch midnight/time edits and
+the broad FSX 1:1 objective still need work. Original-game acquisition remains
+deferred by the user.
+
+### Previous completed flight clock button integration
+
 After `4e10fcf`, the real flight gauge stream now hosts the narrow PANELS bridge
 and original clock button state in the same x86 process as the five air-data
 needles and three gyro sprites. Clock-enabled flight uses schema 4; ordinary

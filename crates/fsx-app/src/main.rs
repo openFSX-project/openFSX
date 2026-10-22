@@ -46,6 +46,44 @@ struct App {
     gauges: Option<flight_gauges::FlightGauges>,
 }
 impl App {
+    fn click_gauge(&mut self) -> Result<bool, String> {
+        if !self.cockpit || !self.visible {
+            return Ok(false);
+        }
+        let (Some(flight), Some(gauges), Some(window), Some((x, y))) =
+            (&self.flight, &mut self.gauges, &self.window, self.cursor)
+        else {
+            return Ok(false);
+        };
+        let size = window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return Ok(false);
+        }
+        gauges.update(&flight.simulation)?;
+        if gauges
+            .click_clock_at(
+                &self.visual.model,
+                &self.visual.geometry,
+                &self.visual.appearance,
+                &self.orbit,
+                flight.model_matrix(),
+                [size.width, size.height],
+                [x, y],
+                flight.simulation.time,
+            )?
+            .is_none()
+        {
+            return Ok(false);
+        }
+        let frame = gauges.update(&flight.simulation)?;
+        gauges.apply(
+            &frame,
+            &self.visual.model,
+            &mut self.visual.appearance,
+            self.gpu.as_mut(),
+        )?;
+        Ok(true)
+    }
     fn select_view(&mut self, cockpit: bool) -> Result<(), String> {
         let Some(flight) = &self.flight else {
             return Ok(());
@@ -73,7 +111,7 @@ impl App {
         println!(
             "Flight view: {}",
             if self.cockpit {
-                "virtual cockpit (dynamic gauges unavailable)"
+                "virtual cockpit"
             } else {
                 "exterior"
             }
@@ -295,7 +333,19 @@ impl ApplicationHandler for App {
                 state,
                 button: MouseButton::Left,
                 ..
-            } => self.dragging = state == ElementState::Pressed && self.flight.is_none(),
+            } => {
+                self.dragging = state == ElementState::Pressed && self.flight.is_none();
+                if state == ElementState::Pressed && self.flight.is_some() {
+                    if let Err(error) = self.click_gauge() {
+                        self.error = Some(error);
+                        event_loop.exit();
+                    }
+                }
+            }
+            WindowEvent::CursorLeft { .. } => {
+                self.cursor = None;
+                self.dragging = false;
+            }
             WindowEvent::Focused(false) => {
                 self.dragging = false;
                 self.cursor = None;
@@ -400,8 +450,8 @@ fn run() -> Result<(), String> {
         println!("Flight views: --cockpit starts inside; F9 virtual cockpit / recenter, F11 exterior; cockpit drag looks around, wheel changes FOV.");
         println!("Experimental Windows C172 instruments: --native-gauges [--gauge-host path/to/fsx-gauge-host.exe]. Five needles plus native attitude/heading sprites, ideal ISA air data and ideal gyros; no RPM, full panel services or needle lag.");
         println!("Optional native C172 clock: --native-clock-start HH:MM:SS with --native-gauges. Explicit local time advanced by simulation seconds; Quartz daylight styling; native timer buttons and mouse/keyboard routing unavailable.");
-        println!("Clock controls: repeat --clock-event CLOCK_EVENT[:u32] and --native-clock-select none|hours|minutes|seconds with --native-clock-start. Startup event injection; native mouse/keyboard bindings are not implemented.");
-        println!("Optional daylight XML registration plaque: --xml-gauge-font path/to/font.ttf with --native-gauges. Explicit font mapping and pixels-per-em metrics; FSX default font/rasterization parity unverified.");
+        println!("Clock controls: repeat --clock-event CLOCK_EVENT[:u32] and --native-clock-select none|hours|minutes|seconds with --native-clock-start. Startup event injection. With a native clock in cockpit view, left press picks its three buttons; other gauge mouse/keyboard bindings remain unavailable.");
+        println!("Optional native clock button injection: --native-clock-click 0|1|2 with --native-clock-start.\nOptional daylight XML registration plaque: --xml-gauge-font path/to/font.ttf with --native-gauges. Explicit font mapping and pixels-per-em metrics; FSX default font/rasterization parity unverified.");
         return Ok(());
     }
     let (mut lod, mut snapshot) = (None, None);

@@ -764,5 +764,44 @@ failure. Invalid commands fail before a state transition is emitted.
 This explicit local profile checks an advancing stopwatch within one day, pauses,
 stop/reset/start, format changes and native reset. Running across midnight,
 changing the simulation clock while the stopwatch runs, secondary text and
-original-FSX shared-event delivery still require evidence. It is not yet the
-viewer flight bridge or a full PANELS implementation.
+original-FSX shared-event delivery still require evidence. This diagnostic stream remains separate from the schema-4 viewer flight bridge
+described above and is not a full PANELS implementation.
+
+### Screen surface picking and C172 mouse routing
+
+fsx-render::picking is a CPU reader of current aircraft geometry/appearance, with no native
+execution. It combines the exact renderer camera and supplied model matrix in
+f64, inverts it with pivoted elimination and unprojects physical top-left screen
+coordinates to a model-space Direct3D depth segment. Near depth is included;
+far/clear depth 1 is excluded. Viewports must be nonzero and at most 32768 per
+axis. Out-of-viewport points return no hit; nonfinite/singular data fails. It
+bounds geometry to the model decoder's three-million-corner output budget and
+requires complete visible triangle ranges and valid material/texture indices.
+
+Two-sided segment/triangle intersection gives barycentric model-space UVs,
+including perspective. The nearest surviving surface wins, preserving first-draw
+order on exact ties to match the opaque Less depth test. Alpha uses the current
+appearance images, normalized repeat/clamp addressing and half-texel bilinear
+single-mip sampling. Alpha-test operations match viewer.wgsl; a zero-alpha blended
+surface is skipped, while nonzero-alpha foregrounds block the input ray.
+Nonblended alpha zero still blocks unless the shader alpha test discards it.
+This is an explicit input-surface policy, not original-FSX transparency/overlap
+parity or a claim that all blended compositing orders match a depth ID buffer.
+
+A SurfaceHit includes batch/triangle/material/texture identity, raw/addressed UV,
+model position and near/far segment parameter. The application resolves only the
+actual picked VC texture containing its enabled C172 Clock. It maps UV using the
+current preview dimensions, CFG placement and decoded native root dimensions,
+then asks the bounded mouse metadata reader for left-single candidates. No hit
+means no action; multiple candidates fail instead of guessing overlap priority.
+Exactly one supported authored callback record is required, and child coordinates
+are floored for the integer native context. The existing x86 helper checks the
+record and bounds again before calling it. No picking result supplies an arbitrary
+executable address.
+
+The window routes only left press in visible cockpit flight with a known cursor
+and enabled native clock; release/right/wheel never dispatch this callback path.
+Window-exit/focus events clear stale cursor state. Native state/display update
+uses the current simulation frame and then repaints the existing gauge texture.
+No cursor icon, tooltip, drag/repeat/double-click semantics, other gauge controls,
+HUD/procedural-ground hit testing or full FSX input parity is supplied by this stage.
