@@ -5,6 +5,56 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 22 October 2026
 
+After `f0662ae`, three previously unresolved source ratings now have a versioned
+reference basis. A bounded Unicorn x86 check reads the user's installed sim1.dll
+(version 10.0.62615.0, SHA-256 pinned) and executes its original source scalar
+initialization/engine dispatch. It stops after three numeric CFG lookups. Only
+allocation and numeric CFG services are stubbed; instruction ranges, writes and
+instruction count are guarded. No FSX process starts, no DLL is loaded by Windows,
+and no original instructions/assets are embedded or exported.
+
+23 cases cover engine types 0..6, engine counts 0/1/4 and two override fixtures.
+The single-piston/one-engine path initializes maximum battery voltage to 24 V,
+generator voltage to 28 V and generator capability to 60 A. These are original
+initializer results, not borrowed aircraft examples or live measurements. A
+foreign binary is rejected before emulation and creates no report directory.
+This does not verify the real CFG parser, generator regulation or battery decay.
+
+Electrical.with_source_defaults applies only these three missing ratings under
+FsxSteam62615SinglePiston, preserving authored values including zero. Authored CFG
+metadata remains unchanged. The generic CircuitNetwork constructor remains
+unresolved; the single-piston Simulation explicitly selects this reference
+profile. Reset reuses the profile but clears charge, availability, curves and bus
+observations. Battery capacity, charging current, voltage curve and omitted
+circuit defaults remain unknown. No source is made online and no bus is energized
+from a rating alone; the default flight display still receives no bus voltage.
+
+The installed C172 checker now distinguishes absent authored settings from the
+24/28/60 effective source profile, verifies its ideal generator capacity boundary
+under explicitly supplied online state, and retains the unknown live-supply,
+FLT, circuit/distribution and flight-time checks. Unit checks cover authored zero,
+profile selection, missing battery metadata and profile-preserving reset. The
+broader reference type/count matrix does not expand supported flight engines.
+The existing single-piston eligibility check now rejects every additional engine
+slot 1..3, including gaps that previously slipped past the engine.1-only check.
+
+Next is actual engine/regulator state, terminal-current allocation, confirmed bus
+topology and battery behavior, followed by live OAT/V. Electrical dynamics and
+complete FSX 1:1 parity remain unfinished. User-deferred original-FSX live capture
+has not been attempted.
+
+197 all-feature Rust test executions pass in
+`target/electrical-defaults-workspace-tests-02.log`. Original initializer evidence
+is in `target/electrical-default-reference-01/report.json`; unsupported-binary
+rejection is recorded in `target/electrical-default-reference-rejection.log`.
+Installed C172/FLT and synthetic runtime checks pass in
+`target/electrical-defaults-check-02/`. Native clock/buttons/picking/GPU/121-frame
+flight/pause/reset/view/ground regression passes in
+`target/electrical-defaults-flight-regression-01.log`. Formatting, architecture
+and generated documentation checks pass.
+
+### Previous FLT switches and simulation-time stage
+
 After `0066b95`, legacy FLT electrical switch positions can be read and applied
 explicitly to the simulation-owned circuit runtime. Installed Lesson 1 and
 FLTSIM flights exercise both legacy Systems.0 and Avionics.0 locations for the

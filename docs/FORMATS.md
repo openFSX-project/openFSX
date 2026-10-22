@@ -843,9 +843,10 @@ The [Prepar3D legacy aircraft configuration reference](https://www.prepar3d.com/
 and [Microsoft legacy electrical parameter reference](https://docs.flightsimulator.com/html/Content_Configuration/SimObjects/Aircraft_SimO/system/electrical.htm)
 identify the bus/current/minimum-voltage triples and optional source settings.
 The implementation reads declarations actually present in [electrical]; omitted
-SDK circuit defaults and source defaults remain unresolved. An absent source
-scalar is None, while authored zero stays Some(0). Values from SDK examples for
-other aircraft are not used as defaults.
+SDK circuit defaults and unprofiled source defaults remain unresolved. An absent
+authored source scalar is None, while authored zero stays Some(0). Effective
+source resolution is separate (see the versioned profile below). Values from SDK
+examples for other aircraft are not used as defaults.
 
 fsx-vehicle::electrical models bus codes 0..7 (main, avionics, battery, hot battery,
 then generator/alternator buses 1..4). Known consumer keys require exactly three
@@ -977,3 +978,46 @@ not a frame average. Unknown current makes charge unknown on a positive interval
 zero elapsed time preserves the preceding charge/record. No loaded bus voltage is
 derived from this charge integration. Automatic FLT/viewer initialization, actual
 current/engine providers and complete flight restoration remain unimplemented.
+
+
+## Versioned FSX source scalar defaults
+
+scripts/check-electrical-defaults.py reads the user's installed sim1.dll into
+Unicorn x86 memory, not the Windows loader. It supports only SHA-256
+4bb9ef1b9669bb48676ef16ede667a2c590af27943eb34f03f09332a5417ae0e,
+version 10.0.62615.0. The reference executes original source initialization and
+type dispatch, with a synthetic vehicle engine count/type and stubbed allocation
+and numeric CFG lookups. Its prefix stops immediately after the three source
+scalar lookups; the original object zeroing constructor also executes. Instruction
+ranges and mutable memory writes are whitelisted with a 4096-instruction budget.
+It fails on unexpected ABI/key/order/destination, foreign fingerprints or leaving
+the allowed ranges. No original implementation bytes are stored in the script or
+report. It does not execute game code in the host or launch FSX.
+
+```powershell
+python scripts/check-electrical-defaults.py FSX/sim1.dll target/electrical-default-reference
+```
+
+The output directory must be new; Python requires pefile and unicorn. The report
+records 23 cases (types 0..6, counts 0/1/4, zero and nonzero override fixtures),
+pre-lookup initialized values, effective values and scope. This is evidence for
+scalar initialization with those injected engine contexts; it is not a check of
+the original numeric CFG parser, live bus voltages, RPM/regulation, total load,
+charging or battery capacity/decay.
+
+SourceDefaults::FsxSteam62615SinglePiston resolves only absent maximum battery
+voltage, generator voltage and generator maximum current to 24 V, 28 V and 60 A.
+Authored zero/nonzero values are preserved; capacity, charging current, curves and
+omitted consumers remain unresolved. The caller must establish single-piston
+eligibility. Electrical.with_source_defaults returns effective data without
+modifying authored metadata. CircuitNetwork::new keeps sources unprofiled;
+new_with_source_defaults selects an explicit profile and source_configuration
+returns effective data. Reset reconstructs sources from the same profile.
+
+Simulation's existing single-piston dynamics selects this versioned profile.
+Its Parameters retain authored Electrical values, so missing C172 CFG entries
+still report None while effective ratings resolve separately. Initial charge,
+generator availability and bus voltage remain unknown. Applying a FLT switch
+snapshot does not establish generator availability or override this distinction.
+The broader reference engine-type matrix is diagnostic, not support for jet,
+multi-engine or other flight models. Parity with other FSX versions is unverified.

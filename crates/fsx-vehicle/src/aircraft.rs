@@ -219,7 +219,7 @@ impl Aircraft {
 impl Parameters {
     pub fn from_config(c: &Config, aero: Aerodynamics) -> Result<Self, String> {
         if c.number("GeneralEngineData", "engine_type")? != 0.
-            || c.get("GeneralEngineData", "Engine.1").is_some()
+            || (1..=3).any(|i| c.get("GeneralEngineData", &format!("Engine.{i}")).is_some())
         {
             return Err("Initial flight model supports a single piston engine only".into());
         }
@@ -371,6 +371,20 @@ pub fn own_parameters() -> Parameters {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn single_piston_profile_rejects_every_additional_engine_slot_even_with_gaps() {
+        for i in 1..=3 {
+            let c = Config::parse(&format!(
+                "[GeneralEngineData]\nengine_type=0\nengine.0=0,0,0\nengine.{i}=1,0,0"
+            ))
+            .unwrap();
+            let error = Parameters::from_config(&c, own_parameters().aero).unwrap_err();
+            assert_eq!(
+                error,
+                "Initial flight model supports a single piston engine only"
+            );
+        }
+    }
     #[test]
     fn units_and_variant_component_limits() {
         assert!((100. * KNOT - 51.4444444444).abs() < 1e-9);

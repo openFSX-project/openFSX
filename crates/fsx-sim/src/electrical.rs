@@ -3,7 +3,7 @@
 //! response: unknown supply/state never becomes normal voltage.
 use crate::electrical_distribution::{self, Contact, Distribution, Feed};
 use crate::electrical_sources::{Battery, BatteryFlow, Generator};
-use fsx_vehicle::electrical::{Bus, Electrical};
+use fsx_vehicle::electrical::{Bus, Electrical, SourceDefaults};
 use fsx_vehicle::flight_electrical::FlightElectrical;
 use std::collections::BTreeMap;
 #[derive(Debug, Clone, PartialEq)]
@@ -25,6 +25,7 @@ pub struct CircuitNetwork {
     pub battery: Battery,
     pub generator: Generator,
     configuration: Electrical,
+    source_defaults: SourceDefaults,
     requests: BTreeMap<String, bool>,
     voltage: [Option<f64>; 8],
     switches: FlightElectrical,
@@ -74,6 +75,7 @@ impl CircuitNetwork {
             battery: Battery::new(&configuration)?,
             generator: Generator::new(&configuration)?,
             configuration,
+            source_defaults: SourceDefaults::Unresolved,
             requests: BTreeMap::new(),
             voltage: [None; 8],
             switches: FlightElectrical::default(),
@@ -81,10 +83,27 @@ impl CircuitNetwork {
             last_battery_flow: None,
         })
     }
+    pub fn new_with_source_defaults(
+        configuration: Electrical,
+        profile: SourceDefaults,
+    ) -> Result<Self, String> {
+        let mut network = Self::new(configuration)?;
+        network.source_defaults = profile;
+        let effective = network.source_configuration();
+        network.battery = Battery::new(&effective)?;
+        network.generator = Generator::new(&effective)?;
+        Ok(network)
+    }
+    /// Effective source configuration; the original authored data stays intact.
+    pub fn source_configuration(&self) -> Electrical {
+        self.configuration
+            .with_source_defaults(self.source_defaults)
+    }
     pub fn reset(&mut self) {
         // Configuration was validated by new and remains immutable.
-        self.battery = Battery::new(&self.configuration).unwrap();
-        self.generator = Generator::new(&self.configuration).unwrap();
+        let effective = self.source_configuration();
+        self.battery = Battery::new(&effective).unwrap();
+        self.generator = Generator::new(&effective).unwrap();
         self.requests.clear();
         self.voltage = [None; 8];
         self.switches = FlightElectrical::default();
@@ -394,5 +413,26 @@ mod tests {
         assert_eq!(n.switches().battery, Some(false));
         n.advance_time(1.).unwrap();
         assert_eq!(n.battery.charge_fraction(), None);
+    }
+    #[test]
+    fn source_profile_survives_reset_without_inventing_charge_or_online_generation() {
+        let mut n = CircuitNetwork::new_with_source_defaults(
+            Electrical::default(),
+            SourceDefaults::FsxSteam62615SinglePiston,
+        )
+        .unwrap();
+        assert_eq!(n.configuration.generator_voltage, None);
+        assert_eq!(n.source_configuration().generator_voltage, Some(28.));
+        assert_eq!(n.generator.supplied_voltage(Some(7.)).unwrap(), None);
+        assert_eq!(n.battery.open_circuit_voltage(), None);
+        n.generator.set_online(Some(true));
+        assert_eq!(n.generator.supplied_voltage(Some(60.)).unwrap(), Some(28.));
+        assert_eq!(n.generator.supplied_voltage(Some(60.01)).unwrap(), None);
+        n.reset();
+        assert_eq!(n.generator.supplied_voltage(Some(7.)).unwrap(), None);
+        assert_eq!(n.source_configuration().max_generator_amps, Some(60.));
+        assert_eq!(n.bus_voltage(Bus::Main).unwrap(), None);
+        n.battery.set_charge_fraction(Some(1.)).unwrap();
+        assert_eq!(n.battery.open_circuit_voltage(), Some(24.));
     }
 }

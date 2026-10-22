@@ -785,7 +785,7 @@ cargo run -p fsx-app --example legacy-electrical-check --locked -- FSX target/le
 ```
 
 Use a new output directory. The checked C172 has 17 authored consumer entries;
-source voltage/current parameters are absent and remain unknown. The checker
+authored source voltage/current parameters are absent. The checker
 supplies explicitly labeled inspection bus values to test thresholds, two
 requested loads, invalid-input atomicity and lifecycle. Its current sums are
 requested maxima of authored consumers, not measured/total aircraft current.
@@ -805,7 +805,19 @@ C172 flight simulation time; its charge changes by 0.00025. The desktop schedule
 has battery pause/frame-partition/reset tests. Battery integration now follows
 committed physics substeps, with an explicitly supplied current request; it does
 not derive that current from CFG maxima or distribute power automatically.
-Actual engine/load providers, C172 topology and omitted legacy defaults still
+A separate version-pinned reference command executes bounded original source
+initialization in x86 emulation (requires pefile/unicorn; no original FSX process):
+
+```powershell
+python scripts/check-electrical-defaults.py FSX/sim1.dll target/electrical-default-reference
+```
+
+For installed sim1 version 10.0.62615.0, its single-piston path initializes source
+ratings to 24 V battery / 28 V generator / 60 A. Simulation explicitly applies that
+profile to missing ratings, preserving authored zero. The checker reports authored
+and effective settings separately. These ratings do not make the generator online,
+set charge or energize a bus. Other versions are not established by this check.
+Actual engine/load providers, C172 topology and remaining legacy defaults still
 need implementation before live OAT/V binding. FLT loading is an explicit API and
 checker path; it does not yet restore a flight into the viewer.
 

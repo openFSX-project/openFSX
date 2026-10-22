@@ -1,5 +1,5 @@
 //! Installed authored circuit schema and explicit bus-observation runtime check.
-//! No implicit battery/generator voltage or FSX process is used.
+//! Versioned source ratings are separate from unavailable live bus voltage.
 use fsx_sim::electrical_distribution::Contact;
 use fsx_sim::flight::Simulation;
 use fsx_sim::{electrical::CircuitNetwork, electrical_sources::VoltageCurve};
@@ -44,6 +44,22 @@ fn main() -> Result<(), String> {
         "C172 pitot circuit metadata mismatch",
     )?;
     let mut simulation = Simulation::trimmed(aircraft.parameters.clone(), 90. * KNOT, 300.)?;
+    let effective_sources = simulation.electrical.source_configuration();
+    ensure(
+        effective_sources.max_battery_voltage == Some(24.)
+            && effective_sources.generator_voltage == Some(28.)
+            && effective_sources.max_generator_amps == Some(60.)
+            && effective_sources.battery_max_capacity_amph.is_none()
+            && effective_sources.battery_charging_current.is_none(),
+        "Versioned single-piston source-default profile mismatch",
+    )?;
+    let mut supplied_source = simulation.electrical.generator.clone();
+    supplied_source.set_online(Some(true));
+    ensure(
+        supplied_source.supplied_voltage(Some(60.))? == Some(28.)
+            && supplied_source.supplied_voltage(Some(60.01))?.is_none(),
+        "Resolved source rating is not used by the generator model",
+    )?;
     ensure(
         simulation.electrical.bus_voltage(Bus::Main)?.is_none(),
         "Initial voltage was fabricated",
@@ -371,7 +387,9 @@ fn main() -> Result<(), String> {
         timed.electrical.battery.charge_fraction().is_none(),
         "Lost terminal-current knowledge retained a charge estimate",
     )?;
-    let report = json!({"schema":4,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
+    let report = json!({"schema":5,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
+        "effective_source_ratings":{"profile":"FsxSteam62615SinglePiston","max_battery_voltage":effective_sources.max_battery_voltage,"generator_voltage":effective_sources.generator_voltage,"max_generator_amps":effective_sources.max_generator_amps,
+            "reference":"bounded original scalar initialization; not live generation or measured bus voltage","capacity_and_charge_limit_resolved":false},
         "battery_max_capacity_amph":configuration.battery_max_capacity_amph,"battery_charging_current":configuration.battery_charging_current,
         "generator_voltage":configuration.generator_voltage,"max_generator_amps":configuration.max_generator_amps,"engine_generator_map":configuration.engine_generator_map,"electric_always_available":configuration.always_available,
         "unsupported":configuration.unsupported,"cases":cases,"inputs":"explicit synthetic bus observations and requested authored loads",
@@ -385,6 +403,6 @@ fn main() -> Result<(), String> {
         serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    println!("PASS: 17 authored circuits; sources/distribution; two installed FLT switch profiles; explicit-current charge follows simulation time; installed source providers/topology remain unresolved.");
+    println!("PASS: 17 authored circuits; verified versioned source ratings without live supply; sources/distribution/FLT/simulation time; actual source providers/topology remain unresolved.");
     Ok(())
 }

@@ -51,6 +51,15 @@ pub struct Electrical {
     /// Preserved keys are not silently interpreted as circuits or scalar defaults.
     pub unsupported: BTreeMap<String, String>,
 }
+/// Version-specific source initialization, separate from authored CFG data.
+/// The reference executes installed sim1 scalar initialization with guarded
+/// emulation (scripts/check-electrical-defaults.py); no live supply is implied.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SourceDefaults {
+    #[default]
+    Unresolved,
+    FsxSteam62615SinglePiston,
+}
 const CIRCUITS: &[&str] = &[
     "navcom1",
     "navcom2",
@@ -100,6 +109,18 @@ fn number(value: &str, maximum: f64) -> Result<f64, String> {
     Ok(number)
 }
 impl Electrical {
+    /// Apply only source defaults verified for the specified engine/version
+    /// profile. Does not expand omitted circuit defaults or battery capacity.
+    /// The caller must establish single-piston engine eligibility separately.
+    pub fn with_source_defaults(&self, profile: SourceDefaults) -> Self {
+        let mut effective = self.clone();
+        if profile == SourceDefaults::FsxSteam62615SinglePiston {
+            effective.max_battery_voltage.get_or_insert(24.);
+            effective.generator_voltage.get_or_insert(28.);
+            effective.max_generator_amps.get_or_insert(60.);
+        }
+        effective
+    }
     pub fn from_config(config: &Config) -> Result<Self, String> {
         let mut result = Self::default();
         let Some(section) = config.section("electrical") else {
@@ -195,6 +216,41 @@ impl Electrical {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn verified_source_profile_resolves_only_missing_ratings_without_altering_authored_data() {
+        let authored = Electrical::default();
+        let effective = authored.with_source_defaults(SourceDefaults::FsxSteam62615SinglePiston);
+        assert_eq!(authored.max_battery_voltage, None);
+        assert_eq!(effective.max_battery_voltage, Some(24.));
+        assert_eq!(effective.generator_voltage, Some(28.));
+        assert_eq!(effective.max_generator_amps, Some(60.));
+        assert_eq!(effective.battery_max_capacity_amph, None);
+        assert_eq!(effective.battery_charging_current, None);
+        assert!(effective.circuits.is_empty());
+        assert_eq!(
+            authored
+                .with_source_defaults(SourceDefaults::Unresolved)
+                .generator_voltage,
+            None
+        );
+        for (battery, generator, amps) in [(0., 0., 0.), (12., 13.8, 45.)] {
+            let authored = Electrical {
+                max_battery_voltage: Some(battery),
+                generator_voltage: Some(generator),
+                max_generator_amps: Some(amps),
+                ..Electrical::default()
+            };
+            let e = authored.with_source_defaults(SourceDefaults::FsxSteam62615SinglePiston);
+            assert_eq!(
+                (
+                    e.max_battery_voltage,
+                    e.generator_voltage,
+                    e.max_generator_amps
+                ),
+                (Some(battery), Some(generator), Some(amps))
+            );
+        }
+    }
     #[test]
     fn electrical_parser_retains_authored_values_unknown_keys_and_missing_source_data() {
         let config=Config::parse("[electrical]\nPITOT_HEAT=0,2,17\navionics=1,5,17\ncustom_wire=original\nmax_battery_voltage=24\nelectric_always_available=0\nengine_generator_map=1,0,2").unwrap();

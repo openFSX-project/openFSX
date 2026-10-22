@@ -377,7 +377,12 @@ impl Simulation {
             ));
         }
         Ok(Self {
-            electrical: crate::electrical::CircuitNetwork::new(parameters.electrical.clone())?,
+            // This dynamics profile accepts one piston engine. Preserve authored
+            // CFG data separately from this versioned FSX source initialization.
+            electrical: crate::electrical::CircuitNetwork::new_with_source_defaults(
+                parameters.electrical.clone(),
+                fsx_vehicle::electrical::SourceDefaults::FsxSteam62615SinglePiston,
+            )?,
             parameters,
             state: State {
                 position: [0., 0., -altitude],
