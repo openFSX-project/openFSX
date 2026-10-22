@@ -3,6 +3,7 @@ pub mod air;
 pub mod aircraft;
 pub mod cabinet;
 pub mod electrical;
+pub mod flight_electrical;
 pub mod gauge;
 pub mod ground;
 pub mod mass;

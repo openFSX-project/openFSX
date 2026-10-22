@@ -163,6 +163,59 @@ impl FlightSession {
 mod tests {
     use super::*;
     #[test]
+    fn battery_tracks_simulated_time_pause_frame_partition_and_reset() {
+        let mut p = fsx_vehicle::aircraft::own_parameters();
+        p.electrical.battery_max_capacity_amph = Some(40.);
+        let mut a = FlightSession::new(p.clone()).unwrap();
+        let mut b = FlightSession::new(p).unwrap();
+        for session in [&mut a, &mut b] {
+            session
+                .simulation
+                .electrical
+                .battery
+                .set_charge_fraction(Some(1.))
+                .unwrap();
+            session
+                .simulation
+                .electrical
+                .set_battery_current_request(Some(36.))
+                .unwrap();
+        }
+        for _ in 0..60 {
+            a.advance(1. / 60.).unwrap();
+        }
+        for _ in 0..120 {
+            b.advance(1. / 120.).unwrap();
+        }
+        assert_eq!(
+            a.simulation.electrical.battery.charge_fraction(),
+            b.simulation.electrical.battery.charge_fraction()
+        );
+        assert!(
+            (a.simulation.electrical.battery.charge_fraction().unwrap() - 0.99975).abs() < 1e-12
+        );
+        let fraction = a.simulation.electrical.battery.charge_fraction();
+        let flow = a.simulation.electrical.last_battery_flow();
+        a.paused = true;
+        a.advance(30.).unwrap();
+        assert_eq!(a.simulation.electrical.battery.charge_fraction(), fraction);
+        assert_eq!(a.simulation.electrical.last_battery_flow(), flow);
+        a.paused = false;
+        a.advance(1. / 120.).unwrap();
+        assert!(a.simulation.electrical.battery.charge_fraction().unwrap() < fraction.unwrap());
+        a.reset().unwrap();
+        assert_eq!(a.simulation.electrical.battery.charge_fraction(), None);
+        assert_eq!(a.simulation.electrical.last_battery_flow(), None);
+        // Reinitializing charge without a source request must not inherit 36 A.
+        a.simulation
+            .electrical
+            .battery
+            .set_charge_fraction(Some(1.))
+            .unwrap();
+        a.advance(1. / 120.).unwrap();
+        assert_eq!(a.simulation.electrical.battery.charge_fraction(), None);
+    }
+    #[test]
     fn runway_reset_parking_brake_and_power_keys() {
         let mut session =
             FlightSession::on_ground(fsx_vehicle::aircraft::own_parameters()).unwrap();

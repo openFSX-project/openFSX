@@ -5,6 +5,53 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 22 October 2026
 
+After `0066b95`, legacy FLT electrical switch positions can be read and applied
+explicitly to the simulation-owned circuit runtime. Installed Lesson 1 and
+FLTSIM flights exercise both legacy Systems.0 and Avionics.0 locations for the
+avionics switch. Battery and four engine generator switches remain distinct
+from source availability; eleven known pitot/light switches map only to authored
+aircraft circuits. Missing fields remain unknown and conflicting duplicate
+locations fail rather than choosing an unverified precedence. True/False parsing,
+Windows-1252 loading and bounded file/section sizes are checked. This is a switch
+reader/application API, not full flight restoration or automatic viewer startup.
+
+Applying a switch snapshot replaces supported mapped requests, preserves unrelated
+manual requests, clears stale bus/source-availability/current observations and
+retains the battery's existing charge estimate. It does not manufacture aircraft
+topology, charge or a running generator from a switch position. An empty snapshot
+clears old supported switch requests instead of inheriting another flight's state.
+
+Battery integration now runs once for each committed physics interval, including
+the smaller ground-contact substeps. Its current request must come explicitly
+from a source provider; CFG consumer maxima are never used automatically. A
+missing request invalidates known charge on positive elapsed time. Invalid physics
+input does not advance charge, and the desktop scheduler's pause does not consume
+wall time. Reset clears current/flow/switch state; suspension settling precedes
+the flight epoch and its interval record is discarded when time returns to zero.
+The most recent flow describes the last committed substep, not a whole frame.
+
+Tests cover airborne/contact timing without double counting, frame partition,
+pause/resume, rejected inputs, unavailable current and reset. The installed checker
+also applies two real FLT switch snapshots to the C172 circuit runtime while
+asserting that generator availability and voltage remain unknown. A separately
+labeled 40 Ah / 36 A fixture coupled to C172 flight physics loses 0.00025 charge
+fraction over one simulation second; this is not the installed aircraft's rating
+or an original-FSX measurement. Physical distribution remains provider-driven.
+
+Next is actual engine/regulator availability, terminal-current allocation and
+confirmed aircraft source/default/topology data, followed by live secondary OAT/V.
+Source sharing/charging, FSX voltage behavior, complete FLT restoration and full
+FSX 1:1 parity remain unfinished. Original-FSX acquisition stays deferred.
+
+194 all-feature Rust test executions pass in
+`target/electrical-flight-time-workspace-tests-02.log`. Installed C172/FLT and
+synthetic electrical checks pass in `target/electrical-flight-time-check-01/`.
+The native clock/buttons/picking/GPU/121-frame flight/pause/reset/view/ground
+regression passes in `target/electrical-flight-time-regression-01.log`.
+Formatting, architecture and generated documentation checks pass.
+
+### Previous explicit distribution stage
+
 After `fac489c`, explicit source distribution is available for a caller-supplied
 complete inventory of up to eight feeds and 28 bus contacts. Closed contacts
 are ideal bidirectional conductors; open contacts isolate groups. A sole known

@@ -798,9 +798,16 @@ Seven more synthetic cases check explicit distribution from one generator throug
 main/avionics contacts: 12 A combined load, 7 A with avionics isolated, main-feed
 isolation, unknown contact/load, overload and offline supply. The solver publishes
 all bus results atomically; it does not derive the aircraft graph or actual loads.
-Sources/distribution remain separate from ordinary physics stepping. Equipment
-activity, engine/regulator availability, C172 topology and omitted legacy defaults
-still need implementation before live OAT/V binding.
+The checker also reads two installed FLT switch profiles, applies the supported
+positions without inventing source availability and verifies that absent requests
+clear prior switch state. A separate 40 Ah / 36 A fixture follows one second of
+C172 flight simulation time; its charge changes by 0.00025. The desktop scheduler
+has battery pause/frame-partition/reset tests. Battery integration now follows
+committed physics substeps, with an explicitly supplied current request; it does
+not derive that current from CFG maxima or distribute power automatically.
+Actual engine/load providers, C172 topology and omitted legacy defaults still
+need implementation before live OAT/V binding. FLT loading is an explicit API and
+checker path; it does not yet restore a flight into the viewer.
 
 ## Visibility inspection
 

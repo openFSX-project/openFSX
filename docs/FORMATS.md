@@ -907,7 +907,8 @@ known maximum current returns authored ideal regulated voltage when online;
 unknown demand/capability, overload or unavailable rating returns None. Offline
 reports a disconnected source (0 V), not an observation of the shared bus.
 Network reset clears charge, caller curves and availability along with circuit
-observations/requests. Sources are not automatically wired or advanced by physics.
+observations/requests. Sources are not automatically wired. Battery charge advances
+with committed physics time only when its current request is explicitly provided.
 
 The electrical_distribution solver accepts an explicit complete inventory of up
 to eight feeds, 28 unique non-self bus pairs and eight optional fixed-current
@@ -935,6 +936,44 @@ with fresh source/contact/load inputs when they change. These current requests
 are independent inputs, not automatically copied from authored circuit maxima.
 They are an ideal constant-current profile, not a measurement or a nonlinear
 load/threshold solver. A result can be used by authored circuit evaluation after
-publication, but no feedback loop activates consumers or advances battery charge.
+publication, but no feedback loop activates consumers or derives battery current.
 Actual equipment activity, engine/regulator providers, aircraft topology,
 battery coupling, overload response, default resolution and FSX parity remain open.
+
+
+## Legacy FLT electrical switches and simulation time
+
+The [Microsoft FLT reference](https://docs.flightsimulator.com/html/Content_Configuration/Flights_And_Missions/Flight_Definitions.htm)
+identifies BatterySwitch, GeneratorSwitch and AvionicsSwitch as switch positions.
+Installed FSX FLTs also establish the older Systems.0 avionics location and the
+Switches.0 pitot/light spelling. These values do not establish online generation,
+bus voltage, equipment presence, charge fraction or full scenario state.
+
+fsx-vehicle::flight_electrical reads player aircraft 0: Systems.0 BatterySwitch,
+AvionicsSwitch in Systems.0 or Avionics.0, GeneratorSwitch in Engine Parameters.1.0
+through .4.0, and Switches.0 PitotHeat and ten light positions. PanelLights may
+also occur in Systems.0. Both locations may agree; conflicting values fail because
+legacy precedence is not verified. Booleans are case-insensitive True/False only;
+missing fields stay None. Other aircraft/sections and unrelated keys are ignored.
+File loading is bounded to 2 MiB with explicit UTF-8/Windows-1252 decoding; relevant
+sections are bounded to 256 entries, 128-byte keys and 4096-byte values.
+
+CircuitNetwork.apply_switches applies only declared aircraft circuits and replaces
+all supported mapped requests (including clearing omitted values). Other explicit
+manual device requests remain. Applying a snapshot clears bus observations,
+generator availability, terminal-current request and last-flow record; it preserves
+existing battery charge until the next actual integration input. Reset also clears
+charge and supplied curves. No switch closes a guessed aircraft bus contact.
+
+set_battery_current_request accepts optional finite signed current bounded to
++/-1,000,000 A. It is independent of authored requested consumer maxima.
+Simulation.step advances the battery after physics checks and before committing
+each accepted state. Ground subdivisions advance their own durations exactly once;
+rejected intervals do not advance electrical state. Suspension settling clears its
+source interval record before the user flight begins at time zero. The desktop
+scheduler skips integration during pause and reset creates fresh electrical state.
+last_battery_flow reports the last committed substep's average accepted current,
+not a frame average. Unknown current makes charge unknown on a positive interval;
+zero elapsed time preserves the preceding charge/record. No loaded bus voltage is
+derived from this charge integration. Automatic FLT/viewer initialization, actual
+current/engine providers and complete flight restoration remain unimplemented.

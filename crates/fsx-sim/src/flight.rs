@@ -296,6 +296,9 @@ impl Simulation {
             return Err("Runway start did not settle on the configured wheels".into());
         }
         s.time = 0.;
+        // Suspension settling precedes the flight epoch; discard its source
+        // interval record just as its elapsed physics time is discarded.
+        s.electrical.reset();
         Ok(s)
     }
     pub fn trimmed(parameters: Parameters, speed: f64, altitude: f64) -> Result<Self> {
@@ -424,6 +427,9 @@ impl Simulation {
         if next.position[2] >= 0. {
             return Err("Aircraft CG penetrated test ground; reset required".into());
         }
+        // No electrical mutation until this physics substep has passed all
+        // fallible calculations. Contact subdivision advances each interval once.
+        self.electrical.advance_time(dt)?;
         self.ground_contact = self
             .parameters
             .gear
@@ -459,6 +465,45 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::aircraft::own_parameters;
+    #[test]
+    fn battery_uses_committed_airborne_and_contact_substep_time_without_double_counting() {
+        let mut p = own_parameters();
+        p.electrical.battery_max_capacity_amph = Some(40.);
+        for ground in [false, true] {
+            let mut s = if ground {
+                Simulation::on_ground(p.clone()).unwrap()
+            } else {
+                Simulation::trimmed(p.clone(), 50., 300.).unwrap()
+            };
+            s.electrical.battery.set_charge_fraction(Some(1.)).unwrap();
+            s.electrical.set_battery_current_request(Some(36.)).unwrap();
+            let before = s.state.position;
+            let mut invalid = s.controls;
+            invalid.pitch = f64::NAN;
+            assert!(s.step(invalid, STEP).is_err());
+            assert_eq!(s.electrical.battery.charge_fraction(), Some(1.));
+            assert_eq!(s.electrical.last_battery_flow(), None);
+            assert_eq!(s.state.position, before);
+            for _ in 0..120 {
+                s.step(s.controls, STEP).unwrap();
+            }
+            assert!((s.time - 1.).abs() < 1e-12);
+            assert!((s.electrical.battery.charge_fraction().unwrap() - 0.99975).abs() < 1e-12);
+            assert!(
+                (s.electrical
+                    .last_battery_flow()
+                    .unwrap()
+                    .average_terminal_amps
+                    .unwrap()
+                    - 36.)
+                    .abs()
+                    < 1e-7
+            );
+            s.electrical.set_battery_current_request(None).unwrap();
+            s.step(s.controls, STEP).unwrap();
+            assert_eq!(s.electrical.battery.charge_fraction(), None);
+        }
+    }
     #[test]
     fn shifted_loading_and_engine_arm_are_in_initial_trim() {
         let mut p = own_parameters();

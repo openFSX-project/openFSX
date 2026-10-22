@@ -2,8 +2,9 @@
 //! Explicit source primitives remain separate from bus ties and overload voltage
 //! response: unknown supply/state never becomes normal voltage.
 use crate::electrical_distribution::{self, Contact, Distribution, Feed};
-use crate::electrical_sources::{Battery, Generator};
+use crate::electrical_sources::{Battery, BatteryFlow, Generator};
 use fsx_vehicle::electrical::{Bus, Electrical};
+use fsx_vehicle::flight_electrical::FlightElectrical;
 use std::collections::BTreeMap;
 #[derive(Debug, Clone, PartialEq)]
 pub struct CircuitReading {
@@ -26,6 +27,9 @@ pub struct CircuitNetwork {
     configuration: Electrical,
     requests: BTreeMap<String, bool>,
     voltage: [Option<f64>; 8],
+    switches: FlightElectrical,
+    battery_current_request: Option<f64>,
+    last_battery_flow: Option<BatteryFlow>,
 }
 impl CircuitNetwork {
     pub fn new(configuration: Electrical) -> Result<Self, String> {
@@ -72,6 +76,9 @@ impl CircuitNetwork {
             configuration,
             requests: BTreeMap::new(),
             voltage: [None; 8],
+            switches: FlightElectrical::default(),
+            battery_current_request: None,
+            last_battery_flow: None,
         })
     }
     pub fn reset(&mut self) {
@@ -80,6 +87,52 @@ impl CircuitNetwork {
         self.generator = Generator::new(&self.configuration).unwrap();
         self.requests.clear();
         self.voltage = [None; 8];
+        self.switches = FlightElectrical::default();
+        self.battery_current_request = None;
+        self.last_battery_flow = None;
+    }
+    pub fn switches(&self) -> &FlightElectrical {
+        &self.switches
+    }
+    /// Replace supported FLT switch positions; missing mapped requests become
+    /// unknown, absent aircraft circuits stay absent. Switches alone never
+    /// energize buses or establish generator availability/terminal current.
+    pub fn apply_switches(&mut self, switches: &FlightElectrical) {
+        for name in FlightElectrical::mapped_circuits() {
+            self.requests.remove(name);
+        }
+        for (name, &requested) in switches.requests() {
+            if self.configuration.circuits.contains_key(name) {
+                self.requests.insert(name.clone(), requested);
+            }
+        }
+        self.switches = switches.clone();
+        self.voltage = [None; 8];
+        self.generator.set_online(None);
+        self.battery_current_request = None;
+        self.last_battery_flow = None;
+    }
+    /// Explicit source-provider request, independent of CFG consumer maxima.
+    /// None clears knowledge on the next positive simulation step.
+    pub fn set_battery_current_request(&mut self, amps: Option<f64>) -> Result<(), String> {
+        if amps.is_some_and(|a| !a.is_finite() || a.abs() > 1e6) {
+            return Err("Invalid battery current request".into());
+        }
+        self.battery_current_request = amps;
+        Ok(())
+    }
+    pub fn last_battery_flow(&self) -> Option<BatteryFlow> {
+        self.last_battery_flow
+    }
+    /// Called only for committed simulation intervals, not wall time or pause.
+    pub fn advance_time(&mut self, seconds: f64) -> Result<(), String> {
+        let flow = self
+            .battery
+            .advance(seconds, self.battery_current_request)?;
+        if seconds > 0. {
+            self.last_battery_flow = Some(flow);
+        }
+        Ok(())
     }
     pub fn set_bus_voltage(&mut self, bus: Bus, value: Option<f64>) -> Result<(), String> {
         let index = bus.index()?;
@@ -309,5 +362,37 @@ mod tests {
         assert_eq!(n.snapshot().unwrap().authored_bus_demand_amps[0], None);
         n.reset();
         assert_eq!(n.bus_voltage(Bus::Main).unwrap(), None);
+    }
+    #[test]
+    fn clearing_terminal_current_and_invalid_requests_have_explicit_lifecycle() {
+        let config = Electrical {
+            battery_max_capacity_amph: Some(40.),
+            ..Electrical::default()
+        };
+        let mut n = CircuitNetwork::new(config).unwrap();
+        n.battery.set_charge_fraction(Some(1.)).unwrap();
+        n.set_battery_current_request(Some(36.)).unwrap();
+        assert!(n.set_battery_current_request(Some(f64::NAN)).is_err());
+        assert!(n.advance_time(-1.).is_err());
+        assert_eq!(n.battery.charge_fraction(), Some(1.));
+        assert_eq!(n.last_battery_flow(), None);
+        n.advance_time(1.).unwrap();
+        assert_eq!(n.battery.charge_fraction(), Some(0.99975));
+        let flow = n.last_battery_flow();
+        n.advance_time(0.).unwrap();
+        assert_eq!(n.last_battery_flow(), flow);
+        n.set_battery_current_request(None).unwrap();
+        n.advance_time(1.).unwrap();
+        assert_eq!(n.battery.charge_fraction(), None);
+        n.reset();
+        assert_eq!(n.last_battery_flow(), None);
+        n.battery.set_charge_fraction(Some(1.)).unwrap();
+        n.set_battery_current_request(Some(36.)).unwrap();
+        let mut switches = FlightElectrical::default();
+        switches.battery = Some(false);
+        n.apply_switches(&switches);
+        assert_eq!(n.switches().battery, Some(false));
+        n.advance_time(1.).unwrap();
+        assert_eq!(n.battery.charge_fraction(), None);
     }
 }

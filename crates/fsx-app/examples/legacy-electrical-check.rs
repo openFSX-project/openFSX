@@ -6,6 +6,7 @@ use fsx_sim::{electrical::CircuitNetwork, electrical_sources::VoltageCurve};
 use fsx_vehicle::{
     aircraft::{Aircraft, KNOT},
     electrical::{Bus, Electrical},
+    flight_electrical::FlightElectrical,
 };
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
@@ -299,12 +300,84 @@ fn main() -> Result<(), String> {
         sources.bus_voltage(Bus::Main)?.is_none(),
         "Distribution survived reset",
     )?;
-    let report = json!({"schema":3,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
+    let mut flight_switch_cases = Vec::new();
+    for path in ["lessons/student/Lesson 1.FLT", "flights/other/FLTSIM.FLT"] {
+        let switches = FlightElectrical::load(&root.join(path), true)?;
+        ensure(
+            switches.battery == Some(true)
+                && switches.avionics == Some(true)
+                && switches.generators[0] == Some(true)
+                && switches.requests().get("pitot_heat") == Some(&false),
+            "Installed FLT switch profile mismatch",
+        )?;
+        simulation.electrical.apply_switches(&switches);
+        ensure(
+            simulation.electrical.switches() == &switches
+                && simulation.electrical.bus_voltage(Bus::Main)?.is_none()
+                && simulation
+                    .electrical
+                    .generator
+                    .supplied_voltage(Some(7.))?
+                    .is_none(),
+            "FLT switch position invented source availability/voltage",
+        )?;
+        let snapshot = simulation.electrical.snapshot()?;
+        ensure(
+            snapshot
+                .circuits
+                .iter()
+                .find(|c| c.name == "pitot_heat")
+                .unwrap()
+                .requested
+                == Some(false),
+            "FLT pitot request was not applied",
+        )?;
+        flight_switch_cases.push(json!({"file":path,"scope":"switch positions only; no aircraft/flight restoration",
+            "battery":switches.battery,"avionics":switches.avionics,"generators":switches.generators,"requests":switches.requests(),"snapshot":serialize(&snapshot)?}));
+    }
+    simulation
+        .electrical
+        .apply_switches(&FlightElectrical::default());
+    ensure(
+        simulation
+            .electrical
+            .snapshot()?
+            .circuits
+            .iter()
+            .find(|c| c.name == "pitot_heat")
+            .unwrap()
+            .requested
+            .is_none(),
+        "Missing FLT request inherited a prior switch",
+    )?;
+    // Independent configured fixture: installed C172 capacity remains unknown.
+    let mut timed_parameters = aircraft.parameters.clone();
+    timed_parameters.electrical.battery_max_capacity_amph = Some(40.);
+    let mut timed = Simulation::trimmed(timed_parameters, 90. * KNOT, 300.)?;
+    timed.electrical.battery.set_charge_fraction(Some(1.))?;
+    timed.electrical.set_battery_current_request(Some(36.))?;
+    for _ in 0..120 {
+        timed.step(timed.controls, 1. / 120.)?;
+    }
+    ensure(
+        (timed.electrical.battery.charge_fraction().unwrap() - 0.99975).abs() < 1e-12
+            && timed.electrical.bus_voltage(Bus::Main)?.is_none(),
+        "Synthetic flight-time battery conservation/unknown-bus mismatch",
+    )?;
+    let timed_fraction = timed.electrical.battery.charge_fraction();
+    timed.electrical.set_battery_current_request(None)?;
+    timed.step(timed.controls, 1. / 120.)?;
+    ensure(
+        timed.electrical.battery.charge_fraction().is_none(),
+        "Lost terminal-current knowledge retained a charge estimate",
+    )?;
+    let report = json!({"schema":4,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
         "battery_max_capacity_amph":configuration.battery_max_capacity_amph,"battery_charging_current":configuration.battery_charging_current,
         "generator_voltage":configuration.generator_voltage,"max_generator_amps":configuration.max_generator_amps,"engine_generator_map":configuration.engine_generator_map,"electric_always_available":configuration.always_available,
         "unsupported":configuration.unsupported,"cases":cases,"inputs":"explicit synthetic bus observations and requested authored loads",
         "synthetic_source_primitives":synthetic_sources,"synthetic_distribution_cases":distribution_cases,
         "distribution_inputs":"complete synthetic graph and independent constant-current requests; not installed C172 wiring or automatic CFG consumer activation",
+        "installed_flight_switches":flight_switch_cases,"synthetic_simulation_time_battery":{"capacity_amph":40,"current_request_amps":36,"elapsed_seconds":1,"charge_fraction":timed_fraction,"unknown_request_clears_charge":true,"bus_voltage":null},
         "installed_source_generation":false,"installed_battery_dynamics":false,"sdk_omitted_circuit_defaults_resolved":false,"total_aircraft_current":false,"fsx_parity_verified":false});
     fs::create_dir(&output).map_err(|e| e.to_string())?;
     fs::write(
@@ -312,6 +385,6 @@ fn main() -> Result<(), String> {
         serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    println!("PASS: 17 authored circuits; source conservation/limits/reset; seven explicit distribution cases; installed source providers/topology remain unresolved.");
+    println!("PASS: 17 authored circuits; sources/distribution; two installed FLT switch profiles; explicit-current charge follows simulation time; installed source providers/topology remain unresolved.");
     Ok(())
 }
