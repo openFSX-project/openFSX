@@ -171,9 +171,9 @@ presence and input echo. Pause/reset/timeouts follow the original contract.
 
 ### Connected local clock profile
 
-`--clock-frames FSX_ROOT` uses schema 3, preserving the 14 schema-2 bindings and
+`--clock-frames FSX_ROOT` uses schema 4, preserving the 14 schema-2 bindings and
 adding one checked C172 Clock string selected by tokens [3,4,5]. Requests append
-integer local seconds of day in 0..86399:
+finite fractional local seconds of day in [0,86400):
 
 ```text
 frame 1 0 90 984 0 -10 -30 90 86399
@@ -193,17 +193,34 @@ paths attempt the same restoration/disconnect through RAII. The Rust parent
 validates this profile separately; legacy schemas 1/2 remain unchanged.
 
 The viewer opts in with an explicit `--native-clock-start HH:MM:SS`; its local
-clock advances on simulator elapsed time. Timer/selection buttons, runtime
-colors, electrical/lighting state and full lifecycle services are not supplied.
+clock advances on fractional simulator elapsed time. The flight profile binds
+the narrow PANELS bridge for original local mouse packets and token lookup.
+Runtime colors, electrical/lighting state and full lifecycle services remain absent.
 
-Schema-3 ready also advertises `clock_set=true`. After at least one frame,
+Schema-4 ready also advertises `clock_set=true`. After at least one frame,
 `clock-set SECONDS_OF_DAY` refreshes only the clock callback, retaining physics
 sequence/time/results and frame count. The acknowledgement has kind clock-set,
-the unchanged context and the guarded clock object. Seconds must be integer
-0..86399; extra/malformed input and edits before the first frame fail. The parent
+the unchanged context and the guarded clock object. Seconds must be finite in
+[0,86400); extra/malformed input and edits before the first frame fail. The parent
 checks every field before committing the edited local-time origin. Frame pause
 rules still apply to the current value after an edit. This is an explicit source
 update, not execution of arbitrary native event handlers or PANELS services.
+
+The schema-4 flight bridge also accepts clock-click MOUSE_RVA X Y after an
+initialized frame, using checked authored child-local coordinates. The original
+mouse callback and its own packet feed the original event callback. Ready
+requires clock_mouse/fractional_clock. Replies preserve sequence/time/physics
+count, return exact input metadata, acceptance/guards and an updated clock object
+with the cumulative event count. Default-mode output is checked before any mouse
+event; after events the parent checks bounded native text/results with exact
+metadata, fractional echo, guards and its independently expected event count.
+Pause leaves physics cached; the display is dirtied after accepted clicks.
+Close additionally checks clock_events_delivered, clock_import_restored and
+clock_context_guards_verified. The service table remains bound through native
+ModuleDeinit. The viewer exposes startup --native-clock-click child indices;
+screen picking is still pending. Running midnight/time-edit behavior and the
+secondary clock string require further evidence. Isolated diagnostic profiles
+below keep their existing protocol.
 
 ## Guarded C172 mouse probe
 

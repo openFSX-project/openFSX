@@ -262,7 +262,7 @@ static std::vector<uintptr_t> elements(const Module& module, uintptr_t header) {
     return out;
 }
 
-struct FrameInput {uint64_t sequence;double time;std::array<double,6> inputs;uint32_t local_seconds=0;};
+struct FrameInput {uint64_t sequence;double time;std::array<double,6> inputs;double local_seconds=0;};
 static FrameInput parse_frame(const std::string& line, bool flight=false, bool clock=false) {
     std::istringstream stream(line);stream.imbue(std::locale::classic());
     std::string command;FrameInput frame{};
@@ -270,7 +270,7 @@ static FrameInput parse_frame(const std::string& line, bool flight=false, bool c
         throw std::runtime_error("Expected: frame SEQUENCE SECONDS IAS_KNOTS BARO_FEET VERTICAL_SPEED_RAW");
     if (flight && !(stream>>frame.inputs[3]>>frame.inputs[4]>>frame.inputs[5]))
         throw std::runtime_error("Flight frames also require PITCH_DEG BANK_DEG GYRO_HEADING_DEG");
-    if (clock && (!(stream>>frame.local_seconds) || frame.local_seconds>=86400)) throw std::runtime_error("Clock frames require local seconds of day in 0..86399.");
+    if (clock && (!(stream>>frame.local_seconds) || !std::isfinite(frame.local_seconds) || frame.local_seconds<0 || frame.local_seconds>=86400)) throw std::runtime_error("Clock frames require finite local seconds of day in [0,86400).");
     std::string extra;if (stream>>extra) throw std::runtime_error("Trailing frame data.");
     if (!frame.sequence || !std::isfinite(frame.time) || frame.time<0. || frame.time>1e9
         || std::any_of(frame.inputs.begin(),frame.inputs.end(),[](double v){return !std::isfinite(v)||std::abs(v)>1e12;}) || frame.inputs[0]<0.)
@@ -506,9 +506,9 @@ public:
         if(module.word(element+184)!=reinterpret_cast<uintptr_t>(buffer.data) || !std::isfinite(result))throw std::runtime_error("Persistent clock pointer/result is invalid.");
         text=buffer.value();previous=values;previous_available=true;
     }
-    void write_json(uint32_t seconds) const {
+    void write_json(double seconds,uint64_t events=0) const {
         std::cout<<R"({"library":"Cessna172.dll","gauge":"Clock","element_rva":)"<<rva
-            <<R"(,"tokens":[3,4,5],"max_length":8,"local_seconds":)"<<seconds<<R"(,"guarded_buffer":true,"text":)"<<json(text)<<R"(,"callback_result":)"<<result<<'}';
+            <<R"(,"tokens":[3,4,5],"max_length":8,"local_seconds":)"<<seconds<<R"(,"guarded_buffer":true,"text":)"<<json(text)<<R"(,"callback_result":)"<<result<<R"(,"events_delivered":)"<<events<<R"(,"local_event_bridge":true,"guarded_event_words":true)"<<'}';
     }
     void close(){if(installed){std::memcpy(reinterpret_cast<void*>(element+184),&original_pointer,4);installed=false;}connection.close();
         if(module.word(element+184)!=original_pointer)throw std::runtime_error("Original string buffer pointer was not restored.");}
@@ -557,7 +557,7 @@ static int clock_mouse_sample(const fs::path& root,uint32_t selected_rva,uint32_
     return completed?0:2;
 }
 static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=false,bool clock=false) {
-    GuardedTextBuffer clock_buffer(8);
+    GuardedMouseContext clock_context;GuardedTextBuffer clock_buffer(8);
     InitializedModule cessna(library_path(root,"Cessna.dll"));
     InitializedModule c172(library_path(root,"Cessna172.dll"));
     auto bell=flight?std::make_unique<InitializedModule>(library_path(root,"Bell_206B.dll")):nullptr;
@@ -577,27 +577,45 @@ static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=fals
         {bell.get(),"Bell_206B.dll","Attitude",2002,78,3,6,1},
         {bell.get(),"Bell_206B.dll","Attitude",2002,80,4,6,2}
     }};
-    const size_t count=flight?14:5;const int schema=clock?3:(flight?2:1);
+    const size_t count=flight?14:5;const int schema=clock?4:(flight?2:1);
     for (size_t i=0;i<count;++i) bindings[i].locate();
+    auto clock_header=clock?gauge(c172.module,c172.linkage,"Clock"):0;
+    auto clock_panels=clock?std::make_unique<ClockPanels>(c172,clock_header,0):nullptr;
+    auto clock_mouse=clock?std::make_unique<ClockMouse>(c172.module,clock_header):nullptr;
     auto clock_binding=clock?std::make_unique<ClockBinding>(c172,clock_buffer):nullptr;
     std::cout<<"{\"schema\":"<<schema<<",\"source\":\"native-gauge-stream\",\"kind\":\"ready\",\"pointer_bits\":32,\"pid\":"<<GetCurrentProcessId()
         <<",\"libraries_loaded\":"<<(flight?3:2)<<",\"bindings\":"<<count<<",\"panel_services\":false";
-    if(clock)std::cout<<",\"clock_connected\":true,\"string_bindings\":1,\"guarded_buffer\":true,\"clock_set\":true";
+    if(clock)std::cout<<",\"clock_connected\":true,\"string_bindings\":1,\"guarded_buffer\":true,\"clock_set\":true,\"clock_mouse\":true,\"fractional_clock\":true";
     std::cout<<'}'<<std::endl;
     uint64_t sequence=0,evaluated=0;double time=-1.;std::array<double,6> inputs{};std::array<double,14> results{};
-    uint32_t local_seconds=0;
+    double local_seconds=0;uint64_t clock_events=0;
     std::string line;
     while (true) {
         deadline.idle();bool available=line_bounded(line);deadline.active();
         if (!available || line=="quit") break;
         if(clock && line.rfind("clock-set ",0)==0) {
-            std::istringstream edit(line);std::string command,extra;uint32_t seconds=0;
-            if(time<0. || !(edit>>command>>seconds) || seconds>=86400 || (edit>>extra))throw std::runtime_error("Clock edit requires an initialized frame and integer seconds 0..86399.");
-            clock_binding->update(seconds);local_seconds=seconds;
-            std::cout<<std::setprecision(17)<<R"({"schema":3,"source":"native-gauge-stream","kind":"clock-set","sequence":)"<<sequence
+            std::istringstream edit(line);std::string command,extra;double seconds=0;
+            if(time<0. || !(edit>>command>>seconds) || !std::isfinite(seconds) || seconds<0 || seconds>=86400 || (edit>>extra))throw std::runtime_error("Clock edit requires an initialized frame and finite seconds in [0,86400).");
+            clock_panels->set_time(seconds);clock_binding->update(static_cast<uint32_t>(seconds));clock_panels->check();local_seconds=seconds;
+            std::cout<<std::setprecision(17)<<R"({"schema":4,"source":"native-gauge-stream","kind":"clock-set","sequence":)"<<sequence
                 <<R"(,"time":)"<<time<<R"(,"frames_evaluated":)"<<evaluated<<R"(,"clock":)";
-            clock_binding->write_json(local_seconds);std::cout<<'}'<<std::endl;
+            clock_binding->write_json(local_seconds,clock_events);std::cout<<'}'<<std::endl;
             continue;
+        }
+        if(clock && line.rfind("clock-click ",0)==0){
+            std::istringstream click(line);std::string command,extra;uint32_t rva=0;int32_t x=0,y=0;
+            if(time<0. || !(click>>command>>rva>>x>>y) || (click>>extra))throw std::runtime_error("Clock mouse requires an initialized frame, authored RVA and child-local x/y.");
+            auto target=clock_mouse->target(rva,x,y);clock_panels->begin_event(local_seconds);
+            *clock_context.data=MouseContext{{x,y},reinterpret_cast<void*>(clock_header),reinterpret_cast<void*>(target.record),{0,0},nullptr};
+            auto original=*clock_context.data;int32_t result=0;MouseFault fault{};
+            bool completed=invoke_mouse(reinterpret_cast<MouseCall>(target.callback),clock_context.data,target.flags,&result,&fault);
+            clock_context.check();if(!completed)throw std::runtime_error("Flight clock mouse callback failed: "+hex(fault.code));
+            if(result!=1 || std::memcmp(&original,clock_context.data,sizeof(original)))throw std::runtime_error("Flight clock mouse rejected input or changed context.");
+            clock_panels->deliver();++clock_events;clock_binding->update(static_cast<uint32_t>(local_seconds));clock_panels->check();
+            std::cout<<std::setprecision(17)<<R"({"schema":4,"source":"native-gauge-stream","kind":"clock-click","sequence":)"<<sequence
+                <<R"(,"time":)"<<time<<R"(,"frames_evaluated":)"<<evaluated<<R"(,"mouse_rva":)"<<rva<<R"(,"child_local_point":[)"<<x<<','<<y
+                <<R"(],"original_packet_word":)"<<clock_panels->packet_word<<R"(,"mouse_result":1,"process_event_accepted":true,"guarded_context":true,"clock":)";
+            clock_binding->write_json(local_seconds,clock_events);std::cout<<'}'<<std::endl;continue;
         }
         auto frame=parse_frame(line,flight,clock);
         if (frame.sequence!=sequence+1 || frame.time<time) throw std::runtime_error("Stream sequence/time must advance; reset requires a new session.");
@@ -605,7 +623,7 @@ static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=fals
         if (reused && (frame.inputs!=inputs || (clock && frame.local_seconds!=local_seconds))) throw std::runtime_error("Changed physics inputs at an unchanged simulation time.");
         if (!reused) {
             for (size_t i=0;i<count;++i) results[i]=bindings[i].update(bindings[i].input<6?frame.inputs[bindings[i].input]:0.);
-            if(clock_binding)clock_binding->update(frame.local_seconds);
+            if(clock_binding){clock_panels->set_time(frame.local_seconds);clock_binding->update(static_cast<uint32_t>(frame.local_seconds));clock_panels->check();}
             ++evaluated;inputs=frame.inputs;time=frame.time;local_seconds=frame.local_seconds;
         }
         sequence=frame.sequence;
@@ -619,13 +637,13 @@ static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=fals
             std::cout<<'}';
         }
         std::cout<<']';
-        if(clock_binding){std::cout<<R"(,"clock":)";clock_binding->write_json(local_seconds);}
+        if(clock_binding){std::cout<<R"(,"clock":)";clock_binding->write_json(local_seconds,clock_events);}
         std::cout<<'}'<<std::endl;
     }
     if(clock_binding)clock_binding->close();
-    if (bell) bell->close();c172.close();cessna.close();
+    if (bell) bell->close();c172.close();if(clock_panels){clock_context.check();clock_panels->close();}cessna.close();
     std::cout<<"{\"schema\":"<<schema<<",\"source\":\"native-gauge-stream\",\"kind\":\"closed\",\"frames_evaluated\":"<<evaluated<<",\"modules_deinitialized\":"<<(flight?3:2);
-    if(clock)std::cout<<",\"clock_disconnected\":true,\"string_buffer_restored\":true";
+    if(clock)std::cout<<",\"clock_events_delivered\":"<<clock_events<<",\"clock_disconnected\":true,\"string_buffer_restored\":true,\"clock_import_restored\":true,\"clock_context_guards_verified\":true";
     std::cout<<'}'<<std::endl;
     return 0;
 }

@@ -20,6 +20,29 @@ pub struct FlightGauges {
     clock: Option<(fsx_sim::clock::LocalClock, fsx_render::xml_text::GaugeFont)>,
 }
 impl FlightGauges {
+    pub fn click_clock(&mut self, child: usize, elapsed: f64) -> Result<(), String> {
+        if self.clock.is_none() || self.last_clock_time != Some(elapsed) {
+            return Err("Clock mouse requires an enabled current flight frame".into());
+        }
+        let list = self.libraries["cessna172"]
+            .mouse_rects("Clock")?
+            .ok_or("Missing clock mouse metadata")?;
+        let children: Vec<_> = list
+            .records
+            .iter()
+            .filter(|r| r.kind == fsx_vehicle::gauge::MouseKind::Child)
+            .collect();
+        if children.len() != 3 || child >= 3 {
+            return Err("Expected one of three native clock children".into());
+        }
+        let mouse = children[child];
+        self.native.click_clock(
+            mouse.rva,
+            [mouse.relative_box[2] / 2, mouse.relative_box[3] / 2],
+            elapsed,
+        )?;
+        Ok(())
+    }
     pub fn select_clock(&mut self, state: i32) -> Result<(), String> {
         if self.clock.is_none() || ![0, 24, 25, 26].contains(&state) {
             return Err(
@@ -54,7 +77,7 @@ impl FlightGauges {
         let mut edited = *clock;
         edited.apply(event, data, elapsed)?;
         self.native
-            .set_clock_seconds(edited.seconds_at(elapsed)?, elapsed)?;
+            .set_clock_seconds(edited.fractional_seconds_at(elapsed)?, elapsed)?;
         *clock = edited;
         Ok(())
     }
@@ -99,7 +122,7 @@ impl FlightGauges {
         }
         self.native.enable_clock()?;
         self.clock = Some((clock, font));
-        println!("Native clock: explicit local-time origin, installed Quartz, authored daylight colors and SEQ_REC selection; no timer buttons or FSX pixel parity");
+        println!("Native clock: fractional local-time origin, original local button state, installed Quartz and authored daylight/SEQ_REC styling; FSX pixel/input parity unverified");
         Ok(self)
     }
 
@@ -246,7 +269,7 @@ impl FlightGauges {
         }
         let mut frame = if let Some((clock, _)) = &self.clock {
             self.native
-                .update_with_clock(time, inputs, Some(clock.seconds_at(time)?))?
+                .update_with_clock(time, inputs, Some(clock.fractional_seconds_at(time)?))?
         } else {
             self.native.update(time, inputs)?
         };

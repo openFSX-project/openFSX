@@ -525,18 +525,38 @@ No DLL, font, callback result or bitmap from the installed game is distributed.
 
 ### Persistent clock stream
 
-The opt-in `--clock-frames` profile uses schema 3 with the existing 14 numeric
-flight bindings plus one string binding. Frame requests append integer local
-seconds of day (0..86399). Ready reports clock connection, a single string
-binding and guarded buffering. Each clock object identifies library/gauge/RVA,
-tokens [3,4,5], maximum length 8, input seconds, text and numeric callback result.
-The parent checks metadata, guards, exact default-mode HH:MM:SS output and the
-numeric result. Clock and physics inputs must both stay unchanged at equal
-simulator time. Pause reuses results; a time rewind restarts the entire session.
-Closed acknowledges native disconnect and restoration of the original string
-pointer before the three modules deinitialize. The buffer outlives those modules.
-Schemas 1/2 are unchanged. This protocol does not supply a calendar, selection
-events, PANELS services or the full gauge lifecycle.
+The opt-in --clock-frames profile uses schema 4 with the existing 14 numeric
+flight bindings and one guarded clock string. Frame requests append finite
+fractional local seconds in [0,86400). The PANELS lookup sees this exact value;
+HMS slots use whole seconds. Ready reports clock_connected, string_bindings=1,
+guarded_buffer, clock_set, clock_mouse and fractional_clock. The clock object
+identifies library/gauge/element RVA, tokens [3,4,5], maximum length 8, input time,
+text/result, events_delivered, local_event_bridge and guarded_event_words.
+
+The parent tracks accepted button calls independently and requires an exact
+event count. Before the first native button, the original default HH:MM:SS and
+whole-second result are checked exactly. After buttons, native text must retain
+the bounded eight-character clock format and the result must be finite/bounded;
+private mode/timer state is not recreated by the decoder. Metadata, input echo,
+event count and guards remain mandatory for all modes. Equal simulation time
+requires unchanged physics and clock input. Reused frames return the already
+updated native clock; a rewind restarts the complete session.
+
+clock-click MOUSE_RVA X Y requires an initialized frame and a checked authored
+left-single clock child/point. One armed capture receives the original mouse
+packet, then delivers it to the original process-event callback. The response
+has kind clock-click, unchanged physics sequence/time/evaluation count, exact
+RVA/point, original packet word, native BOOL/acceptance, guarded context and the
+updated clock object. The parent commits its event counter only after validating
+all fields. Mouse or clock-source edits invalidate display state without advancing
+physics. Malformed native responses close the owned helper instead of returning
+stale success. Screen coordinates are not part of this protocol.
+
+Close restores the original string pointer, disconnects the clock and deinitializes
+three modules while the service table remains alive. It verifies context guards,
+restores the import pointer and reports clock_events_delivered. Context/string
+buffers outlive module teardown. Schemas 1/2 stay unchanged. This is a narrow
+local service bridge; full PANELS, calendar and shared-cockpit behavior are absent.
 
 ### Local clock event subset
 
@@ -548,7 +568,7 @@ payload. The whole-second state preserves the simulator's fractional phase.
 Reset restores the original configured origin. Date, UTC, timezone and daylight
 are not synchronized by this subset.
 
-Schema 3 ready advertises clock_set. `clock-set SECONDS_OF_DAY` is accepted only
+Schema 4 ready advertises clock_set. `clock-set SECONDS_OF_DAY` is accepted only
 after an initial frame, refreshes the guarded native string and acknowledges the
 unchanged sequence/time/physics frame counter plus the checked clock object.
 The parent rejects edits for a different elapsed time and commits local state

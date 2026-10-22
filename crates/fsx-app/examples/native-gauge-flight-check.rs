@@ -63,6 +63,7 @@ fn run() -> Result<(), String> {
         gauges = gauges.with_day_native_clock(&root, clock)?;
     }
     let first_pid = gauges.pid();
+    let mut button_reports = Vec::new();
     let first = gauges.update(&flight.simulation)?;
     ensure(
         first.clock.is_some() == local_clock.is_some(),
@@ -449,6 +450,124 @@ fn run() -> Result<(), String> {
             std::fs::read(path).map_err(|e| e.to_string())? == clock_pixels[0],
             "Reset at elapsed zero did not restore origin and clear selection",
         )?;
+        // Native button callbacks share the same three-library flight process.
+        for (event, data) in [
+            (fsx_sim::clock::ClockEvent::HoursSet, 12),
+            (fsx_sim::clock::ClockEvent::MinutesSet, 34),
+            (fsx_sim::clock::ClockEvent::SecondsZero, 0),
+        ] {
+            gauges.clock_event(event, data, 0.)?;
+        }
+        let before = gauges.update_inputs(0.5, inputs)?;
+        let button_pid = gauges.pid();
+        gauges.apply(
+            &before,
+            &current.model,
+            &mut current.appearance,
+            Some(&mut gpu),
+        )?;
+        let path = output.join("c172-clock-button-before.ppm");
+        gpu.snapshot(&orbit, &path)?;
+        let button_baseline = std::fs::read(path).map_err(|e| e.to_string())?;
+        ensure(
+            gauges.click_clock(3, 0.5).is_err() && gauges.click_clock(0, 0.75).is_err(),
+            "Invalid/stale mouse input was accepted",
+        )?;
+        let invalid = gauges.update_inputs(0.5, inputs)?;
+        ensure(
+            invalid.clock.as_ref().unwrap().events == 0
+                && !invalid.display_changed
+                && gauges.pid() == button_pid,
+            "Rejected mouse input changed native state",
+        )?;
+        let mut previous_pixels = None;
+        for (i, (time, child, expected, result, events)) in [
+            (0.5, Some(0), " 0:00:00", 0.6, 1),
+            (0.5, Some(1), " 0:00:00", 0.6, 2),
+            (1.75, None, " 0:00:01", 125.6, 2),
+            (1.75, None, " 0:00:01", 125.6, 2),
+            (61.75, None, " 0:01:01", 6125.6, 2),
+            (61.75, Some(1), " 0:01:01", 6125.6, 3),
+            (121.75, None, " 0:01:01", 6125.6, 3),
+            (121.75, Some(1), " 0:00:00", 0.6, 4),
+            (121.75, Some(1), " 0:00:00", 0.6, 5),
+            (123., None, " 0:00:01", 125.6, 5),
+            (123., Some(2), " 0:00:01", 125.6, 6),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let context = gauges.update_inputs(time, inputs)?;
+            let frame = if let Some(child) = child {
+                gauges.click_clock(child, time)?;
+                let frame = gauges.update_inputs(time, inputs)?;
+                ensure(
+                    frame.reused && frame.display_changed && frame.evaluated == context.evaluated,
+                    "Mouse event advanced physics or failed to invalidate the display",
+                )?;
+                frame
+            } else {
+                context
+            };
+            let value = frame.clock.as_ref().unwrap();
+            ensure(
+                value.text == expected
+                    && (value.result - result).abs() < 1e-9
+                    && value.events == events
+                    && gauges.pid() == button_pid,
+                "Retained flight stopwatch state/input mismatch",
+            )?;
+            gauges.apply(
+                &frame,
+                &current.model,
+                &mut current.appearance,
+                Some(&mut gpu),
+            )?;
+            let path = output.join(format!("c172-clock-button-{i}.ppm"));
+            gpu.snapshot(&orbit, &path)?;
+            let pixels = std::fs::read(path).map_err(|e| e.to_string())?;
+            if i == 0 {
+                ensure(
+                    pixels != button_baseline,
+                    "Native mode button did not change live GPU texture",
+                )?;
+            }
+            if [1, 3, 5, 6, 8, 10].contains(&i) {
+                ensure(
+                    previous_pixels.as_ref() == Some(&pixels),
+                    "Pause/start/stop changed identical display pixels",
+                )?;
+            }
+            if [2, 4, 7, 9].contains(&i) {
+                ensure(
+                    previous_pixels.as_ref() != Some(&pixels),
+                    "Stopwatch state change did not reach live GPU texture",
+                )?;
+            }
+            previous_pixels = Some(pixels);
+            button_reports.push(serde_json::json!({"time":time,"child":child,"text":value.text,"callback_result":value.result,"events":events,"evaluated":frame.evaluated,"physics_reused":frame.reused,"display_changed":frame.display_changed}));
+        }
+        gauges.restart()?;
+        let reset_pid = gauges.pid();
+        let reset = gauges.update_inputs(0.5, inputs)?;
+        ensure(
+            reset_pid != button_pid
+                && reset.clock.as_ref().unwrap().events == 0
+                && reset.clock.as_ref().unwrap().text == zero_reset.clock.as_ref().unwrap().text,
+            "Flight reset did not discard native button state",
+        )?;
+        gauges.apply(
+            &reset,
+            &current.model,
+            &mut current.appearance,
+            Some(&mut gpu),
+        )?;
+        let path = output.join("c172-clock-button-reset.ppm");
+        gpu.snapshot(&orbit, &path)?;
+        ensure(
+            std::fs::read(path).map_err(|e| e.to_string())? == clock_pixels[0],
+            "Native button reset failed to restore original configured-clock pixels",
+        )?;
     }
     gauges.close()?;
     ensure(gauges.pid() == 0, "Helper remained attached after close")?;
@@ -480,7 +599,7 @@ fn run() -> Result<(), String> {
     ground_gauges.close()?;
     let report = serde_json::json!({"schema":1,"source":"openfsx-native-gauge-flight-check",
         "forward_frames":121,"paused_reuses":10,"changed_rgb_bytes":changed_bytes,
-        "flight_driven_sprites":3,"native_local_clock":local_clock.is_some(),"clock_boundaries":clock_comparisons,"clock_events":clock_event_reports,
+        "flight_driven_sprites":3,"native_local_clock":local_clock.is_some(),"clock_boundaries":clock_comparisons,"clock_events":clock_event_reports,"native_clock_buttons":button_reports,
         "clock_style":"authored daylight with explicit selection events","gdi_pixel_parity_verified":false,
         "xml_day_plaque":xml_font.is_some(),"xml_font_path":xml_font,"registration":aircraft.registration,
         "reset_restarted_helper":true,"reset_pixels_identical":true,"view_pixels_identical":true,

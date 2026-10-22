@@ -75,10 +75,43 @@ impl LocalClock {
         }
         Ok(((u64::from(self.start) + elapsed.floor() as u64) % 86400) as u32)
     }
+    /// Fractional local time for native clocks; pause and event edits keep phase.
+    pub fn fractional_seconds_at(self, elapsed: f64) -> Result<f64, String> {
+        let whole = self.seconds_at(elapsed)?;
+        let next = f64::from(whole + 1);
+        // Adding a tiny distance below the next second can round upward at
+        // large times of day. Keep the established whole-second boundary.
+        Ok((f64::from(whole) + elapsed.fract()).min(f64::from_bits(next.to_bits() - 1)))
+    }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fractional_clock_retains_phase_and_never_rounds_into_the_next_whole_second() {
+        let mut clock = LocalClock::parse("23:59:59").unwrap();
+        for elapsed in [
+            0.,
+            0.5,
+            f64::from_bits(1_f64.to_bits() - 1),
+            1.,
+            1.25,
+            59.99999999999999,
+            86401.75,
+            1e9,
+        ] {
+            let value = clock.fractional_seconds_at(elapsed).unwrap();
+            assert!((0. ..86400.).contains(&value));
+            assert_eq!(value.floor(), f64::from(clock.seconds_at(elapsed).unwrap()));
+        }
+        assert_eq!(clock.fractional_seconds_at(0.75).unwrap(), 86399.75);
+        clock.apply(ClockEvent::SecondsZero, 0, 0.75).unwrap();
+        assert_eq!(clock.fractional_seconds_at(0.75).unwrap(), 86340.75);
+        assert_eq!(clock.fractional_seconds_at(1.25).unwrap(), 86341.25);
+        clock.reset();
+        assert_eq!(clock.fractional_seconds_at(0.75).unwrap(), 86399.75);
+        assert!(clock.fractional_seconds_at(f64::NAN).is_err());
+    }
     #[test]
     fn clock_events_wrap_preserve_other_fields_and_reject_invalid_sets_atomically() {
         let mut clock = LocalClock::parse("23:59:59").unwrap();

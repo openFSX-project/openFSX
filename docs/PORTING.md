@@ -5,6 +5,56 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 22 October 2026
 
+After `4e10fcf`, the real flight gauge stream now hosts the narrow PANELS bridge
+and original clock button state in the same x86 process as the five air-data
+needles and three gyro sprites. Clock-enabled flight uses schema 4; ordinary
+schemas 1/2 and the isolated clock diagnostic stream remain unchanged. Local
+seconds carry a fractional phase into native CLOCK_TOTAL_SECONDS lookup while
+HMS display sources retain their established whole-second boundaries.
+
+clock-click accepts an actual authored mouse RVA and child-local coordinates,
+validates the target in the bounded clock list, calls the original mouse handler
+and delivers its original guarded packet. The acknowledgement preserves physics
+sequence/time/evaluation count. The Rust parent verifies those fields, input
+coordinates, native acceptance/guards and its independently tracked delivered
+event count. Before any mouse event, exact default HH:MM:SS output/result remains
+mandatory; after events, bounded native clock strings/results are accepted with
+strict metadata/counter/guard checks, without predicting private gauge state.
+Pause reuses physics and marks the changed display dirty after a button call.
+Native disconnect/string/import/context restoration and event count are required
+at close; reset/rewind restarts the complete helper and clears native button state.
+
+A fractional-clock boundary issue was found by the existing flight regression:
+adding a fraction just below 1 could round 23:59:59 upward to invalid 86400. The
+simulation clock now caps a fractional value below the next representable whole
+second, preserving seconds_at boundaries and edited-clock phase. It does not
+change the host wall clock, UTC or calendar.
+
+FlightGauges exposes checked authored child-center calls. Startup CLI
+--native-clock-click 0/1/2 applies after CLOCK_* edits and before explicit
+selection; repeated button calls retain native state. This is inspection input,
+not a substitute FSX keyboard binding or screen mouse picker. A viewer snapshot
+with mode/start injection succeeds (`target/native-flight-clock-cli-02.ppm`).
+
+166 all-feature Rust test executions pass. The integrated checker in
+`target/native-flight-clock-buttons-03/` covers all three original handlers,
+start, 1.25/61.25-second progress, paused input, stop/freeze/reset/restart,
+unchanged helper PID during button use, invalid child/stale-time rejection,
+unchanged physics evaluation counts, GPU dirty updates/pixel equality and full
+helper reset. Its original 121-frame flight/pause/view/ground, day-boundary,
+CLOCK_* edit and selection checks still pass. Twelve invalid flight-clock protocol
+requests are rejected without a response transition
+(`target/native-flight-clock-negative-01.json`). The rendered integrated
+stopwatch was visually inspected. No original code/assets are added.
+
+Next work is screen-ray/texture picking and child-local mouse routing in the
+cockpit, plus secondary clock text and further runtime service coverage. Running
+stopwatch behavior across midnight/simulation time edits still needs evidence.
+Full PANELS/gauge lifecycle, original-FSX input/pixel parity and the broad 1:1
+objective remain unfinished; original-game acquisition remains deferred.
+
+### Previous completed retained isolated clock stage
+
 After `671a5b3`, --clock-local-frames retains one connected original C172 Clock,
 its guarded main string/context, checked mouse metadata and narrow PANELS bridge
 across time/click commands. A bounded explicit local-seconds input now preserves

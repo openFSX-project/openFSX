@@ -548,8 +548,8 @@ Add an explicit local time origin to the C172 native profile:
 cargo run -p fsx-app --features viewer --bin openfsx-viewer --locked -- FSX/SimObjects/Airplanes/C172 --fly --cockpit --native-gauges --native-clock-start 23:59:59 --windows-1252
 ```
 
-HH:MM:SS must be within 00:00:00..23:59:59. Time advances by whole elapsed
-simulator seconds, wraps at midnight, pauses with flight and returns to the
+HH:MM:SS must be within 00:00:00..23:59:59. Time advances with fractional elapsed
+simulator seconds (the HMS display uses whole seconds), wraps at midnight, pauses with flight and returns to the
 origin on reset. The helper maintains one connected C172 clock, writes its
 callback output into a guarded buffer and restores that pointer before native
 disconnect/module teardown. The renderer loads the matching installed Quartz
@@ -566,7 +566,8 @@ cargo run -p fsx-app --features viewer --example native-gauge-flight-check --loc
 The check covers native session lifetime, flight/pause/reset/view/ground behavior,
 clock second/minute/day transitions and paused/rewound pixel equality while
 holding other instrument results fixed. Calendar, timezone, UTC synchronization,
-native timer/selection buttons, electrical/lighting changes, full panel services and
+screen routing, secondary clock text, running-stopwatch midnight/time edits,
+electrical/lighting changes, full panel services and
 GDI/FSX pixel parity remain unsupported or unverified. Omitting the clock option
 preserves the existing schema-2 flight/replay profile.
 
@@ -592,6 +593,33 @@ only the native clock callback is updated, other instrument results remain
 cached, and dirty display state reaches the GPU. Invalid/stale-time edits leave
 local time unchanged. Reset restores the CLI origin and clears selection.
 Date/UTC/timezone and environment lighting remain outside this local-time subset.
+
+### Native button injection in the flight profile
+
+Repeated --native-clock-click 0/1/2 invokes the corresponding authored Clock
+mouse child at its center, after the initial flight frame and CLOCK_* edits and
+before explicit selection. At most 128 startup clicks are accepted; these
+require --native-clock-start. For a local stopwatch mode/start inspection:
+
+```powershell
+cargo run -p fsx-app --features viewer --bin openfsx-viewer --locked -- FSX/SimObjects/Airplanes/C172 --fly --cockpit --native-gauges --native-clock-start 12:34:56 --native-clock-click 0 --native-clock-click 1 --windows-1252
+```
+
+Child 0 switches the original mode. Child 1 uses the original current-mode action
+(format switching or stopwatch start/stop/reset). Child 2's original handler is
+also invoked, but its secondary display state is not yet rendered. Native
+handlers and their own packets control private state; no replacement stopwatch
+is used. The same helper owns the needles/sprites and clock. Clicks at a paused
+frame preserve physics time/evaluation counts and invalidate the clock texture.
+The running stopwatch receives fractional local time; reset restores the
+configured time origin and discards button state by restarting the helper.
+
+The installed-content flight checker above now exercises all three handlers,
+1.25/61.25-second progress, pause/stop/reset/restart and live GPU texture updates.
+This startup/local API path does not yet implement screen mouse picking, drag,
+repeat, wheel, secondary text or original-FSX input parity. If --seconds is used,
+startup clicks happen at that initialized simulation time, before subsequent
+interactive frames; they are not backdated through the offline advance.
 
 ## Recorded native clock text
 
@@ -624,7 +652,8 @@ to the unselected path; the explicit clock selection option is described above.
 
 Times are explicit synthetic inputs. Baseline styling is explicitly unselected and
 uses authored colors; HILITE_LIST events, runtime color overrides, timer buttons,
-electrical/night states, live flight time and full panel services are absent.
+electrical/night states and full panel services are absent from these isolated
+recorded-string checks. Live flight time and native button injection are described above.
 The width rule is implemented with fontdue; GDI/FSX pixel equivalence still
 requires original-game reference images. Installed fonts and generated images
 remain local, ignored evidence.
@@ -679,7 +708,7 @@ string. All three original callbacks complete and accept delivery. The first
 switches to " 0:00:00"; the second performs a local-time lookup. Guarded event
 words, readonly table and import restoration are checked. This is isolated
 local delivery evidence: operational_buttons=false still applies to the viewer.
-Persistent button state, advancing stopwatch inputs, secondary clock text,
+Screen routing, secondary clock text,
 screen routing and original-FSX delivery parity remain unfinished. Failed calls
 never produce a fabricated after-string result.
 
@@ -704,10 +733,9 @@ pixels; paused, stopped and reset pairs must match exactly. Capture parsing
 requires the checked element metadata, guards and completed teardown.
 
 This is a retained native session plus recorded rendering, not mouse input in
-the live viewer. Live flight integration, picking, secondary clock text and
-stopwatch behavior across midnight or clock edits are still unfinished. The
-viewer keeps its existing explicit local clock/event path until that integration
-is verified. No original-FSX pixel/input parity is claimed.
+the live viewer. Picking, secondary clock text and
+stopwatch behavior across midnight or clock edits are still unfinished. The flight profile now integrates persistent native buttons through startup/local
+API input as described above; direct screen routing is still pending. No original-FSX pixel/input parity is claimed.
 
 ## Visibility inspection
 

@@ -414,6 +414,7 @@ fn run() -> Result<(), String> {
     let mut xml_gauge_font = None;
     let mut native_clock = None;
     let mut clock_events = Vec::new();
+    let mut clock_clicks = Vec::new();
     let mut clock_selection = None;
     let mut menu = false;
     let mut debug_hud = false;
@@ -427,6 +428,19 @@ fn run() -> Result<(), String> {
     let mut pose_values: Vec<(String, String, f64)> = Vec::new();
     while let Some(arg) = args.next() {
         match arg.to_str() {
+            Some("--native-clock-click") => {
+                let child = args
+                    .next()
+                    .ok_or("Expected authored clock mouse child 0..2")?
+                    .to_str()
+                    .ok_or("Invalid clock child")?
+                    .parse::<usize>()
+                    .map_err(|_| "Expected clock mouse child 0..2")?;
+                if child > 2 || clock_clicks.len() >= 128 {
+                    return Err("Clock child must be 0..2; at most 128 startup clicks".into());
+                }
+                clock_clicks.push(child);
+            }
             Some("--native-gauges") => native_gauges_enabled = true,
             Some("--native-clock-select") => {
                 let value = args.next().ok_or("Expected none/hours/minutes/seconds")?;
@@ -595,6 +609,7 @@ fn run() -> Result<(), String> {
             || xml_gauge_font.is_some()
             || native_clock.is_some()
             || !clock_events.is_empty()
+            || !clock_clicks.is_empty()
             || clock_selection.is_some()
             || cockpit
             || ground
@@ -631,8 +646,10 @@ fn run() -> Result<(), String> {
     {
         return Err("--native-gauges requires Windows --fly with textures; --gauge-host, --xml-gauge-font and --native-clock-start require --native-gauges".into());
     }
-    if (!clock_events.is_empty() || clock_selection.is_some()) && native_clock.is_none() {
-        return Err("--clock-event and --native-clock-select require --native-clock-start".into());
+    if (!clock_events.is_empty() || !clock_clicks.is_empty() || clock_selection.is_some())
+        && native_clock.is_none()
+    {
+        return Err("--clock-event, --native-clock-click and --native-clock-select require --native-clock-start".into());
     }
     let aircraft = if fly {
         Some(Aircraft::load(&path, variant, windows_1252)?)
@@ -923,9 +940,12 @@ fn run() -> Result<(), String> {
         }
         if let Some(gauges) = &mut gauges {
             let mut frame = gauges.update(&flight.simulation)?;
-            if !clock_events.is_empty() || clock_selection.is_some() {
+            if !clock_events.is_empty() || !clock_clicks.is_empty() || clock_selection.is_some() {
                 for (event, data) in clock_events {
                     gauges.clock_event(event, data, flight.simulation.time)?;
+                }
+                for child in clock_clicks {
+                    gauges.click_clock(child, flight.simulation.time)?;
                 }
                 if let Some(state) = clock_selection {
                     gauges.select_clock(state)?;
