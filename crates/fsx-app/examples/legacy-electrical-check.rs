@@ -1,9 +1,10 @@
 //! Installed authored circuit schema and explicit bus-observation runtime check.
 //! No implicit battery/generator voltage or FSX process is used.
 use fsx_sim::flight::Simulation;
+use fsx_sim::{electrical::CircuitNetwork, electrical_sources::VoltageCurve};
 use fsx_vehicle::{
     aircraft::{Aircraft, KNOT},
-    electrical::Bus,
+    electrical::{Bus, Electrical},
 };
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
@@ -29,7 +30,9 @@ fn main() -> Result<(), String> {
     ensure(
         configuration.max_battery_voltage.is_none()
             && configuration.generator_voltage.is_none()
-            && configuration.max_generator_amps.is_none(),
+            && configuration.max_generator_amps.is_none()
+            && configuration.battery_max_capacity_amph.is_none()
+            && configuration.battery_charging_current.is_none(),
         "Unexpected authored C172 source parameters",
     )?;
     ensure(
@@ -114,16 +117,81 @@ fn main() -> Result<(), String> {
         json!({"case":"fresh_simulation","snapshot":serialize(&reset.electrical.snapshot()?)?}),
     );
     let circuits=configuration.circuits.iter().map(|(name,c)|Ok(json!({"name":name,"bus":c.bus.index()?,"max_amps":c.max_amps,"min_voltage":c.min_voltage}))).collect::<Result<Vec<_>,String>>()?;
-    let report = json!({"schema":1,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
+    ensure(
+        simulation.electrical.battery.charge_fraction().is_none()
+            && simulation
+                .electrical
+                .battery
+                .open_circuit_voltage()
+                .is_none()
+            && simulation
+                .electrical
+                .generator
+                .supplied_voltage(Some(7.))?
+                .is_none(),
+        "Installed sources acquired synthetic defaults",
+    )?;
+    // Independent fixture, never the installed C172's ratings or live state.
+    let mut sources = CircuitNetwork::new(Electrical {
+        battery_max_capacity_amph: Some(40.),
+        battery_charging_current: Some(4.),
+        max_battery_voltage: Some(24.),
+        generator_voltage: Some(28.),
+        max_generator_amps: Some(60.),
+        ..Electrical::default()
+    })?;
+    sources
+        .battery
+        .set_voltage_curve(Some(VoltageCurve::new(vec![
+            (0., 18.),
+            (0.5, 22.),
+            (1., 24.),
+        ])?))?;
+    sources.battery.set_charge_fraction(Some(1.))?;
+    let discharge = sources.battery.advance(3600., Some(10.))?;
+    ensure(
+        sources.battery.charge_fraction() == Some(0.75)
+            && sources.battery.open_circuit_voltage() == Some(23.),
+        "Synthetic battery amp-hour/curve mismatch",
+    )?;
+    let discharged_fraction = sources.battery.charge_fraction();
+    let charge = sources.battery.advance(3600., Some(-20.))?;
+    ensure(
+        charge
+            .average_terminal_amps
+            .is_some_and(|i| (i + 4.).abs() < 1e-10)
+            && sources.battery.charge_fraction() == Some(0.85),
+        "Synthetic battery charge limit mismatch",
+    )?;
+    let charged_fraction = sources.battery.charge_fraction();
+    sources.generator.set_online(Some(true));
+    let regulated = sources.generator.supplied_voltage(Some(60.))?;
+    let overloaded = sources.generator.supplied_voltage(Some(61.))?;
+    ensure(
+        regulated == Some(28.) && overloaded.is_none() && sources.bus_voltage(Bus::Main)?.is_none(),
+        "Synthetic generator inferred a bus or overload voltage",
+    )?;
+    sources.reset();
+    ensure(
+        sources.battery.charge_fraction().is_none()
+            && sources.generator.supplied_voltage(Some(7.))?.is_none(),
+        "Source reset retained charge/availability",
+    )?;
+    let synthetic_sources = json!({"inputs":"independent synthetic ratings; not C172 defaults or FSX reference data", "capacity_amph":40,"charge_limit_amps":4,
+        "requested_discharge_amps":10,"discharge_seconds":3600,"average_discharge_amps":discharge.average_terminal_amps,"discharged_fraction":discharged_fraction,
+        "requested_charge_amps":-20,"charge_seconds":3600,"average_charge_amps":charge.average_terminal_amps,"charged_fraction":charged_fraction,
+        "generator_capacity_amps":60,"regulated_voltage_at_capacity":regulated,"overload_voltage":overloaded,"main_bus_voltage":sources.bus_voltage(Bus::Main)?,"reset_clears_state":true});
+    let report = json!({"schema":2,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
+        "battery_max_capacity_amph":configuration.battery_max_capacity_amph,"battery_charging_current":configuration.battery_charging_current,
         "generator_voltage":configuration.generator_voltage,"max_generator_amps":configuration.max_generator_amps,"engine_generator_map":configuration.engine_generator_map,"electric_always_available":configuration.always_available,
         "unsupported":configuration.unsupported,"cases":cases,"inputs":"explicit synthetic bus observations and requested authored loads",
-        "source_generation":false,"battery_dynamics":false,"sdk_omitted_circuit_defaults_resolved":false,"total_aircraft_current":false,"fsx_parity_verified":false});
+        "synthetic_source_primitives":synthetic_sources,"source_generation":false,"battery_dynamics":false,"sdk_omitted_circuit_defaults_resolved":false,"total_aircraft_current":false,"fsx_parity_verified":false});
     fs::create_dir(&output).map_err(|e| e.to_string())?;
     fs::write(
         output.join("report.json"),
         serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    println!("PASS: 17 authored circuits, unknown-state propagation, 17 V threshold, explicit-load totals and simulation lifecycle; source generation remains unimplemented.");
+    println!("PASS: 17 authored circuits, unknown-state propagation, 17 V threshold, source primitive conservation/limits/reset; installed source and bus coupling remain unresolved.");
     Ok(())
 }

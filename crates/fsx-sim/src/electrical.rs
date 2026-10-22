@@ -1,6 +1,7 @@
 //! Legacy circuit loads from known bus observations and explicit device requests.
-//! Source generation, bus ties, battery charge and overload voltage response are
-//! deliberately separate: unknown supply/state never becomes normal voltage.
+//! Explicit source primitives remain separate from bus ties and overload voltage
+//! response: unknown supply/state never becomes normal voltage.
+use crate::electrical_sources::{Battery, Generator};
 use fsx_vehicle::electrical::{Bus, Electrical};
 use std::collections::BTreeMap;
 #[derive(Debug, Clone, PartialEq)]
@@ -19,6 +20,8 @@ pub struct Snapshot {
 }
 #[derive(Debug, Clone)]
 pub struct CircuitNetwork {
+    pub battery: Battery,
+    pub generator: Generator,
     configuration: Electrical,
     requests: BTreeMap<String, bool>,
     voltage: [Option<f64>; 8],
@@ -63,12 +66,17 @@ impl CircuitNetwork {
             }
         }
         Ok(Self {
+            battery: Battery::new(&configuration)?,
+            generator: Generator::new(&configuration)?,
             configuration,
             requests: BTreeMap::new(),
             voltage: [None; 8],
         })
     }
     pub fn reset(&mut self) {
+        // Configuration was validated by new and remains immutable.
+        self.battery = Battery::new(&self.configuration).unwrap();
+        self.generator = Generator::new(&self.configuration).unwrap();
         self.requests.clear();
         self.voltage = [None; 8];
     }
@@ -218,5 +226,33 @@ mod tests {
         config.circuits.get_mut("pitot_heat").unwrap().max_amps = 2.;
         config.always_available = Some(true);
         assert!(CircuitNetwork::new(config).unwrap().snapshot().is_err());
+    }
+    #[test]
+    fn source_state_and_curves_reset_without_publishing_a_bus_voltage() {
+        use crate::electrical_sources::VoltageCurve;
+        let mut n = CircuitNetwork::new(Electrical {
+            max_battery_voltage: Some(24.),
+            battery_max_capacity_amph: Some(40.),
+            generator_voltage: Some(28.),
+            max_generator_amps: Some(60.),
+            ..Electrical::default()
+        })
+        .unwrap();
+        n.battery.set_charge_fraction(Some(1.)).unwrap();
+        n.battery
+            .set_voltage_curve(Some(VoltageCurve::new(vec![(0., 18.), (1., 24.)]).unwrap()))
+            .unwrap();
+        n.battery.advance(3600., Some(10.)).unwrap();
+        n.generator.set_online(Some(true));
+        assert_eq!(n.generator.supplied_voltage(Some(7.)).unwrap(), Some(28.));
+        assert_eq!(n.battery.open_circuit_voltage(), Some(22.5));
+        assert_eq!(n.bus_voltage(Bus::Main).unwrap(), None);
+        n.reset();
+        assert_eq!(n.battery.charge_fraction(), None);
+        assert_eq!(n.generator.supplied_voltage(Some(7.)).unwrap(), None);
+        n.battery.set_charge_fraction(Some(0.5)).unwrap();
+        assert_eq!(n.battery.open_circuit_voltage(), None);
+        n.battery.set_charge_fraction(Some(1.)).unwrap();
+        assert_eq!(n.battery.open_circuit_voltage(), Some(24.));
     }
 }

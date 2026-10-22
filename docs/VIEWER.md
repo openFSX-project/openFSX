@@ -791,8 +791,12 @@ requested loads, invalid-input atomicity and lifecycle. Its current sums are
 requested maxima of authored consumers, not measured/total aircraft current.
 It never fills MAIN_BUS_VOLTAGE with a nominal example value. Simulation starts
 with unknown electrical observations and holds them until a provider updates or
-clears them. Source generation, battery state, bus distribution and omitted
-legacy defaults still need implementation before this supplies live OAT/V data.
+clears them. A separate synthetic fixture checks explicit source primitives:
+40 Ah discharge conservation, a 4 A charge limit, a supplied open-circuit curve,
+generator capacity/overload and reset. These are not installed C172 ratings.
+Sources remain separate from bus observations and ordinary physics stepping.
+Terminal-current allocation, engine/regulator availability, bus distribution and
+omitted legacy defaults still need implementation before live OAT/V binding.
 
 ## Visibility inspection
 

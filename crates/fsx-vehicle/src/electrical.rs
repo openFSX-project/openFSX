@@ -42,6 +42,8 @@ pub struct Circuit {
 pub struct Electrical {
     pub circuits: BTreeMap<String, Circuit>,
     pub max_battery_voltage: Option<f64>,
+    pub battery_max_capacity_amph: Option<f64>,
+    pub battery_charging_current: Option<f64>,
     pub generator_voltage: Option<f64>,
     pub max_generator_amps: Option<f64>,
     pub always_available: Option<bool>,
@@ -137,6 +139,12 @@ impl Electrical {
                             let value = number(value, 1000.)?;
                             result.max_battery_voltage = Some(value);
                         }
+                        "battery_max_capacity_amph" => {
+                            result.battery_max_capacity_amph = Some(number(value, 1e6)?);
+                        }
+                        "battery_charging_current" => {
+                            result.battery_charging_current = Some(number(value, 1e6)?);
+                        }
                         "generator_alternator_voltage" => {
                             let value = number(value, 1000.)?;
                             result.generator_voltage = Some(value);
@@ -197,6 +205,8 @@ mod tests {
         assert_eq!(e.max_battery_voltage, Some(24.));
         assert_eq!(e.generator_voltage, None);
         assert_eq!(e.max_generator_amps, None);
+        assert_eq!(e.battery_max_capacity_amph, None);
+        assert_eq!(e.battery_charging_current, None);
         assert_eq!(e.engine_generator_map, Some(vec![1, 0, 2]));
         assert_eq!(e.unsupported["custom_wire"], "original");
         assert!(Electrical::from_config(&Config::default())
@@ -210,6 +220,13 @@ mod tests {
         .unwrap();
         assert_eq!(zero.max_battery_voltage, Some(0.));
         assert_eq!(zero.generator_voltage, Some(0.));
+        let battery = Electrical::from_config(&Config::parse("[electrical]\nbattery_max_capacity_amph=40\nbattery_charging_current=4\nbattery_capacity_pct_to_voltage=unresolved").unwrap()).unwrap();
+        assert_eq!(battery.battery_max_capacity_amph, Some(40.));
+        assert_eq!(battery.battery_charging_current, Some(4.));
+        assert_eq!(
+            battery.unsupported["battery_capacity_pct_to_voltage"],
+            "unresolved"
+        );
     }
     #[test]
     fn electrical_parser_rejects_invalid_circuits_and_sources_instead_of_defaulting() {
@@ -224,6 +241,9 @@ mod tests {
             "max_battery_voltage=-1",
             "generator_alternator_voltage=inf",
             "max_generator_alternator_amps=-1",
+            "battery_max_capacity_amph=NaN",
+            "battery_max_capacity_amph=-1",
+            "battery_charging_current=1000001",
             "electric_always_available=2",
             "engine_generator_map=1,1,1,1,1",
             "engine_generator_map=5",

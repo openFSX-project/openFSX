@@ -851,7 +851,8 @@ fsx-vehicle::electrical models bus codes 0..7 (main, avionics, battery, hot batt
 then generator/alternator buses 1..4). Known consumer keys require exactly three
 fields. Numeric values must be finite/nonnegative; implementation bounds are
 1000 V and 1,000,000 A. Source settings preserve optional maximum battery voltage,
-generator voltage/current, numeric 0/1 availability and up to four engine-map
+battery capacity/charging-current limit, generator voltage/current, numeric 0/1
+availability and up to four engine-map
 entries (counts 0..4). These are current reader bounds, not general FSX rating
 limits. Unknown keys/values remain in unsupported metadata. The section budget is
 256 entries, keys 128 bytes and values 4096 bytes. Invalid values do not select a
@@ -879,5 +880,33 @@ circuit evaluation rather than silently pretending bypass semantics.
 
 Invalid observations/requests are atomic. Runtime reset clears observations and
 requests; new simulations start fresh. Ordinary physics stepping does not infer
-voltage from throttle or fabricate battery/generator behavior. Charge, RPM-driven
-generation, overload response, default resolution and FSX parity remain open.
+voltage from throttle or fabricate battery/generator behavior.
+
+CircuitNetwork also owns Battery and Generator primitives. Capacity and charging
+limit have a 1,000,000 Ah/A implementation ceiling; explicit zero is preserved.
+Battery starts with unknown charge. Its explicit advance API accepts 0..3600 s
+and a signed requested terminal current with magnitude <=1,000,000 A (positive
+means discharge). It integrates charge by I*seconds/(3600*capacity), limits charging
+using the authored limit and clips at empty/full, reporting average accepted
+current. Unknown current, missing/nonpositive capacity or a needed but missing
+charge limit invalidates
+charge knowledge; zero current or zero time preserves it. Zero-capacity storage
+cannot be evolved. Invalid inputs leave state unchanged. These are an initial
+ideal storage model, not verified FSX battery dynamics or measured current.
+
+A separately supplied VoltageCurve requires 2..256 finite points, strict charge
+ordering covering 0..1 and nondecreasing voltage in 0..1000 V. It uses linear
+interpolation. If maximum battery voltage is authored, the full-charge endpoint
+must match it. This API does not interpret battery_capacity_pct_to_voltage: that
+CFG value remains unsupported metadata. Without a supplied curve, partial-charge
+voltage stays unknown; known full charge can expose the authored maximum. This
+is open-circuit voltage, never automatically loaded bus voltage.
+
+Generator accepts explicit engine/regulator availability. Known load in 0..its
+known maximum current returns authored ideal regulated voltage when online;
+unknown demand/capability, overload or unavailable rating returns None. Offline
+reports a disconnected source (0 V), not an observation of the shared bus.
+Network reset clears charge, caller curves and availability along with circuit
+observations/requests. Sources are not wired together or advanced by physics yet.
+Actual terminal-current allocation, RPM/regulator providers, bus topology,
+overload response, default resolution and FSX parity remain open.

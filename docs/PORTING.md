@@ -5,6 +5,50 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 22 October 2026
 
+After `2d982d7`, the simulation-owned electrical network also owns explicit
+battery/generator primitives. Authored battery capacity (Ah) and charging-current
+limit are parsed as optional finite nonnegative values, including explicit zero.
+Missing legacy defaults and the battery CFG voltage-curve grammar stay unresolved.
+C172 still supplies none of these source ratings: no nominal voltage/capacity or
+initial charge has been added to its flight state.
+
+The battery integrates explicitly requested terminal current in amp-hours, caps
+charging at an explicitly configured limit, clamps charge at empty/full and
+reports the average current actually accepted over the interval. Unknown current,
+required capacity or charging limit makes evolution unknown. Zero elapsed time
+preserves state; invalid inputs fail atomically. Zero capacity is retained but
+cannot be evolved by this storage model. A caller can supply a bounded monotonic
+open-circuit voltage curve; this is a separate API, not a decoder for the legacy
+CFG curve. Without a curve, only known full charge plus authored maximum voltage
+can resolve open-circuit voltage. It never becomes loaded main-bus voltage.
+
+The generator accepts explicit upstream availability and known requested load.
+Within a known current capability it returns the authored ideal regulated voltage;
+overload/unknown capability remains unknown without a droop model. Reset clears
+charge, curves and generator availability while preserving configured ratings.
+Neither source is automatically connected to a bus. Physics does not yet advance
+these sources: actual terminal currents, engine/regulator state and distribution
+must be integrated before source state can supply the secondary OAT/V display.
+Authored requested consumer maxima are not used as actual battery current.
+
+Unit checks cover conservation, empty/full boundaries, charging limits, missing
+inputs, zero capacity, explicit-curve interpolation, invalid-input atomicity,
+generator capacity/overload and network reset. The installed checker retains the
+17 C172 circuit/threshold/lifecycle checks and adds a separately labeled synthetic
+40 Ah / 4 A battery and 28 V / 60 A generator fixture. These values are not C172
+ratings or original-FSX reference measurements. The full FSX 1:1 target remains
+unfinished; original-FSX acquisition remains deferred by the user.
+
+183 all-feature Rust test executions pass in
+`target/electrical-sources-workspace-tests-01.log`. Installed and synthetic checks
+pass in `target/electrical-sources-check-02/report.json`. The existing native
+clock/buttons/picking/GPU/121-frame flight/pause/reset/view/ground regression
+passes in `target/electrical-sources-flight-regression-01.log`. Architecture and
+generated documentation checks pass. Next is explicit source-to-bus distribution
+and terminal-current allocation, then engine/regulator providers and live OAT/V.
+
+### Previous authored electrical circuit stage
+
 After `59e362f`, authored legacy electrical data is loaded with flight parameters
 and a circuit-observation runtime is owned by Simulation. The checked C172 CFG
 contains 17 consumer declarations but omits battery voltage, generator voltage
