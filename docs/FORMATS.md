@@ -1021,3 +1021,44 @@ generator availability and bus voltage remain unknown. Applying a FLT switch
 snapshot does not establish generator availability or override this distinction.
 The broader reference engine-type matrix is diagnostic, not support for jet,
 multi-engine or other flight models. Parity with other FSX versions is unverified.
+
+
+## Original pre-load generator admission
+
+The same pinned reference supports a second bounded mode:
+
+```powershell
+python scripts/check-electrical-defaults.py FSX/sim1.dll target/generator-admission-reference --availability
+```
+
+It executes the original admission routine with a synthetic one-engine state,
+injected failure boolean and an auxiliary-service stub returning x87 zero. The
+87 cases cover enable/switch/failure/battery-master combinations, signal 0,
+0.099999, exactly 0.1, nextafter(0.1,+infinity) and 0.9, zero nominal voltage and
+previously-online transitions. Original instructions and mutable writes remain
+whitelisted with a 4096-instruction budget per invocation. The original state
+signal at engine offset 0x5c is an explicit input; its physical mapping is not
+verified. Do not treat it as raw RPM, throttle, or FLT Pct Engine RPM.
+
+For a positive nominal source voltage, admission requires an enabled source-mask
+bit, generator switch on, no failure and signal strictly >0.1. The reference
+records current active count, raw engine flag, raw generator-voltage slot and
+pre-load main/battery/hot-battery values separately. With a disabled mask bit,
+old raw flag/voltage slots can remain while current active count and main-bus
+contribution are zero. Admission is based on the current count, not stale slots.
+These are pre-load results; current limiting, delivered current, charging and
+final loaded bus voltage are not established by this mode.
+
+LegacyGeneratorInputs separates source_enabled, switch_on, failed and the legacy
+engine_signal, all optional. Generator.update_fsx_steam_62615_availability uses
+the verified known-input gate and finite signals. Unknown inputs yield None unless
+a known off condition proves false. A known zero nominal voltage is off; unknown
+nominal voltage prevents a true result. Invalid signals preserve prior state.
+This does not model source regulation or attach physical meaning to engine_signal.
+
+CircuitNetwork.update_generator_from_fsx_steam_signals is restricted to the
+versioned single-piston profile. It uses the stored first-engine FLT switch and
+explicit enable/signal/failure inputs. Successful updates clear bus observations,
+battery-current request and last-flow record. Callers must provide a fresh graph
+and current allocation afterwards; failed validation preserves the old state.
+Ordinary physics does not call this API without a confirmed engine provider.

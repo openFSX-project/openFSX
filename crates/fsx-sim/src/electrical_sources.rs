@@ -158,6 +158,16 @@ pub struct Generator {
     capacity_amps: Option<f64>,
     online: Option<bool>,
 }
+/// Versioned inputs to the original pre-load generator-admission branch.
+/// engine_signal denotes the legacy engine state signal tested by that branch;
+/// its physical mapping is unresolved. Do not substitute throttle or raw RPM.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LegacyGeneratorInputs {
+    pub source_enabled: Option<bool>,
+    pub switch_on: Option<bool>,
+    pub failed: Option<bool>,
+    pub engine_signal: Option<f64>,
+}
 impl Generator {
     pub fn new(configuration: &Electrical) -> Result<Self, String> {
         if !bounded(configuration.generator_voltage, 1000.)
@@ -174,6 +184,36 @@ impl Generator {
     /// Availability must come from an engine/regulator provider, not throttle.
     pub fn set_online(&mut self, online: Option<bool>) {
         self.online = online;
+    }
+    /// Original sim1 10.0.62615.0 admission, checked by 87 bounded emulation
+    /// cases. This says nothing about actual delivered current/loaded voltage.
+    /// Unknown inputs remain unknown unless a known condition proves off.
+    pub fn update_fsx_steam_62615_availability(
+        &mut self,
+        input: LegacyGeneratorInputs,
+    ) -> Result<Option<bool>, String> {
+        if input.engine_signal.is_some_and(|v| !v.is_finite()) {
+            return Err("Nonfinite legacy generator engine signal".into());
+        }
+        let online = if self.voltage == Some(0.)
+            || input.source_enabled == Some(false)
+            || input.switch_on == Some(false)
+            || input.failed == Some(true)
+            || input.engine_signal.is_some_and(|v| v <= 0.1)
+        {
+            Some(false)
+        } else if self.voltage.is_some()
+            && input.source_enabled == Some(true)
+            && input.switch_on == Some(true)
+            && input.failed == Some(false)
+            && input.engine_signal.is_some()
+        {
+            Some(true)
+        } else {
+            None
+        };
+        self.online = online;
+        Ok(online)
     }
     /// Feed the explicit distribution solver from this same source state.
     /// The bus is caller-supplied; legacy engine maps do not define bus ties.
@@ -354,5 +394,73 @@ mod tests {
         let mut g = Generator::new(&Electrical::default()).unwrap();
         g.set_online(Some(true));
         assert_eq!(g.supplied_voltage(Some(0.)).unwrap(), None);
+    }
+    #[test]
+    fn original_admission_boundary_matches_known_source_switch_and_failure_inputs() {
+        let mut g = Generator::new(&config()).unwrap();
+        for enabled in [false, true] {
+            for switch in [false, true] {
+                for failed in [false, true] {
+                    for signal in [0., 0.099999, 0.1, f64::from_bits(0.1f64.to_bits() + 1), 0.9] {
+                        let input = LegacyGeneratorInputs {
+                            source_enabled: Some(enabled),
+                            switch_on: Some(switch),
+                            failed: Some(failed),
+                            engine_signal: Some(signal),
+                        };
+                        assert_eq!(
+                            g.update_fsx_steam_62615_availability(input).unwrap(),
+                            Some(enabled && switch && !failed && signal > 0.1)
+                        );
+                    }
+                }
+            }
+        }
+        let mut c = config();
+        c.generator_voltage = Some(0.);
+        let mut g = Generator::new(&c).unwrap();
+        assert_eq!(
+            g.update_fsx_steam_62615_availability(LegacyGeneratorInputs {
+                source_enabled: Some(true),
+                switch_on: Some(true),
+                failed: Some(false),
+                engine_signal: Some(0.9)
+            })
+            .unwrap(),
+            Some(false)
+        );
+    }
+    #[test]
+    fn incomplete_admission_and_invalid_signals_preserve_explicit_unknown_and_atomicity() {
+        let mut g = Generator::new(&config()).unwrap();
+        assert_eq!(
+            g.update_fsx_steam_62615_availability(LegacyGeneratorInputs::default())
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            g.update_fsx_steam_62615_availability(LegacyGeneratorInputs {
+                switch_on: Some(false),
+                ..Default::default()
+            })
+            .unwrap(),
+            Some(false)
+        );
+        assert_eq!(
+            g.update_fsx_steam_62615_availability(LegacyGeneratorInputs {
+                engine_signal: Some(0.1),
+                ..Default::default()
+            })
+            .unwrap(),
+            Some(false)
+        );
+        let before = g.clone();
+        assert!(g
+            .update_fsx_steam_62615_availability(LegacyGeneratorInputs {
+                engine_signal: Some(f64::NAN),
+                ..Default::default()
+            })
+            .is_err());
+        assert_eq!(g, before);
     }
 }

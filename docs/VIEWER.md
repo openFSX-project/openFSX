@@ -817,6 +817,18 @@ ratings to 24 V battery / 28 V generator / 60 A. Simulation explicitly applies t
 profile to missing ratings, preserving authored zero. The checker reports authored
 and effective settings separately. These ratings do not make the generator online,
 set charge or energize a bus. Other versions are not established by this check.
+The reference also checks 87 original pre-load generator-admission cases:
+
+```powershell
+python scripts/check-electrical-defaults.py FSX/sim1.dll target/generator-admission-reference --availability
+```
+
+The port's explicit signal API combines source enable, failure and legacy engine
+signal with the stored first-engine FLT switch. The checker exercises six such
+cases and verifies that admission still leaves loaded bus voltage unknown. The
+legacy signal's physical mapping remains unverified; it is not inferred from
+throttle/RPM. Pre-load voltages in the reference report are not final loaded bus
+observations, and stale raw generator slots are not admitted supply.
 Actual engine/load providers, C172 topology and remaining legacy defaults still
 need implementation before live OAT/V binding. FLT loading is an explicit API and
 checker path; it does not yet restore a flight into the viewer.

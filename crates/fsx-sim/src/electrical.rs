@@ -2,7 +2,7 @@
 //! Explicit source primitives remain separate from bus ties and overload voltage
 //! response: unknown supply/state never becomes normal voltage.
 use crate::electrical_distribution::{self, Contact, Distribution, Feed};
-use crate::electrical_sources::{Battery, BatteryFlow, Generator};
+use crate::electrical_sources::{Battery, BatteryFlow, Generator, LegacyGeneratorInputs};
 use fsx_vehicle::electrical::{Bus, Electrical, SourceDefaults};
 use fsx_vehicle::flight_electrical::FlightElectrical;
 use std::collections::BTreeMap;
@@ -112,6 +112,33 @@ impl CircuitNetwork {
     }
     pub fn switches(&self) -> &FlightElectrical {
         &self.switches
+    }
+    /// Bridge the stored first-engine FLT switch to versioned admission inputs.
+    /// Providers must establish the other signals; no RPM/throttle conversion is
+    /// inferred. Recompute bus distribution and current allocation afterwards.
+    pub fn update_generator_from_fsx_steam_signals(
+        &mut self,
+        source_enabled: Option<bool>,
+        engine_signal: Option<f64>,
+        failed: Option<bool>,
+    ) -> Result<Option<bool>, String> {
+        if self.source_defaults != SourceDefaults::FsxSteam62615SinglePiston {
+            return Err(
+                "Generator admission requires the explicit FSX Steam single-piston profile".into(),
+            );
+        }
+        let online = self
+            .generator
+            .update_fsx_steam_62615_availability(LegacyGeneratorInputs {
+                source_enabled,
+                engine_signal,
+                failed,
+                switch_on: self.switches.generators[0],
+            })?;
+        self.voltage = [None; 8];
+        self.battery_current_request = None;
+        self.last_battery_flow = None;
+        Ok(online)
     }
     /// Replace supported FLT switch positions; missing mapped requests become
     /// unknown, absent aircraft circuits stay absent. Switches alone never
@@ -434,5 +461,53 @@ mod tests {
         assert_eq!(n.bus_voltage(Bus::Main).unwrap(), None);
         n.battery.set_charge_fraction(Some(1.)).unwrap();
         assert_eq!(n.battery.open_circuit_voltage(), Some(24.));
+    }
+    #[test]
+    fn stored_switch_and_versioned_signals_invalidate_stale_supply_only_after_valid_update() {
+        let mut n = CircuitNetwork::new_with_source_defaults(
+            Electrical {
+                battery_max_capacity_amph: Some(40.),
+                ..Default::default()
+            },
+            SourceDefaults::FsxSteam62615SinglePiston,
+        )
+        .unwrap();
+        let mut switches = FlightElectrical::default();
+        switches.generators[0] = Some(true);
+        n.apply_switches(&switches);
+        assert_eq!(
+            n.update_generator_from_fsx_steam_signals(Some(true), Some(0.1), Some(false))
+                .unwrap(),
+            Some(false)
+        );
+        n.set_bus_voltage(Bus::Main, Some(24.)).unwrap();
+        n.battery.set_charge_fraction(Some(1.)).unwrap();
+        n.set_battery_current_request(Some(36.)).unwrap();
+        assert!(n
+            .update_generator_from_fsx_steam_signals(Some(true), Some(f64::NAN), Some(false))
+            .is_err());
+        assert_eq!(n.bus_voltage(Bus::Main).unwrap(), Some(24.));
+        n.advance_time(1.).unwrap();
+        assert_eq!(n.battery.charge_fraction(), Some(0.99975));
+        assert_eq!(
+            n.update_generator_from_fsx_steam_signals(Some(true), Some(0.9), Some(false))
+                .unwrap(),
+            Some(true)
+        );
+        assert_eq!(n.bus_voltage(Bus::Main).unwrap(), None);
+        assert_eq!(n.last_battery_flow(), None);
+        n.advance_time(1.).unwrap();
+        assert_eq!(n.battery.charge_fraction(), None);
+        switches.generators[0] = Some(false);
+        n.apply_switches(&switches);
+        assert_eq!(
+            n.update_generator_from_fsx_steam_signals(Some(true), Some(0.9), Some(false))
+                .unwrap(),
+            Some(false)
+        );
+        let mut unresolved = CircuitNetwork::new(Electrical::default()).unwrap();
+        assert!(unresolved
+            .update_generator_from_fsx_steam_signals(Some(true), Some(0.9), Some(false))
+            .is_err());
     }
 }

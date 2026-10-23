@@ -3,7 +3,54 @@
 The target remains FSX 1:1 across interface, flight behavior, content and APIs.
 This is a long-term acceptance target; no subsystem claims complete parity.
 
-## Current stage — 22 October 2026
+## Current stage — 23 October 2026
+
+After `d99b762`, bounded reference execution now covers original pre-load
+generator admission in sim1 10.0.62615.0. The additional mode runs 87 cases:
+source-enable mask, switch, failure and battery-master combinations, the exact
+0.1 engine-signal boundary and the next representable value, a zero-rated source,
+and previously-online transitions. Failure service responses are injected and
+the auxiliary source returns zero. This is not a complete electrical frame or a
+live FSX observation. The engine signal's physical mapping remains unverified;
+it is not supplied from throttle, raw RPM or the FLT Pct Engine RPM value.
+
+Original admission requires the enabled source, on switch, no failure, positive
+nominal voltage and engine signal strictly greater than 0.1. At exactly 0.1 it is
+off. The count of sources admitted during this invocation is authoritative for
+this result: the original routine can retain an old engine-active flag and old
+source-voltage slot when a source-mask bit is disabled, while excluding that
+source from pre-load main voltage. The report retains these distinct fields;
+stale raw slots are not treated as a newly admitted source.
+
+Generator.update_fsx_steam_62615_availability implements this known-input gate.
+Missing inputs remain unknown unless a known condition proves off; nonfinite
+signals fail atomically. CircuitNetwork's versioned signal API combines explicit
+provider inputs with its stored first-engine FLT generator switch. It refuses an
+unprofiled network and clears prior bus/current observations only after a valid
+update so distribution and battery-current allocation must be recomputed. It does
+not run automatically in physics, infer an engine signal, or energize a bus.
+
+The installed checker exercises six explicit admission cases after applying real
+FLT switch positions, including boundary, failure and unknown inputs. Default
+flight state stays unresolved without engine/failure/source providers. Unit tests
+cover all known gate combinations, exact boundary, unknown/off propagation,
+profile eligibility, stale-state invalidation, rejected input and switch binding.
+The earlier 23-case scalar reference mode remains passing.
+
+Next is confirming the engine signal's meaning and binding actual engine state,
+then original current allocation, loaded bus/battery dynamics and live OAT/V.
+These and full FSX 1:1 parity remain unfinished. Original-FSX live capture stays
+deferred by the user.
+
+200 all-feature Rust test executions pass in
+`target/generator-admission-workspace-tests-01.log`. The 87-case original reference
+passes in `target/electrical-generator-admission-reference-02/report.json`; the
+23-case scalar regression passes in `target/generator-admission-scalar-regression-01/`.
+Installed C172/FLT, six admission cases and preceding synthetic runtime checks
+pass in `target/generator-admission-check-01/report.json`. Formatting, architecture
+and generated documentation checks pass.
+
+### Previous versioned scalar-default stage — 22 October 2026
 
 After `f0662ae`, three previously unresolved source ratings now have a versioned
 reference basis. A bounded Unicorn x86 check reads the user's installed sim1.dll
