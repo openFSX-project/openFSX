@@ -9,4 +9,5 @@ pub mod electrical_distribution;
 pub mod electrical_sources;
 pub mod flight;
 pub mod ground;
+pub mod legacy_voltage;
 pub use flight::AircraftDynamics;

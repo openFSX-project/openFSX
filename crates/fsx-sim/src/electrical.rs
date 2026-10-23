@@ -31,6 +31,7 @@ pub struct CircuitNetwork {
     switches: FlightElectrical,
     battery_current_request: Option<f64>,
     last_battery_flow: Option<BatteryFlow>,
+    voltage_core: crate::legacy_voltage::Core,
 }
 impl CircuitNetwork {
     pub fn new(configuration: Electrical) -> Result<Self, String> {
@@ -81,6 +82,7 @@ impl CircuitNetwork {
             switches: FlightElectrical::default(),
             battery_current_request: None,
             last_battery_flow: None,
+            voltage_core: crate::legacy_voltage::Core::default(),
         })
     }
     pub fn new_with_source_defaults(
@@ -109,6 +111,50 @@ impl CircuitNetwork {
         self.switches = FlightElectrical::default();
         self.battery_current_request = None;
         self.last_battery_flow = None;
+        self.voltage_core = crate::legacy_voltage::Core::default();
+    }
+    pub fn legacy_voltage_state(&self) -> Option<crate::legacy_voltage::State> {
+        self.voltage_core.state()
+    }
+    pub fn seed_legacy_voltage_state(
+        &mut self,
+        state: Option<crate::legacy_voltage::State>,
+    ) -> Result<(), String> {
+        if self.source_defaults != SourceDefaults::FsxSteam62615SinglePiston {
+            return Err(
+                "Voltage core requires the explicit FSX Steam single-piston profile".into(),
+            );
+        }
+        self.voltage_core.seed(state)
+    }
+    /// Advance the checked pre-failure/avionics core only. The response factor
+    /// and load require providers; outputs are not published as loaded buses or
+    /// converted into Coulomb charge. Ordinary Simulation.step does not call it.
+    pub fn step_legacy_voltage_core(
+        &mut self,
+        dt: f64,
+        load_amps: Option<f64>,
+        response_factor: Option<f32>,
+    ) -> Result<Option<crate::legacy_voltage::Step>, String> {
+        if self.source_defaults != SourceDefaults::FsxSteam62615SinglePiston {
+            return Err(
+                "Voltage core requires the explicit FSX Steam single-piston profile".into(),
+            );
+        }
+        let feed = self.generator.feed(Bus::Generator(1))?;
+        let mut config = self.source_configuration();
+        config.generator_voltage = feed.voltage;
+        config.max_generator_amps = feed.capacity_amps;
+        self.voltage_core.advance(
+            &config,
+            crate::legacy_voltage::Inputs {
+                generator_online: feed.online,
+                battery_master: self.switches.battery,
+                load_amps,
+                response_factor,
+            },
+            dt,
+        )
     }
     pub fn switches(&self) -> &FlightElectrical {
         &self.switches
@@ -611,5 +657,47 @@ mod tests {
         assert!(unresolved
             .fsx_steam_generator_current_request(Some(12.), Some(22.))
             .is_err());
+    }
+    #[test]
+    fn explicit_voltage_core_uses_stored_switches_and_resets_without_publishing_buses() {
+        let mut n = CircuitNetwork::new_with_source_defaults(
+            Electrical::default(),
+            SourceDefaults::FsxSteam62615SinglePiston,
+        )
+        .unwrap();
+        let mut saved = FlightElectrical::default();
+        saved.battery = Some(true);
+        saved.generators[0] = Some(true);
+        saved.engine_rpm_fraction[0] = Some(0.9);
+        n.apply_switches(&saved);
+        n.update_generator_from_saved_flt(Some(true), Some(false))
+            .unwrap();
+        n.seed_legacy_voltage_state(Some(crate::legacy_voltage::State {
+            battery_voltage: 22.,
+            filtered_net_amps: 0.,
+            generator_amps: 0.,
+        }))
+        .unwrap();
+        let s = n
+            .step_legacy_voltage_core(1. / 120., Some(12.), Some(1.))
+            .unwrap()
+            .unwrap();
+        assert!(s.state.battery_voltage < 22.);
+        assert_eq!(n.bus_voltage(Bus::Main).unwrap(), None);
+        assert_eq!(n.battery.charge_fraction(), None);
+        assert_eq!(n.last_battery_flow(), None);
+        assert!(n
+            .step_legacy_voltage_core(1. / 120., Some(12.), Some(f32::NAN))
+            .is_err());
+        assert_eq!(n.legacy_voltage_state(), Some(s.state));
+        assert_eq!(
+            n.step_legacy_voltage_core(1. / 120., Some(12.), None)
+                .unwrap(),
+            None
+        );
+        n.reset();
+        assert_eq!(n.legacy_voltage_state(), None);
+        let mut unresolved = CircuitNetwork::new(Electrical::default()).unwrap();
+        assert!(unresolved.seed_legacy_voltage_state(None).is_err());
     }
 }

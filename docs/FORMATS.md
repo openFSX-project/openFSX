@@ -1144,3 +1144,64 @@ The original frame sums prior source currents before computing the next
 allocation. The reference's separate post-allocation sum tests a different
 invocation boundary, not same-frame delivery. Full ordering, filtering, auxiliary
 allocation, battery-voltage integration and actual load providers remain open.
+
+
+## Ordered legacy voltage-core prefix
+
+```powershell
+python scripts/check-electrical-defaults.py FSX/sim1.dll target/voltage-core-reference --voltage-core
+cargo run -p fsx-app --example legacy-voltage-core-check --locked -- target/voltage-core-reference/report.json target/voltage-core-comparison
+```
+
+Both output directories must be new. The reference executes the original frame
+prefix, its admission, active-load summation, prior-source sum and allocation
+routines in the same order, ending immediately after voltage storage and before
+battery-failure/avionics processing. One generator and one explicitly active
+consumer are wired in synthetic memory; failure-query and auxiliary services
+return injected false/zero respectively. The native float32 response factor is explicitly provided. Its
+physical origin is unverified. Original instruction/write guards remain active
+with a 10,000-instruction budget per prefix invocation.
+
+Nine sequences (380 frames) cover discharge, source start/stop, prior-current lag,
+zero/0.1-float32/double response, empty/full voltage, overload, battery-master off,
+and zero-generator rating with a positive battery maximum. The report records
+input, incoming state, outgoing state, pre-load bus values and prior current sum
+for every frame. The Rust checker validates profile/schema/size/case/frame bounds
+and compares each value to those original outputs with absolute tolerance 1e-9;
+observed maximum error is approximately 1.42e-14. This is not a complete FP-bit
+parity claim for all possible states or a live FSX/aircraft capture.
+
+legacy_voltage::Core holds optional State (battery_voltage, filtered_net_amps,
+generator_amps). The last allocation becomes the next step's source sum. Advance
+accepts positive dt <=1/60 s and optional generator-online, battery-master,
+nonnegative load <=1,000,000 A and a finite nonnegative float32 response factor.
+Configuration voltages are bounded to 0..1000 V and capability to 0..1,000,000 A;
+maximum battery voltage must be positive. A zero maximum is not silently fixed:
+the original zero-auxiliary sum has a zero-denominator singularity outside this
+checked prefix. Seeds must be finite; they are explicit observations/context,
+not an assumed fully charged initial battery.
+
+For known inputs the original ordered operations are:
+
+1. Record pre-load main/battery/hot-battery voltage from incoming state/source.
+2. Read prior allocated source current I; compute Fnew = F + (I - load - F)*4*dt.
+3. Compute Vintermediate = max(0, V + Fnew*0.000555*response_factor*dt).
+4. Compute next allocation from Vintermediate using the checked current phase.
+5. Compute Vnew = min(maximum, Vintermediate + I*0.0004*dt).
+
+The allocation sees intermediate voltage before the upper clamp. It can therefore
+be signed even when final voltage equals the maximum. A known zero generator
+rating supplies no generation and leaves battery-only pre-load voltage un-clipped
+by that zero rating. Unknown required inputs clear core knowledge on a positive
+interval; invalid/nonfinite/overflow computation leaves prior state unchanged.
+These states are distinct from the separate ideal Coulomb-counting Battery.
+
+CircuitNetwork exposes seed_legacy_voltage_state, legacy_voltage_state and
+step_legacy_voltage_core only under the versioned single-piston profile. The
+step uses stored battery-master position and current source availability/ratings,
+with explicit load/response inputs. Reset clears the seed; switch/source changes
+preserve voltage history so prior-current lag is not discarded. Ordinary
+Simulation.step does not invoke this provider-dependent prefix automatically.
+Results are not published to the observed bus array or used as charge fraction.
+Tail failure/avionics behavior, factor provenance, actual initial/live inputs and
+loaded-bus integration remain unfinished.

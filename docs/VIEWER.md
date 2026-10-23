@@ -852,6 +852,20 @@ that the original allocation has no zero floor. These outputs are neither
 measured current nor a solved battery terminal current. Source current is not
 fed automatically into charge or loaded bus voltage; original frame ordering and
 filtering still require implementation.
+A fifth mode traces the original voltage-core prefix, and a separate Rust checker
+compares every recorded state/value:
+
+```powershell
+python scripts/check-electrical-defaults.py FSX/sim1.dll target/voltage-core-reference --voltage-core
+cargo run -p fsx-app --example legacy-voltage-core-check --locked -- target/voltage-core-reference/report.json target/voltage-core-comparison
+```
+
+Nine sequences / 380 frames cover source lag, voltage filtering/clamps, signed
+allocation, load changes and float32 response. Rust/original maximum absolute
+error is about 1.42e-14 (tolerance 1e-9). The prefix stops before battery-failure
+and avionics processing. Its response factor and initial state are explicit
+inputs; the factor's physical source is still unverified. Network core APIs do
+not run automatically in flight or publish these pre-load values as loaded buses.
 Actual engine/load providers, C172 topology and remaining legacy defaults still
 need implementation before live OAT/V binding. FLT loading is an explicit API and
 checker path; it does not yet restore a flight into the viewer.

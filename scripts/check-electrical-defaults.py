@@ -248,6 +248,69 @@ def run_currents(image,base,active,capacity,max_battery,battery_voltage,load,act
         'allocated_generator_amps':currents,'sum_after_explicit_resum':readreal(state+12)}
 
 
+def run_voltage_core(image,base,scenario):
+    """Original frame prefix through voltage storage, before failure/avionics.
+    One explicit consumer is active; no equipment-presence model is invented.
+    The response factor's source/physical meaning is not established here.
+    """
+    vm=Uc(UC_ARCH_X86,UC_MODE_32)
+    vm.mem_map(base,(len(image)+4095)&~4095);vm.mem_write(base,image)
+    state,root,config,engine,failure,auxiliary=0x110000,0x101000,0x102000,0x103000,0x104000,0x105000
+    context,factor_owner,factor_data,stub=0x107000,0x108000,0x109000,0x220000
+    for address,size in [(OBJECT,0x10000),(state,0x1000),(STACK,0x10000),(stub,0x1000)]:vm.mem_map(address,size)
+    vm.mem_write(stub,b'\xd9\xee\xc3')
+    def word(a,v):vm.mem_write(a,struct.pack('<I',v))
+    def real(a,v):vm.mem_write(a,struct.pack('<d',v))
+    def readword(a):return struct.unpack('<I',vm.mem_read(a,4))[0]
+    def readreal(a):return struct.unpack('<d',vm.mem_read(a,8))[0]
+    word(OBJECT,root);word(root+0x454,1);word(root+0x19B4,config)
+    word(OBJECT+0x43C,engine);word(OBJECT+0x440,auxiliary)
+    word(auxiliary,auxiliary+0x100);word(auxiliary+0x118,stub)
+    word(context+0x270,OBJECT);word(context+0x2D8,factor_owner);word(factor_owner,factor_data)
+    cfg=scenario.get('configuration',{'max_battery_voltage':24.,'generator_voltage':28.,'max_generator_amps':60.})
+    maximum,nominal,capacity=cfg['max_battery_voltage'],cfg['generator_voltage'],cfg['max_generator_amps']
+    word(state,config);word(config,1);real(config+8,maximum);real(config+0x10,nominal);real(config+0x18,capacity)
+    word(state+0x84,state+0x44);word(engine+0x90,failure);word(failure,failure+0x100)
+    word(state+0xB8,1);word(state+0xC0,config+0x20)
+    initial=scenario['initial'];real(state+0x94,initial['battery_voltage']);real(state+0x9C,initial['filtered_net_amps']);real(state+0x4C,initial['generator_amps'])
+    ranges=[(0x20B24C60,0x20B24D1F),(0x20B24D80,0x20B24EC9),(0x20B24ED0,0x20B24F3C),(0x20B24F50,0x20B24FB3),(0x20B24FC0,0x20B2507A),(stub,stub+3)]
+    def instruction(_vm,address,_size,_data):
+        if not any(lo<=address<hi for lo,hi in ranges):raise ValueError('Voltage core left instruction whitelist')
+        if address==0x20B24E16:
+            sp=vm.reg_read(UC_X86_REG_ESP)
+            if readword(sp)!=failure:raise ValueError('Unexpected voltage-core failure ABI')
+            vm.reg_write(UC_X86_REG_EAX,0);vm.reg_write(UC_X86_REG_ESP,sp+4);vm.reg_write(UC_X86_REG_EIP,address+3)
+    def writes(_vm,_access,address,size,_value,_data):
+        if not any(lo<=address and address+size<=hi for lo,hi in [(OBJECT,OBJECT+0x10000),(state,state+0x1000),(STACK,STACK+0x10000)]):raise ValueError('Voltage core wrote outside guarded objects')
+    vm.hook_add(UC_HOOK_CODE,instruction);vm.hook_add(UC_HOOK_MEM_WRITE,writes)
+    vm.reg_write(UC_X86_REG_FPCW,0x37F)
+    records=[]
+    for frame in scenario['inputs']:
+        before={'battery_voltage':readreal(state+0x94),'filtered_net_amps':readreal(state+0x9C),'generator_amps':readreal(state+0x4C)}
+        online=frame['generator_online'] and nominal>0.;dt=frame['dt'];load=frame['load_amps']
+        factor=struct.unpack('<f',struct.pack('<f',frame['response_factor']))[0]
+        word(engine+0x8C,int(online));real(engine+0x5C,0.9 if online else 0.)
+        word(state+0x244,int(frame['battery_master']));real(config+0x20,load)
+        vm.mem_write(factor_data+0x38,struct.pack('<f',factor))
+        sp=STACK+0xF000;word(sp,0);word(sp+4,context);real(sp+8,dt)
+        vm.reg_write(UC_X86_REG_ESP,sp);vm.reg_write(UC_X86_REG_ECX,state)
+        vm.emu_start(0x20B24C60,0x20B24D1F,count=10000)
+        if vm.reg_read(UC_X86_REG_EIP)!=0x20B24D1F or vm.reg_read(UC_X86_REG_ESP)!=sp-16:raise ValueError('Voltage prefix did not reach expected boundary')
+        filtered=before['filtered_net_amps']+(before['generator_amps']-load-before['filtered_net_amps'])*4.*dt
+        intermediate=max(0.,before['battery_voltage']+filtered*0.000555*factor*dt)
+        allocated=min(capacity,load+(maximum-intermediate)) if online else 0.
+        voltage=min(maximum,intermediate+before['generator_amps']*0.0004*dt)
+        actual={'battery_voltage':readreal(state+0x94),'filtered_net_amps':readreal(state+0x9C),'generator_amps':readreal(state+0x4C)}
+        for key,expected in [('battery_voltage',voltage),('filtered_net_amps',filtered),('generator_amps',allocated)]:
+            if abs(actual[key]-expected)>1e-10:raise ValueError(f'Original voltage core mismatch: {key}, {actual[key]}, {expected}')
+        battery_bus=before['battery_voltage'] if frame['battery_master'] else 0.
+        main=min(nominal,battery_bus+(nominal if online else 0.)) if nominal>0. else battery_bus
+        if readreal(state+4)!=main or readreal(state+0x24)!=battery_bus or readreal(state+0x34)!=before['battery_voltage'] or readreal(state+12)!=before['generator_amps']:raise ValueError('Original pre-load/prior-current ordering mismatch')
+        records.append({'input':dict(frame,response_factor=factor),'before':before,'state':actual,'pre_load_main_voltage':readreal(state+4),
+            'pre_load_battery_voltage':readreal(state+0x24),'pre_load_hot_battery_voltage':readreal(state+0x34),'source_sum_used_amps':readreal(state+12)})
+    return {'name':scenario['name'],'configuration':cfg,'initial':initial,'frames':records}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dll", type=Path)
@@ -256,6 +319,7 @@ def main():
     modes.add_argument("--availability", action="store_true", help="check original pre-load generator admission instead of scalar defaults")
     modes.add_argument("--engine-signal", action="store_true", help="trace named rated RPM through original engine reconstruction and FLT save")
     modes.add_argument("--currents", action="store_true", help="check original generator current allocation and a separate zero-auxiliary current sum")
+    modes.add_argument("--voltage-core", action="store_true", help="check original frame prefix through voltage storage, excluding failure/avionics tail")
     args = parser.parse_args()
     if args.output.exists():
         raise ValueError("Output directory must be new")
@@ -268,6 +332,28 @@ def main():
         raise ValueError("Unexpected reference PE profile")
     image = pe.get_memory_mapped_image()
     cases = []
+    if args.voltage_core:
+        def frame(online=False,load=12.,factor=1.,master=True,dt=1./120.):return {'generator_online':online,'load_amps':load,'response_factor':factor,'battery_master':master,'dt':dt}
+        def scenario(name,voltage,filtered,current,inputs):return {'name':name,'initial':{'battery_voltage':voltage,'filtered_net_amps':filtered,'generator_amps':current},'inputs':inputs}
+        scenarios=[scenario('discharge',24.,0.,0.,[frame()]*120),
+            scenario('start_stop_lag',22.,0.,0.,[frame()]*10+[frame(True)]*30+[frame()]*10),
+            scenario('zero_response',22.,0.,14.,[frame(True,factor=0.)]*20),
+            scenario('empty_battery',0.,-12.,0.,[frame()]*20),
+            scenario('full_charge_signed_allocation',24.,0.,60.,[frame(True,load=0.)]*30),
+            scenario('overload',22.,0.,0.,[frame(True,load=120.)]*60),
+            scenario('float32_response_master_off',22.,0.,12.,[frame(True,factor=0.1,master=False)]*30),
+            scenario('double_response',20.,-6.,0.,[frame(factor=2.,dt=1./60.)]*30)]
+        battery_only=scenario('zero_generator_rating',24.,0.,0.,[frame()]*20)
+        battery_only['configuration']={'max_battery_voltage':24.,'generator_voltage':0.,'max_generator_amps':0.}
+        scenarios.append(battery_only)
+        cases=[run_voltage_core(image,base,s) for s in scenarios]
+        args.output.mkdir()
+        report={'schema':1,'source':'bounded-installed-sim1-voltage-core','sha256':SHA256,'file_version':'10.0.62615.0','cases':cases,
+            'scope':'original core prefix through voltage storage, before battery-failure and avionics tail; one injected active consumer, zero auxiliary, no generator failure, explicit float32 response factor; not complete aircraft electrical simulation',
+            'response_factor_physical_mapping_verified':False,'game_launched':False,'guarded_instruction_ranges':True,'guarded_writes':True,'instruction_budget_per_frame':10000}
+        (args.output/'report.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
+        print(f'PASS: {len(cases)} original voltage-core sequences / {sum(len(c["frames"]) for c in cases)} frames; prior-current lag, filter, clamps and pre-load ordering; failure/avionics tail excluded')
+        return
     if args.currents:
         for active in [(False,),(True,),(False,False),(True,False),(False,True),(True,True)]:
             for capacity,max_battery,battery,load in itertools.product([0.,60.],[12.,24.],[0.,20.,24.,30.],[0.,12.,60.,120.]):

@@ -5,6 +5,57 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 23 October 2026
 
+After `a89f7ae`, original electrical frame ordering is checked through battery
+voltage storage, before the battery-failure and avionics tail. Nine bounded
+sequences execute 380 original core invocations with persistent voltage/filter/
+allocation state. They include discharge, start/stop lag, zero/float32/double
+response factors, empty/full battery, overload, battery-master isolation and a
+zero-generator-rating battery-only path. Failure service returns false, auxiliary
+returns zero and a single explicitly active consumer supplies the requested load.
+This is a checked original prefix, not a complete aircraft electrical frame.
+
+The core reads prior allocated generator current before calculating the next
+allocation. It filters net current with coefficient 4*dt, changes battery voltage
+using the filtered value, a native float32 response factor and coefficient
+0.000555, clips below zero, allocates the next current from that intermediate
+voltage, adds the prior-current 0.0004*dt term and clips above the configured
+maximum. Allocation precedes the upper clamp, so switching off a large load near
+full voltage can retain the original small negative current request. Pre-load
+main/battery/hot-battery readings describe the preceding voltage, not final loaded
+bus state. The response factor's physical source remains unverified; no capacity,
+temperature or nominal value is substituted.
+
+fsx-sim::legacy_voltage owns explicit optional seeded state and implements these
+ordered operations. Missing providers lose state knowledge over a positive step;
+invalid input/computation fails atomically. Response factor is Option<f32>, and
+zero maximum battery voltage is explicitly outside this checked core because the
+original auxiliary sum divides by it. Network APIs require the versioned profile,
+use stored battery-master/source availability, retain state across control changes
+and clear it on reset. They do not run automatically in ordinary physics, publish
+loaded bus observations or translate voltage into Coulomb charge fraction.
+
+legacy-voltage-core-check compares the Rust implementation directly against the
+original JSON traces, including each incoming state, outgoing state, pre-load
+readings and prior source sum. All 380 frames match within 1e-9; maximum observed
+absolute error is about 1.42e-14. Unit checks cover lag, intermediate allocation
+before the upper clamp, signed requests, unknown response, invalid/overflow input,
+profile gating, reset and absence of automatic bus/charge publication.
+
+Next is battery-failure/avionics tail processing and confirming the response
+factor's source, followed by actual seed/live engine/load providers and loaded
+bus/secondary OAT/V binding. Full FSX 1:1 remains unfinished; original-FSX live
+capture stays deferred by the user.
+
+208 all-feature Rust test executions pass in
+`target/legacy-voltage-core-workspace-tests-01.log`. Original prefix traces pass
+in `target/legacy-voltage-core-reference-02/report.json`; the direct 380-frame
+Rust/original comparison passes in `target/legacy-voltage-core-comparison-02/`.
+Installed C172/FLT/source-phase regression passes in
+`target/legacy-voltage-core-installed-regression-01.log`. Formatting, architecture
+and generated documentation checks pass.
+
+### Previous current-allocation stage — 23 October 2026
+
 After `50c2826`, the original generator-current allocation phase is checked in
 386 bounded sim1 10.0.62615.0 cases. The reference runs original allocation and
 then separately re-sums current with a synthetic zero auxiliary service. It
