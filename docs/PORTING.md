@@ -5,6 +5,51 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 23 October 2026
 
+After `50c2826`, the original generator-current allocation phase is checked in
+386 bounded sim1 10.0.62615.0 cases. The reference runs original allocation and
+then separately re-sums current with a synthetic zero auxiliary service. It
+covers one/two generator flags, no/one/two active sources, zero/60 A capability,
+12/24 V maximum battery ratings, varied battery voltage and load, upper clipping,
+inactive stale-slot clearing and above-maximum voltage fixtures. This explicit
+re-sum is a probe operation, not a reordering of the original electrical frame.
+
+For one active generator, original allocation is
+min(max_generator_amps, load_amps + (max_battery_voltage - battery_voltage)).
+There is no zero floor: an above-maximum battery voltage fixture can yield a
+negative allocation. The port preserves this isolated original arithmetic rather
+than adding an unverified physical charging model. The two-generator reference
+also verifies original division by active count; supported flight remains one
+piston engine, so no general parallel-source solver is enabled by this evidence.
+
+Generator.fsx_steam_62615_allocated_current implements the single-source phase.
+Network access requires the explicit versioned profile and uses its effective
+maximum battery rating. Load and battery voltage are separate provider inputs;
+CFG consumer maxima are not substituted. Unknown required inputs give None;
+a known offline source gives zero and invalid values fail. The result is not
+measured/delivered current or a solved battery terminal current and is not applied
+to charge, bus observations or ordinary physics automatically.
+
+The installed checker adds eight explicit cases through C172's effective source
+profile and known saved switch: balanced 12 A load gives 12 A, battery voltage
+22 V against a 24 V maximum gives 14 A, excess demand caps at 60 A, and above-max
+voltage gives the original signed result. Missing load/voltage and offline supply
+remain distinct. Unit checks also cover invalid inputs, profile eligibility and
+absence of accidental bus/battery state publication.
+
+Next is original full-frame ordering, prior-current summation/filtering and
+battery-voltage dynamics, plus a live engine/load provider. Loaded bus state,
+live OAT/V and full FSX 1:1 parity remain unfinished. Original-FSX live capture
+stays deferred by the user.
+
+204 all-feature Rust test executions pass in
+`target/generator-current-workspace-tests-01.log`. Original allocation/sum evidence
+is in `target/generator-current-reference-02/report.json` (386 cases, including
+stale-active flags with zero admitted count). Installed C172 and eight explicit
+allocation probes pass in `target/generator-current-runtime-check-01/report.json`.
+Formatting, architecture and generated documentation checks pass.
+
+### Previous named RPM-fraction stage — 23 October 2026
+
 After `82d69b8`, the generator admission signal is now identified as engine RPM
 divided by piston_engine max_rated_rpm. Thirty bounded original traces connect
 the named CFG lookup destination, original rated-RPM copy and signed engine RPM

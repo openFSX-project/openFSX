@@ -4,7 +4,8 @@ Requires pefile and unicorn. Reads the user's installed sim1.dll into emulated
 memory. The default mode stops after three scalar CFG reads, stubbing allocation
 and lookup. --availability executes pre-load admission with failure/auxiliary
 services stubbed. --engine-signal traces named rated RPM through reconstruction
-and FLT save; original x87 branches execute unchanged in each mode.
+and FLT save. --currents checks allocation and a separate current sum. Original
+x87 branches execute unchanged in each mode.
 No original instructions or assets are embedded or written to the repository.
 """
 import argparse
@@ -203,6 +204,50 @@ def run_engine_signal(image, base, rated_rpm, fraction, rotation):
         'runtime_rpm_fraction':runtime_fraction,'flt_field':string(name),'flt_fraction':readreal(record+offset),'saved_generator_switch':True,'generator_admitted':admission['online']}
 
 
+def run_currents(image,base,active,capacity,max_battery,battery_voltage,load,active_count=None):
+    """Original allocation and a separate current-sum invocation. This does not
+    change the original frame's ordering or emulate battery integration.
+    """
+    vm=Uc(UC_ARCH_X86,UC_MODE_32)
+    vm.mem_map(base,(len(image)+4095)&~4095);vm.mem_write(base,image)
+    state,root,config,engine,auxiliary,slots=0x110000,0x101000,0x102000,0x103000,0x105000,0x106000
+    stub,sentinel=0x220000,0x220100
+    for address,size in [(OBJECT,0x10000),(state,0x1000),(STACK,0x10000),(stub,0x1000)]:vm.mem_map(address,size)
+    vm.mem_write(stub,b'\xd9\xee\xc3')  # own auxiliary service: x87 zero, ret
+    def word(a,v):vm.mem_write(a,struct.pack('<I',v))
+    def real(a,v):vm.mem_write(a,struct.pack('<d',v))
+    def readreal(a):return struct.unpack('<d',vm.mem_read(a,8))[0]
+    word(OBJECT,root);word(root+0x454,len(active));word(root+0x19B4,config)
+    word(OBJECT+0x43C,engine);word(OBJECT+0x440,auxiliary)
+    word(auxiliary,auxiliary+0x100);word(auxiliary+0x118,stub)
+    word(state,config);real(config+8,max_battery);real(config+0x18,capacity)
+    count=sum(active) if active_count is None else active_count
+    real(state+0x94,battery_voltage);real(state+0xA4,load);word(state+0x248,count)
+    for i,on in enumerate(active):
+        word(engine+i*0xEC+0x94,int(on));word(state+0x84+i*4,slots+i*16)
+        real(slots+i*16+8,123.)  # proves inactive slots are explicitly cleared
+    sp=STACK+0xF000
+    vm.reg_write(UC_X86_REG_FPCW,0x37F)
+    ranges=[(0x20B24FC0,0x20B2507A),(0x20B24F50,0x20B24FB3),(stub,stub+3)]
+    def instruction(_vm,address,_size,_data):
+        if not any(lo<=address<hi for lo,hi in ranges):raise ValueError('Current reference left instruction whitelist')
+    def writes(_vm,_access,address,size,_value,_data):
+        if not any(lo<=address and address+size<=hi for lo,hi in [(OBJECT,OBJECT+0x10000),(state,state+0x1000),(STACK,STACK+0x10000)]):
+            raise ValueError('Current reference wrote outside mutable regions')
+    vm.hook_add(UC_HOOK_CODE,instruction);vm.hook_add(UC_HOOK_MEM_WRITE,writes)
+    for start in [0x20B24FC0,0x20B24F50]:
+        word(sp,sentinel);word(sp+4,OBJECT)
+        vm.reg_write(UC_X86_REG_ESP,sp);vm.reg_write(UC_X86_REG_ECX,state)
+        vm.emu_start(start,sentinel,count=4096)
+        if vm.reg_read(UC_X86_REG_EIP)!=sentinel or vm.reg_read(UC_X86_REG_ESP)!=sp+8:
+            raise ValueError('Current reference did not return with expected ABI')
+    currents=[readreal(slots+i*16+8) for i in range(len(active))]
+    expected=[min(capacity,(load+(max_battery-battery_voltage))/count) if on and count else 0. for on in active]
+    if currents!=expected or readreal(state+12)!=sum(expected):raise ValueError('Unexpected original current allocation/sum')
+    return {'active':active,'active_count_input':count,'capacity_amps':capacity,'max_battery_voltage':max_battery,'battery_voltage':battery_voltage,'load_amps':load,
+        'allocated_generator_amps':currents,'sum_after_explicit_resum':readreal(state+12)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dll", type=Path)
@@ -210,6 +255,7 @@ def main():
     modes=parser.add_mutually_exclusive_group()
     modes.add_argument("--availability", action="store_true", help="check original pre-load generator admission instead of scalar defaults")
     modes.add_argument("--engine-signal", action="store_true", help="trace named rated RPM through original engine reconstruction and FLT save")
+    modes.add_argument("--currents", action="store_true", help="check original generator current allocation and a separate zero-auxiliary current sum")
     args = parser.parse_args()
     if args.output.exists():
         raise ValueError("Output directory must be new")
@@ -222,6 +268,19 @@ def main():
         raise ValueError("Unexpected reference PE profile")
     image = pe.get_memory_mapped_image()
     cases = []
+    if args.currents:
+        for active in [(False,),(True,),(False,False),(True,False),(False,True),(True,True)]:
+            for capacity,max_battery,battery,load in itertools.product([0.,60.],[12.,24.],[0.,20.,24.,30.],[0.,12.,60.,120.]):
+                cases.append(run_currents(image,base,active,capacity,max_battery,battery,load))
+        for stale_flags in [(True,),(True,False)]:
+            cases.append(run_currents(image,base,stale_flags,60.,24.,22.,12.,active_count=0))
+        args.output.mkdir()
+        report={'schema':1,'source':'bounded-installed-sim1-generator-current-allocation','sha256':SHA256,'file_version':'10.0.62615.0','cases':cases,
+            'scope':'allocation plus separately invoked current sum with zero auxiliary service; input load/active flags/battery voltage supplied; no full-frame timing or battery/load/voltage solution',
+            'game_launched':False,'guarded_instruction_ranges':True,'guarded_writes':True,'instruction_budget_per_invocation':4096}
+        (args.output/'report.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
+        print('PASS: 386 original allocation/sum cases; cap/gap, stale-slot and zero-active-count clearing, no lower clamp; no full-frame dynamics claim')
+        return
     if args.engine_signal:
         for rated in [2400.,2700.,3000.]:
             for fraction in [0.,0.1,math.nextafter(0.1,math.inf),0.9,1.25]:

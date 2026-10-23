@@ -153,6 +153,23 @@ impl CircuitNetwork {
             failed,
         )
     }
+    /// Versioned single-piston allocation phase with independent actual-load
+    /// input. Does not use authored CFG maxima or apply the result to a battery,
+    /// bus observation or physics step. Full original frame timing remains open.
+    pub fn fsx_steam_generator_current_request(
+        &self,
+        load_amps: Option<f64>,
+        battery_voltage: Option<f64>,
+    ) -> Result<Option<f64>, String> {
+        if self.source_defaults != SourceDefaults::FsxSteam62615SinglePiston {
+            return Err("Generator current allocation requires the explicit FSX Steam single-piston profile".into());
+        }
+        self.generator.fsx_steam_62615_allocated_current(
+            load_amps,
+            battery_voltage,
+            self.source_configuration().max_battery_voltage,
+        )
+    }
     /// Replace FLT switch positions and saved RPM; missing mapped requests become
     /// unknown, absent aircraft circuits stay absent. Switches alone never
     /// energize buses or establish generator availability/terminal current.
@@ -563,5 +580,36 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+    #[test]
+    fn current_request_uses_effective_profile_and_never_publishes_supply_or_charge() {
+        let mut n = CircuitNetwork::new_with_source_defaults(
+            Electrical::default(),
+            SourceDefaults::FsxSteam62615SinglePiston,
+        )
+        .unwrap();
+        let mut saved = FlightElectrical::default();
+        saved.generators[0] = Some(true);
+        saved.engine_rpm_fraction[0] = Some(0.9);
+        n.apply_switches(&saved);
+        assert_eq!(
+            n.fsx_steam_generator_current_request(Some(12.), Some(22.))
+                .unwrap(),
+            None
+        );
+        n.update_generator_from_saved_flt(Some(true), Some(false))
+            .unwrap();
+        assert_eq!(
+            n.fsx_steam_generator_current_request(Some(12.), Some(22.))
+                .unwrap(),
+            Some(14.)
+        );
+        assert_eq!(n.bus_voltage(Bus::Main).unwrap(), None);
+        assert_eq!(n.battery.charge_fraction(), None);
+        assert_eq!(n.last_battery_flow(), None);
+        let unresolved = CircuitNetwork::new(Electrical::default()).unwrap();
+        assert!(unresolved
+            .fsx_steam_generator_current_request(Some(12.), Some(22.))
+            .is_err());
     }
 }

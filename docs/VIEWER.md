@@ -838,6 +838,20 @@ admission under separately supplied enabled/no-fault inputs. These are saved
 snapshots; the viewer does not reuse them as evolving RPM or infer RPM from
 throttle. Pre-load voltages in the reference report are not final loaded bus
 observations, and stale raw generator slots are not admitted supply.
+A fourth reference mode checks original current allocation and an independently
+invoked zero-auxiliary current sum:
+
+```powershell
+python scripts/check-electrical-defaults.py FSX/sim1.dll target/generator-current-reference --currents
+```
+
+The installed checker adds eight explicit single-source allocation cases. For
+12 A load and a 24 V maximum, current battery voltage 22 V gives the original
+14 A request; excess demand caps at 60 A. An above-maximum voltage fixture verifies
+that the original allocation has no zero floor. These outputs are neither
+measured current nor a solved battery terminal current. Source current is not
+fed automatically into charge or loaded bus voltage; original frame ordering and
+filtering still require implementation.
 Actual engine/load providers, C172 topology and remaining legacy defaults still
 need implementation before live OAT/V binding. FLT loading is an explicit API and
 checker path; it does not yet restore a flight into the viewer.

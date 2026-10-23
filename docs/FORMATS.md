@@ -1102,3 +1102,45 @@ ordinary versioned signal API. Call this for an explicit snapshot application,
 not as a live engine provider on later physics frames. Flight stepping does not
 infer RPM from throttle or repeatedly feed the initial FLT value. A real evolving
 engine model/provider, current allocation and loaded-bus coupling remain open.
+
+
+## Original generator-current allocation phase
+
+```powershell
+python scripts/check-electrical-defaults.py FSX/sim1.dll target/generator-current-reference --currents
+```
+
+This mode uses the same sim1 version/fingerprint and memory/instruction guards.
+386 cases execute original generator-current allocation and then a separately
+invoked current sum. A synthetic auxiliary service returns x87 zero. Inputs are
+explicit active flags, load, current battery voltage and configured maximum
+voltage/capability; no engine or consumer presence is inferred. One/two-engine
+flags, zero/60 A capability, 12/24 V maximum battery voltage, current battery
+voltages 0/20/24/30 V and loads 0/12/60/120 A cover the branches. Inactive slots
+start with stale 123 A and must be cleared by original code. Two additional
+fixtures retain stale engine-active flags with a zero admitted count; the
+allocation must still clear their slots.
+
+For each active source with a nonzero active count, original allocation is
+min(capability, (load + (maximum_battery_voltage - battery_voltage))/active_count).
+Inactive sources are assigned zero. No lower clamp is applied. Above-maximum
+voltage fixtures can therefore produce negative allocation. These are isolated
+phase semantics, not proof that all such fixtures are reachable in an ordinary
+complete FSX frame. The independently invoked sum must match all allocated slots
+for the zero-auxiliary profile. Nonzero auxiliary behavior is outside this check.
+
+Generator.fsx_steam_62615_allocated_current exposes only the single-generator
+profile: optional load in 0..1,000,000 A and optional battery/current maximum
+voltages in 0..1000 V. Values must be finite. Known offline means zero; otherwise
+all required inputs, availability and capability must be known. The signed result
+preserves the original no-floor behavior. This is distinct from supplied_voltage,
+which is an ideal within-capability source-voltage inspection API.
+
+CircuitNetwork.fsx_steam_generator_current_request requires the versioned single
+piston profile, obtains its effective maximum battery rating and uses independent
+load/battery-voltage inputs. It is read-only and never copies authored requested
+circuit maxima into load, energizes buses or updates battery charge/current.
+The original frame sums prior source currents before computing the next
+allocation. The reference's separate post-allocation sum tests a different
+invocation boundary, not same-frame delivery. Full ordering, filtering, auxiliary
+allocation, battery-voltage integration and actual load providers remain open.

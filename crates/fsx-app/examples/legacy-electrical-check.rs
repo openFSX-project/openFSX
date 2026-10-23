@@ -406,6 +406,38 @@ fn main() -> Result<(), String> {
         )?;
         admission_cases.push(json!({"case":name,"source_enabled":enabled,"rpm_fraction":signal,"failed":failed,"stored_generator_switch":simulation.electrical.switches().generators[0],"online":online,"loaded_main_bus_voltage":null}));
     }
+    let mut current_cases = Vec::new();
+    for (name, enabled, load, battery_voltage, expected) in [
+        ("balanced", true, Some(12.), Some(24.), Some(12.)),
+        ("voltage_gap", true, Some(12.), Some(22.), Some(14.)),
+        ("at_capacity", true, Some(60.), Some(24.), Some(60.)),
+        ("overload", true, Some(120.), Some(22.), Some(60.)),
+        (
+            "above_max_voltage_fixture",
+            true,
+            Some(0.),
+            Some(30.),
+            Some(-6.),
+        ),
+        ("unknown_load", true, None, Some(22.), None),
+        ("unknown_battery_voltage", true, Some(12.), None, None),
+        ("offline", false, None, None, Some(0.)),
+    ] {
+        simulation
+            .electrical
+            .update_generator_from_fsx_steam_signals(Some(enabled), Some(0.9), Some(false))?;
+        let allocated = simulation
+            .electrical
+            .fsx_steam_generator_current_request(load, battery_voltage)?;
+        ensure(
+            allocated == expected
+                && simulation.electrical.bus_voltage(Bus::Main)?.is_none()
+                && simulation.electrical.last_battery_flow().is_none(),
+            "Current allocation phase mismatch or accidental bus/battery coupling",
+        )?;
+        current_cases.push(json!({"case":name,"source_enabled_input":enabled,"load_amps_input":load,"battery_voltage_input":battery_voltage,
+            "allocated_generator_amps":allocated,"scope":"explicit allocation-phase fixture; not measured current or solved battery current","loaded_main_bus_voltage":null}));
+    }
     simulation
         .electrical
         .apply_switches(&FlightElectrical::default());
@@ -442,7 +474,7 @@ fn main() -> Result<(), String> {
         timed.electrical.battery.charge_fraction().is_none(),
         "Lost terminal-current knowledge retained a charge estimate",
     )?;
-    let report = json!({"schema":7,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
+    let report = json!({"schema":8,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
         "effective_source_ratings":{"profile":"FsxSteam62615SinglePiston","max_battery_voltage":effective_sources.max_battery_voltage,"generator_voltage":effective_sources.generator_voltage,"max_generator_amps":effective_sources.max_generator_amps,
             "reference":"bounded original scalar initialization; not live generation or measured bus voltage","capacity_and_charge_limit_resolved":false},
         "battery_max_capacity_amph":configuration.battery_max_capacity_amph,"battery_charging_current":configuration.battery_charging_current,
@@ -452,6 +484,7 @@ fn main() -> Result<(), String> {
         "distribution_inputs":"complete synthetic graph and independent constant-current requests; not installed C172 wiring or automatic CFG consumer activation",
         "installed_flight_switches":flight_switch_cases,"synthetic_simulation_time_battery":{"capacity_amph":40,"current_request_amps":36,"elapsed_seconds":1,"charge_fraction":timed_fraction,"unknown_request_clears_charge":true,"bus_voltage":null},
         "explicit_generator_admission_cases":admission_cases,"rpm_fraction_physical_mapping_verified":true,
+        "explicit_generator_current_cases":current_cases,
         "installed_source_generation":false,"installed_battery_dynamics":false,"sdk_omitted_circuit_defaults_resolved":false,"total_aircraft_current":false,"fsx_parity_verified":false});
     fs::create_dir(&output).map_err(|e| e.to_string())?;
     fs::write(
@@ -459,6 +492,6 @@ fn main() -> Result<(), String> {
         serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    println!("PASS: 17 authored circuits; verified versioned source ratings without live supply; sources/distribution/FLT/simulation time; actual source providers/topology remain unresolved.");
+    println!("PASS: C172 circuit/FLT/RPM, versioned source/admission/current phases; provider-driven bus/battery dynamics remain unresolved.");
     Ok(())
 }

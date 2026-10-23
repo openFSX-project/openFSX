@@ -239,6 +239,39 @@ impl Generator {
             _ => None,
         })
     }
+    /// Original single-generator allocation in sim1 10.0.62615.0, independently
+    /// checked against bounded original execution. This legacy arithmetic adds
+    /// load to a battery-voltage gap and caps only above: do not add a zero floor.
+    /// It is an allocation-phase result, not measured/delivered current or a
+    /// battery terminal-current solution. No auxiliary source is allocated here.
+    pub fn fsx_steam_62615_allocated_current(
+        &self,
+        load_amps: Option<f64>,
+        battery_voltage: Option<f64>,
+        max_battery_voltage: Option<f64>,
+    ) -> Result<Option<f64>, String> {
+        if !bounded(load_amps, 1e6)
+            || !bounded(battery_voltage, 1000.)
+            || !bounded(max_battery_voltage, 1000.)
+        {
+            return Err("Invalid legacy generator allocation inputs".into());
+        }
+        Ok(
+            match (
+                self.online,
+                load_amps,
+                battery_voltage,
+                max_battery_voltage,
+                self.capacity_amps,
+            ) {
+                (Some(false), _, _, _, _) => Some(0.),
+                (Some(true), Some(load), Some(voltage), Some(maximum), Some(capacity)) => {
+                    Some((load + (maximum - voltage)).min(capacity))
+                }
+                _ => None,
+            },
+        )
+    }
 }
 
 #[cfg(test)]
@@ -463,5 +496,59 @@ mod tests {
             })
             .is_err());
         assert_eq!(g, before);
+    }
+    #[test]
+    fn legacy_current_allocation_matches_original_cap_gap_and_no_zero_floor() {
+        let mut g = Generator::new(&config()).unwrap();
+        assert_eq!(
+            g.fsx_steam_62615_allocated_current(Some(12.), Some(22.), Some(24.))
+                .unwrap(),
+            None
+        );
+        g.set_online(Some(true));
+        for (load, voltage, expected) in [
+            (12., 24., 12.),
+            (12., 22., 14.),
+            (120., 22., 60.),
+            (0., 30., -6.),
+            (0., 0., 24.),
+        ] {
+            assert_eq!(
+                g.fsx_steam_62615_allocated_current(Some(load), Some(voltage), Some(24.))
+                    .unwrap(),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            g.fsx_steam_62615_allocated_current(None, Some(22.), Some(24.))
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            g.fsx_steam_62615_allocated_current(Some(12.), None, Some(24.))
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            g.fsx_steam_62615_allocated_current(Some(12.), Some(22.), None)
+                .unwrap(),
+            None
+        );
+        for (load, voltage, maximum) in [
+            (Some(f64::NAN), Some(22.), Some(24.)),
+            (Some(-1.), Some(22.), Some(24.)),
+            (Some(12.), Some(-1.), Some(24.)),
+            (Some(12.), Some(22.), Some(f64::INFINITY)),
+        ] {
+            assert!(g
+                .fsx_steam_62615_allocated_current(load, voltage, maximum)
+                .is_err());
+        }
+        g.set_online(Some(false));
+        assert_eq!(
+            g.fsx_steam_62615_allocated_current(None, None, None)
+                .unwrap(),
+            Some(0.)
+        );
     }
 }
