@@ -114,12 +114,12 @@ impl CircuitNetwork {
         &self.switches
     }
     /// Bridge the stored first-engine FLT switch to versioned admission inputs.
-    /// Providers must establish the other signals; no RPM/throttle conversion is
-    /// inferred. Recompute bus distribution and current allocation afterwards.
+    /// Providers must supply RPM / max_rated_rpm, not throttle or raw RPM.
+    /// Recompute bus distribution and current allocation afterwards.
     pub fn update_generator_from_fsx_steam_signals(
         &mut self,
         source_enabled: Option<bool>,
-        engine_signal: Option<f64>,
+        rpm_fraction: Option<f64>,
         failed: Option<bool>,
     ) -> Result<Option<bool>, String> {
         if self.source_defaults != SourceDefaults::FsxSteam62615SinglePiston {
@@ -131,7 +131,7 @@ impl CircuitNetwork {
             .generator
             .update_fsx_steam_62615_availability(LegacyGeneratorInputs {
                 source_enabled,
-                engine_signal,
+                rpm_fraction,
                 failed,
                 switch_on: self.switches.generators[0],
             })?;
@@ -140,7 +140,20 @@ impl CircuitNetwork {
         self.last_battery_flow = None;
         Ok(online)
     }
-    /// Replace supported FLT switch positions; missing mapped requests become
+    /// Explicit one-time use of a saved FLT RPM fraction. This is not a live
+    /// engine provider; never call automatically on subsequent physics frames.
+    pub fn update_generator_from_saved_flt(
+        &mut self,
+        source_enabled: Option<bool>,
+        failed: Option<bool>,
+    ) -> Result<Option<bool>, String> {
+        self.update_generator_from_fsx_steam_signals(
+            source_enabled,
+            self.switches.engine_rpm_fraction[0],
+            failed,
+        )
+    }
+    /// Replace FLT switch positions and saved RPM; missing mapped requests become
     /// unknown, absent aircraft circuits stay absent. Switches alone never
     /// energize buses or establish generator availability/terminal current.
     pub fn apply_switches(&mut self, switches: &FlightElectrical) {
@@ -509,5 +522,46 @@ mod tests {
         assert!(unresolved
             .update_generator_from_fsx_steam_signals(Some(true), Some(0.9), Some(false))
             .is_err());
+    }
+    #[test]
+    fn saved_flt_rpm_and_switch_require_independent_source_and_failure_inputs() {
+        let mut n = CircuitNetwork::new_with_source_defaults(
+            Electrical::default(),
+            SourceDefaults::FsxSteam62615SinglePiston,
+        )
+        .unwrap();
+        let mut saved = FlightElectrical::default();
+        saved.generators[0] = Some(true);
+        saved.engine_rpm_fraction[0] = Some(0.887);
+        n.apply_switches(&saved);
+        assert_eq!(
+            n.update_generator_from_saved_flt(None, Some(false))
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            n.update_generator_from_saved_flt(Some(true), None).unwrap(),
+            None
+        );
+        assert_eq!(
+            n.update_generator_from_saved_flt(Some(true), Some(false))
+                .unwrap(),
+            Some(true)
+        );
+        assert_eq!(n.bus_voltage(Bus::Main).unwrap(), None);
+        saved.engine_rpm_fraction[0] = Some(0.1);
+        n.apply_switches(&saved);
+        assert_eq!(
+            n.update_generator_from_saved_flt(Some(true), Some(false))
+                .unwrap(),
+            Some(false)
+        );
+        saved.engine_rpm_fraction[0] = None;
+        n.apply_switches(&saved);
+        assert_eq!(
+            n.update_generator_from_saved_flt(Some(true), Some(false))
+                .unwrap(),
+            None
+        );
     }
 }

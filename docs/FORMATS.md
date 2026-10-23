@@ -1037,8 +1037,9 @@ injected failure boolean and an auxiliary-service stub returning x87 zero. The
 0.099999, exactly 0.1, nextafter(0.1,+infinity) and 0.9, zero nominal voltage and
 previously-online transitions. Original instructions and mutable writes remain
 whitelisted with a 4096-instruction budget per invocation. The original state
-signal at engine offset 0x5c is an explicit input; its physical mapping is not
-verified. Do not treat it as raw RPM, throttle, or FLT Pct Engine RPM.
+signal at engine offset 0x5c is RPM / max_rated_rpm, established by the named trace
+below. Raw RPM, throttle and percent values in 0..100 are not equivalent inputs.
+A FLT Pct Engine RPM value is a saved fraction, not a live engine provider.
 
 For a positive nominal source voltage, admission requires an enabled source-mask
 bit, generator switch on, no failure and signal strictly >0.1. The reference
@@ -1050,15 +1051,54 @@ These are pre-load results; current limiting, delivered current, charging and
 final loaded bus voltage are not established by this mode.
 
 LegacyGeneratorInputs separates source_enabled, switch_on, failed and the legacy
-engine_signal, all optional. Generator.update_fsx_steam_62615_availability uses
+rpm_fraction, all optional. Generator.update_fsx_steam_62615_availability uses
 the verified known-input gate and finite signals. Unknown inputs yield None unless
 a known off condition proves false. A known zero nominal voltage is off; unknown
 nominal voltage prevents a true result. Invalid signals preserve prior state.
-This does not model source regulation or attach physical meaning to engine_signal.
+This does not model source regulation or provide live engine RPM.
 
 CircuitNetwork.update_generator_from_fsx_steam_signals is restricted to the
 versioned single-piston profile. It uses the stored first-engine FLT switch and
-explicit enable/signal/failure inputs. Successful updates clear bus observations,
+explicit enable/RPM-fraction/failure inputs. Successful updates clear bus observations,
 battery-current request and last-flow record. Callers must provide a fresh graph
 and current allocation afterwards; failed validation preserves the old state.
 Ordinary physics does not call this API without a confirmed engine provider.
+
+
+## Named generator RPM fraction and FLT snapshot
+
+A third version-pinned reference mode connects the engine signal to named inputs
+and outputs using original instructions in sim1 10.0.62615.0:
+
+```powershell
+python scripts/check-electrical-defaults.py FSX/sim1.dll target/generator-rpm-trace --engine-signal
+```
+
+Thirty cases execute the original named piston_engine max_rated_rpm lookup
+(destination check; numeric service injected), rated-speed copy for a piston,
+signed engine RPM reconstruction and FLT save routine. The original Pct Engine
+RPM descriptor identifies offset 0x18 in the save record; the original copy writes
+the generator's engine-state fraction there. Runtime RPM equals that fraction
+times rated RPM. The GeneratorSwitch descriptor/copy is checked independently.
+The reconstructed fraction is then passed to the original admission routine.
+Rated speeds 2400/2700/3000, zero, exact 0.1/nextafter, 0.9, 1.25 and forward/reverse
+rotation cover mapping, overspeed, signs and the strict admission boundary.
+Only guarded original ranges execute; mutable writes are bounded to synthetic
+objects, stack and the original 0x48-byte save record. This is not original engine
+integration, CFG numeric parsing, generic SimVar dispatch or complete FLT loading.
+
+LegacyGeneratorInputs.rpm_fraction is RPM / max_rated_rpm; 1 means rated speed.
+The FLT reader's engine_rpm_fraction array retains optional finite Pct Engine RPM
+for Engine Parameters.1.0 through .4.0. Values are not multiplied by 100 or clamped
+to 0..1; negative rotation and overspeed survive reading. Missing fields remain
+None; nonnumeric/nonfinite values fail before application. Other FLT read bounds
+and section scopes remain the same.
+
+CircuitNetwork.update_generator_from_saved_flt explicitly uses the saved first
+engine's fraction and generator switch with separately supplied enable/failure
+inputs. A missing source/failure input still prevents admission unless off is
+already known. Success invalidates old supply/current observations like the
+ordinary versioned signal API. Call this for an explicit snapshot application,
+not as a live engine provider on later physics frames. Flight stepping does not
+infer RPM from throttle or repeatedly feed the initial FLT value. A real evolving
+engine model/provider, current allocation and loaded-bus coupling remain open.

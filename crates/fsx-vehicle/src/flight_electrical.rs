@@ -1,4 +1,4 @@
-//! Authored electrical switch positions for player aircraft 0 in legacy FLT.
+//! Authored switches and saved engine RPM fractions for aircraft 0 in legacy FLT.
 //! Switches are not proof of generation, equipment presence, bus voltage or charge.
 use fsx_cfg::{decode, Config};
 use std::{collections::BTreeMap, fs, path::Path};
@@ -21,6 +21,10 @@ pub struct FlightElectrical {
     pub avionics: Option<bool>,
     /// Engine sections 1..4, aircraft 0. These are switch positions, not online.
     pub generators: [Option<bool>; 4],
+    /// Saved Pct Engine RPM, a fraction (1 = rated RPM) in the checked piston
+    /// profile. This snapshot is not evolving/live engine state. Overspeed and
+    /// signed rotation are retained; finite values are not clamped to 0..1.
+    pub engine_rpm_fraction: [Option<f64>; 4],
     requests: BTreeMap<String, bool>,
 }
 fn boolean(config: &Config, section: &str, key: &str) -> Result<Option<bool>, String> {
@@ -83,11 +87,12 @@ impl FlightElectrical {
             ..Self::default()
         };
         for (i, value) in result.generators.iter_mut().enumerate() {
-            *value = boolean(
-                config,
-                &format!("engine parameters.{}.0", i + 1),
-                "generatorswitch",
-            )?;
+            let section = format!("engine parameters.{}.0", i + 1);
+            *value = boolean(config, &section, "generatorswitch")?;
+            result.engine_rpm_fraction[i] = config
+                .get(&section, "pct engine rpm")
+                .map(|_| config.number(&section, "pct engine rpm"))
+                .transpose()?;
         }
         for &(key, circuit) in SWITCHES {
             let mut value = boolean(config, "switches.0", key)?;
@@ -150,5 +155,19 @@ mod tests {
                 .collect::<String>()
         );
         assert!(FlightElectrical::from_config(&Config::parse(&text).unwrap()).is_err());
+    }
+    #[test]
+    fn saved_rpm_fraction_is_optional_finite_signed_and_not_clamped_at_rated_speed() {
+        let c=Config::parse("[Engine Parameters.1.0]\nPct Engine RPM=0.887\n[Engine Parameters.2.0]\nPct Engine RPM=1.25\n[Engine Parameters.3.0]\nPct Engine RPM=-0.5").unwrap();
+        let s = FlightElectrical::from_config(&c).unwrap();
+        assert_eq!(
+            s.engine_rpm_fraction,
+            [Some(0.887), Some(1.25), Some(-0.5), None]
+        );
+        for value in ["NaN", "inf", "bad"] {
+            let c =
+                Config::parse(&format!("[Engine Parameters.1.0]\nPct Engine RPM={value}")).unwrap();
+            assert!(FlightElectrical::from_config(&c).is_err());
+        }
     }
 }

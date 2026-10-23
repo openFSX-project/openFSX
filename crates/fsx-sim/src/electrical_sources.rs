@@ -159,14 +159,15 @@ pub struct Generator {
     online: Option<bool>,
 }
 /// Versioned inputs to the original pre-load generator-admission branch.
-/// engine_signal denotes the legacy engine state signal tested by that branch;
-/// its physical mapping is unresolved. Do not substitute throttle or raw RPM.
+/// rpm_fraction is RPM / max_rated_rpm, also saved as FLT Pct Engine RPM.
+/// Original reconstruction/save traces establish this for the piston profile.
+/// Do not substitute throttle, raw RPM or a percent in 0..100.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LegacyGeneratorInputs {
     pub source_enabled: Option<bool>,
     pub switch_on: Option<bool>,
     pub failed: Option<bool>,
-    pub engine_signal: Option<f64>,
+    pub rpm_fraction: Option<f64>,
 }
 impl Generator {
     pub fn new(configuration: &Electrical) -> Result<Self, String> {
@@ -192,21 +193,21 @@ impl Generator {
         &mut self,
         input: LegacyGeneratorInputs,
     ) -> Result<Option<bool>, String> {
-        if input.engine_signal.is_some_and(|v| !v.is_finite()) {
-            return Err("Nonfinite legacy generator engine signal".into());
+        if input.rpm_fraction.is_some_and(|v| !v.is_finite()) {
+            return Err("Nonfinite legacy generator RPM fraction".into());
         }
         let online = if self.voltage == Some(0.)
             || input.source_enabled == Some(false)
             || input.switch_on == Some(false)
             || input.failed == Some(true)
-            || input.engine_signal.is_some_and(|v| v <= 0.1)
+            || input.rpm_fraction.is_some_and(|v| v <= 0.1)
         {
             Some(false)
         } else if self.voltage.is_some()
             && input.source_enabled == Some(true)
             && input.switch_on == Some(true)
             && input.failed == Some(false)
-            && input.engine_signal.is_some()
+            && input.rpm_fraction.is_some()
         {
             Some(true)
         } else {
@@ -406,7 +407,7 @@ mod tests {
                             source_enabled: Some(enabled),
                             switch_on: Some(switch),
                             failed: Some(failed),
-                            engine_signal: Some(signal),
+                            rpm_fraction: Some(signal),
                         };
                         assert_eq!(
                             g.update_fsx_steam_62615_availability(input).unwrap(),
@@ -424,7 +425,7 @@ mod tests {
                 source_enabled: Some(true),
                 switch_on: Some(true),
                 failed: Some(false),
-                engine_signal: Some(0.9)
+                rpm_fraction: Some(0.9)
             })
             .unwrap(),
             Some(false)
@@ -448,7 +449,7 @@ mod tests {
         );
         assert_eq!(
             g.update_fsx_steam_62615_availability(LegacyGeneratorInputs {
-                engine_signal: Some(0.1),
+                rpm_fraction: Some(0.1),
                 ..Default::default()
             })
             .unwrap(),
@@ -457,7 +458,7 @@ mod tests {
         let before = g.clone();
         assert!(g
             .update_fsx_steam_62615_availability(LegacyGeneratorInputs {
-                engine_signal: Some(f64::NAN),
+                rpm_fraction: Some(f64::NAN),
                 ..Default::default()
             })
             .is_err());

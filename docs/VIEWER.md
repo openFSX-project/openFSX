@@ -826,8 +826,17 @@ python scripts/check-electrical-defaults.py FSX/sim1.dll target/generator-admiss
 The port's explicit signal API combines source enable, failure and legacy engine
 signal with the stored first-engine FLT switch. The checker exercises six such
 cases and verifies that admission still leaves loaded bus voltage unknown. The
-legacy signal's physical mapping remains unverified; it is not inferred from
-throttle/RPM. Pre-load voltages in the reference report are not final loaded bus
+signal is now verified as RPM / max_rated_rpm by a separate original reconstruction
+and FLT save trace:
+
+```powershell
+python scripts/check-electrical-defaults.py FSX/sim1.dll target/generator-rpm-trace --engine-signal
+```
+
+The checker reads actual saved Pct Engine RPM fractions from both FLTs and probes
+admission under separately supplied enabled/no-fault inputs. These are saved
+snapshots; the viewer does not reuse them as evolving RPM or infer RPM from
+throttle. Pre-load voltages in the reference report are not final loaded bus
 observations, and stale raw generator slots are not admitted supply.
 Actual engine/load providers, C172 topology and remaining legacy defaults still
 need implementation before live OAT/V binding. FLT loading is an explicit API and

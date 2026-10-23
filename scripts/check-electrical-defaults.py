@@ -3,7 +3,8 @@
 Requires pefile and unicorn. Reads the user's installed sim1.dll into emulated
 memory. The default mode stops after three scalar CFG reads, stubbing allocation
 and lookup. --availability executes pre-load admission with failure/auxiliary
-services stubbed; original x87 branches execute unchanged in either mode.
+services stubbed. --engine-signal traces named rated RPM through reconstruction
+and FLT save; original x87 branches execute unchanged in each mode.
 No original instructions or assets are embedded or written to the repository.
 """
 import argparse
@@ -16,7 +17,7 @@ import struct
 
 import pefile
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_32, UC_HOOK_CODE, UC_HOOK_MEM_WRITE
-from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EIP, UC_X86_REG_ESP, UC_X86_REG_FPCW
+from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EIP, UC_X86_REG_ESP, UC_X86_REG_FPCW, UC_X86_REG_EBP, UC_X86_REG_ESI, UC_X86_REG_EDI, UC_X86_REG_EBX
 
 SHA256 = "4bb9ef1b9669bb48676ef16ede667a2c590af27943eb34f03f09332a5417ae0e"
 START, STOP = 0x20B252E0, 0x20B253EA
@@ -94,8 +95,8 @@ def run(image, base, engine_type, engine_count, overrides):
 
 
 def run_availability(image, base, enabled, switch, failed, signal, master, nominal=28., previously_online=False):
-    """Execute original pre-load generator admission. The signal's physical
-    mapping is deliberately unresolved; this does not claim an RPM provider.
+    """Execute original pre-load generator admission. The RPM fraction mapping
+    is verified separately by run_engine_signal; this is not an RPM provider.
     Failure query returns the injected boolean; auxiliary source returns zero.
     """
     start, end, sentinel, stub = 0x20B24D80, 0x20B24EC9, 0x220100, 0x220000
@@ -137,16 +138,78 @@ def run_availability(image, base, enabled, switch, failed, signal, master, nomin
     if vm.reg_read(UC_X86_REG_EIP)!=sentinel or vm.reg_read(UC_X86_REG_ESP)!=sp+8:
         raise ValueError("Availability reference did not return with expected ABI")
     if failures!=int(nominal>0. and enabled and switch): raise ValueError("Unexpected failure-service query count")
-    return {"enabled":enabled,"switch":switch,"failed":failed,"engine_signal":signal,"battery_master":master,"nominal_voltage":nominal,
+    return {"enabled":enabled,"switch":switch,"failed":failed,"rpm_fraction":signal,"battery_master":master,"nominal_voltage":nominal,
         "previously_online":previously_online,"online":bool(readword(state+0x248)),"engine_active_flag":readword(engine+0x94),"active_count":readword(state+0x248),"generator_voltage":readreal(generator),
         "pre_load_main_voltage":readreal(state+4),"battery_bus_voltage":readreal(state+0x24),"hot_battery_voltage":readreal(state+0x34)}
+
+
+def run_engine_signal(image, base, rated_rpm, fraction, rotation):
+    """Trace original named CFG input -> RPM reconstruction -> named FLT field.
+    No engine dynamics or general SimVar-dispatch path is substituted/claimed.
+    """
+    vm=Uc(UC_ARCH_X86,UC_MODE_32)
+    vm.mem_map(base,(len(image)+4095)&~4095);vm.mem_write(base,image)
+    vm.mem_map(OBJECT,0x10000);vm.mem_map(STACK,0x10000);vm.mem_map(0x220000,0x1000)
+    root,engine,piston,propeller=0x101000,0x103000,0x104000,0x105000
+    record,sentinel=0x20B98E50,0x220100
+    def word(a,v):vm.mem_write(a,struct.pack('<I',v))
+    def real(a,v):vm.mem_write(a,struct.pack('<d',v))
+    def readword(a):return struct.unpack('<I',vm.mem_read(a,4))[0]
+    def readreal(a):return struct.unpack('<d',vm.mem_read(a,8))[0]
+    def string(a):return bytes(vm.mem_read(a,128)).split(b'\0',1)[0].decode('ascii')
+    # Validate the original FLT descriptor, not a reconstructed name/offset.
+    name,offset=struct.unpack('<2I',vm.mem_read(0x20B94E88,8))
+    if string(name)!='Pct Engine RPM' or offset!=0x18:raise ValueError('Unexpected original FLT RPM descriptor')
+    switch_name,switch_offset=struct.unpack('<2I',vm.mem_read(0x20B94EE8,8))
+    if string(switch_name)!='GeneratorSwitch' or switch_offset!=0x30:raise ValueError('Unexpected original FLT switch descriptor')
+    word(OBJECT,root);word(root+0x454,1);word(root+0x46C,0)
+    word(OBJECT+0x43C,engine);word(OBJECT+0x430,piston);word(OBJECT+0x438,propeller)
+    real(propeller+8,fraction);real(propeller+0x44,rotation);word(engine+0x8C,1)
+    sp=STACK+0xF000;word(sp,sentinel);word(sp-0x70,0)
+    vm.reg_write(UC_X86_REG_ESP,sp-0x200);vm.reg_write(UC_X86_REG_EBP,sp);vm.reg_write(UC_X86_REG_FPCW,0x37F)
+    lookups=[]
+    ranges=[(0x20B4E406,0x20B4E444),(0x20B4C45E,0x20B4C476),(0x20B6C19C,0x20B6C1FC),(0x20B3E6B0,0x20B3E799)]
+    def instruction(_vm,address,_size,_data):
+        if not any(lo<=address<hi for lo,hi in ranges):raise ValueError('Engine trace left instruction whitelist')
+        if address==0x20B4E420:
+            esp=vm.reg_read(UC_X86_REG_ESP)
+            section,key,out,handle,flags=[readword(esp+i*4) for i in range(5)]
+            if string(section).lower()!='piston_engine' or string(key)!='max_rated_rpm' or out!=sp-12 or handle!=0x12345678 or flags!=0x24:
+                raise ValueError(f'Unexpected rated RPM CFG lookup ABI: {string(section)!r}, {string(key)!r}, {out:#x}, {handle:#x}, {flags:#x}; expected out {sp-12:#x}')
+            real(out,rated_rpm);lookups.append(string(key))
+            vm.reg_write(UC_X86_REG_EAX,1);vm.reg_write(UC_X86_REG_ESP,esp+20);vm.reg_write(UC_X86_REG_EIP,address+2)
+    def writes(_vm,_access,address,size,_value,_data):
+        if not any(lo<=address and address+size<=hi for lo,hi in [(OBJECT,OBJECT+0x10000),(STACK,STACK+0x10000),(record,record+0x48)]):
+            raise ValueError('Engine trace wrote outside guarded buffers')
+    vm.hook_add(UC_HOOK_CODE,instruction);vm.hook_add(UC_HOOK_MEM_WRITE,writes)
+    def phase(start,stop):
+        vm.emu_start(start,stop,count=4096)
+        if vm.reg_read(UC_X86_REG_EIP)!=stop:raise ValueError('Engine trace instruction budget exhausted')
+    vm.reg_write(UC_X86_REG_EDI,root);vm.reg_write(UC_X86_REG_EBX,0x12345678)
+    phase(0x20B4E406,0x20B4E444)
+    vm.reg_write(UC_X86_REG_ESI,OBJECT)
+    phase(0x20B4C45E,0x20B4C476)
+    vm.reg_write(UC_X86_REG_EDI,OBJECT)
+    phase(0x20B6C19C,0x20B6C1FC)
+    vm.reg_write(UC_X86_REG_ECX,OBJECT);vm.reg_write(UC_X86_REG_ESP,sp);word(sp,sentinel)
+    phase(0x20B3E6B0,sentinel)
+    runtime_fraction=readreal(engine+0x5C)
+    expected=math.copysign(fraction,rotation) if fraction else 0.
+    if lookups!=['max_rated_rpm'] or readreal(root+0x178)!=rated_rpm or readreal(OBJECT+0x61C)!=rated_rpm or runtime_fraction!=expected or readreal(engine+0x4C)!=expected*rated_rpm or readreal(record+offset)!=expected or readword(record+switch_offset)!=1:
+        raise ValueError('Named original engine/FLT ratio trace mismatch')
+    admission=run_availability(image,base,True,True,False,runtime_fraction,False)
+    if admission['online']!=(expected>0.1):raise ValueError('Reconstructed ratio did not match original admission')
+    return {'max_rated_rpm':rated_rpm,'input_fraction':fraction,'rotation':rotation,'runtime_rpm':readreal(engine+0x4C),
+        'runtime_rpm_fraction':runtime_fraction,'flt_field':string(name),'flt_fraction':readreal(record+offset),'saved_generator_switch':True,'generator_admitted':admission['online']}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dll", type=Path)
     parser.add_argument("output", type=Path, help="new directory")
-    parser.add_argument("--availability", action="store_true", help="check original pre-load generator admission instead of scalar defaults")
+    modes=parser.add_mutually_exclusive_group()
+    modes.add_argument("--availability", action="store_true", help="check original pre-load generator admission instead of scalar defaults")
+    modes.add_argument("--engine-signal", action="store_true", help="trace named rated RPM through original engine reconstruction and FLT save")
     args = parser.parse_args()
     if args.output.exists():
         raise ValueError("Output directory must be new")
@@ -159,6 +222,18 @@ def main():
         raise ValueError("Unexpected reference PE profile")
     image = pe.get_memory_mapped_image()
     cases = []
+    if args.engine_signal:
+        for rated in [2400.,2700.,3000.]:
+            for fraction in [0.,0.1,math.nextafter(0.1,math.inf),0.9,1.25]:
+                for rotation in [-1.,1.]:cases.append(run_engine_signal(image,base,rated,fraction,rotation))
+        args.output.mkdir()
+        report={'schema':1,'source':'bounded-installed-sim1-engine-rpm-fraction-trace','sha256':SHA256,'file_version':'10.0.62615.0','cases':cases,
+            'engine_signal_physical_mapping_verified':True,'mapping':'runtime RPM / piston_engine max_rated_rpm; saved as FLT Pct Engine RPM',
+            'scope':'original named CFG lookup destination, rated-RPM copy, engine reconstruction and FLT save; numeric CFG service injected; no engine dynamics or full scenario restore',
+            'game_launched':False,'guarded_instruction_ranges':True,'guarded_writes':True,'instruction_budget_per_phase':4096}
+        (args.output/'report.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
+        print('PASS: 30 original engine reconstruction/FLT traces; generator signal is RPM / max_rated_rpm, with strict > 0.1 admission')
+        return
     if args.availability:
         for enabled,switch,failed,master in itertools.product([False,True],repeat=4):
             for signal in [0.,0.099999,0.1,math.nextafter(0.1,math.inf),0.9]:
@@ -178,11 +253,11 @@ def main():
             if case["online"]!=admitted or case["pre_load_main_voltage"]!=(28. if admitted else 0.): raise ValueError("Unexpected previously-online admission result")
             cases.append(case)
         args.output.mkdir()
-        report={"schema":1,"source":"bounded-installed-sim1-generator-admission","sha256":SHA256,"file_version":"10.0.62615.0","cases":cases,
-            "scope":"pre-load admission only; synthetic engine signal/failure query; auxiliary source fixed zero; RPM mapping, generation current and loaded bus voltage unverified",
-            "game_launched":False,"engine_signal_physical_mapping_verified":False,"guarded_instruction_ranges":True,"guarded_writes":True,"instruction_budget_per_case":4096}
+        report={"schema":2,"source":"bounded-installed-sim1-generator-admission","sha256":SHA256,"file_version":"10.0.62615.0","cases":cases,
+            "scope":"pre-load admission only; synthetic RPM fraction/failure query; auxiliary source fixed zero; named RPM mapping exercised separately by --engine-signal; generation current and loaded voltage unverified",
+            "game_launched":False,"rpm_mapping_exercised":False,"guarded_instruction_ranges":True,"guarded_writes":True,"instruction_budget_per_case":4096}
         (args.output/"report.json").write_text(json.dumps(report,indent=2)+"\n",encoding="utf-8")
-        print("PASS: 87 original generator-admission cases; strict signal > 0.1, source/switch/failure gates and prior-online transitions; physical signal mapping remains unresolved")
+        print("PASS: 87 original generator-admission cases; strict RPM fraction > 0.1, source/switch/failure gates and prior-online transitions; named mapping checked separately by --engine-signal")
         return
     # Broader matrix detects engine-count/type branch dependence. Runtime port
     # currently resolves only the single-piston profile, not these other engines.

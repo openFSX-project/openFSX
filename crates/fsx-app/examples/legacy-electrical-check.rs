@@ -317,12 +317,16 @@ fn main() -> Result<(), String> {
         "Distribution survived reset",
     )?;
     let mut flight_switch_cases = Vec::new();
-    for path in ["lessons/student/Lesson 1.FLT", "flights/other/FLTSIM.FLT"] {
+    for (path, expected_fraction) in [
+        ("lessons/student/Lesson 1.FLT", 0.8870350550460396),
+        ("flights/other/FLTSIM.FLT", 0.795762346073706),
+    ] {
         let switches = FlightElectrical::load(&root.join(path), true)?;
         ensure(
             switches.battery == Some(true)
                 && switches.avionics == Some(true)
                 && switches.generators[0] == Some(true)
+                && switches.engine_rpm_fraction[0] == Some(expected_fraction)
                 && switches.requests().get("pitot_heat") == Some(&false),
             "Installed FLT switch profile mismatch",
         )?;
@@ -348,8 +352,23 @@ fn main() -> Result<(), String> {
                 == Some(false),
             "FLT pitot request was not applied",
         )?;
-        flight_switch_cases.push(json!({"file":path,"scope":"switch positions only; no aircraft/flight restoration",
-            "battery":switches.battery,"avionics":switches.avionics,"generators":switches.generators,"requests":switches.requests(),"snapshot":serialize(&snapshot)?}));
+        ensure(
+            simulation
+                .electrical
+                .update_generator_from_saved_flt(None, Some(false))?
+                .is_none(),
+            "Saved RPM invented a source-enable input",
+        )?;
+        let saved_admitted = simulation
+            .electrical
+            .update_generator_from_saved_flt(Some(true), Some(false))?;
+        ensure(
+            saved_admitted == Some(true) && simulation.electrical.bus_voltage(Bus::Main)?.is_none(),
+            "Saved FLT RPM admission mismatch or invented loaded bus voltage",
+        )?;
+        flight_switch_cases.push(json!({"file":path,"scope":"switch positions and saved RPM only; no aircraft/flight restoration",
+            "battery":switches.battery,"avionics":switches.avionics,"generators":switches.generators,"engine_rpm_fraction":switches.engine_rpm_fraction,"requests":switches.requests(),"snapshot":serialize(&snapshot)?,
+            "saved_state_admitted":saved_admitted,"explicit_source_enabled_input":true,"explicit_failed_input":false,"loaded_bus_voltage":null}));
     }
     let mut admission_cases = Vec::new();
     for (name, enabled, signal, failed, expected) in [
@@ -385,7 +404,7 @@ fn main() -> Result<(), String> {
             online == expected && simulation.electrical.bus_voltage(Bus::Main)?.is_none(),
             "Versioned admission fabricated online state or loaded bus voltage",
         )?;
-        admission_cases.push(json!({"case":name,"source_enabled":enabled,"engine_signal":signal,"failed":failed,"stored_generator_switch":simulation.electrical.switches().generators[0],"online":online,"loaded_main_bus_voltage":null}));
+        admission_cases.push(json!({"case":name,"source_enabled":enabled,"rpm_fraction":signal,"failed":failed,"stored_generator_switch":simulation.electrical.switches().generators[0],"online":online,"loaded_main_bus_voltage":null}));
     }
     simulation
         .electrical
@@ -423,7 +442,7 @@ fn main() -> Result<(), String> {
         timed.electrical.battery.charge_fraction().is_none(),
         "Lost terminal-current knowledge retained a charge estimate",
     )?;
-    let report = json!({"schema":6,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
+    let report = json!({"schema":7,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
         "effective_source_ratings":{"profile":"FsxSteam62615SinglePiston","max_battery_voltage":effective_sources.max_battery_voltage,"generator_voltage":effective_sources.generator_voltage,"max_generator_amps":effective_sources.max_generator_amps,
             "reference":"bounded original scalar initialization; not live generation or measured bus voltage","capacity_and_charge_limit_resolved":false},
         "battery_max_capacity_amph":configuration.battery_max_capacity_amph,"battery_charging_current":configuration.battery_charging_current,
@@ -432,7 +451,7 @@ fn main() -> Result<(), String> {
         "synthetic_source_primitives":synthetic_sources,"synthetic_distribution_cases":distribution_cases,
         "distribution_inputs":"complete synthetic graph and independent constant-current requests; not installed C172 wiring or automatic CFG consumer activation",
         "installed_flight_switches":flight_switch_cases,"synthetic_simulation_time_battery":{"capacity_amph":40,"current_request_amps":36,"elapsed_seconds":1,"charge_fraction":timed_fraction,"unknown_request_clears_charge":true,"bus_voltage":null},
-        "explicit_generator_admission_cases":admission_cases,"engine_signal_physical_mapping_verified":false,
+        "explicit_generator_admission_cases":admission_cases,"rpm_fraction_physical_mapping_verified":true,
         "installed_source_generation":false,"installed_battery_dynamics":false,"sdk_omitted_circuit_defaults_resolved":false,"total_aircraft_current":false,"fsx_parity_verified":false});
     fs::create_dir(&output).map_err(|e| e.to_string())?;
     fs::write(

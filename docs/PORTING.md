@@ -5,6 +5,48 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 23 October 2026
 
+After `82d69b8`, the generator admission signal is now identified as engine RPM
+divided by piston_engine max_rated_rpm. Thirty bounded original traces connect
+the named CFG lookup destination, original rated-RPM copy and signed engine RPM
+reconstruction to the original FLT save routine and its Pct Engine RPM descriptor.
+The same runtime fraction feeds original generator admission. Cases cover three
+rated speeds, zero/boundary/nextafter/running/overspeed fractions and both rotation
+directions. Numeric CFG lookup is injected; the original reconstruction and FLT
+save instructions run in guarded emulation. Engine dynamics are not substituted.
+
+LegacyGeneratorInputs now names rpm_fraction explicitly: 1 means rated RPM,
+0.1 means ten percent and admission is strictly above that boundary. Raw RPM,
+throttle and values expressed as percent in 0..100 are not equivalent inputs.
+FLT reading retains four optional finite Pct Engine RPM fractions, preserving
+overspeed and signed rotation. Missing data remain unknown. The explicit
+update_generator_from_saved_flt API combines the saved first-engine RPM fraction
+and generator switch with independent source-enable/failure inputs. It is a
+point-in-time initialization/probe operation, not a continuous engine provider.
+
+Installed Lesson 1 and FLTSIM snapshots provide their actual stored fractions
+(about 0.887 and 0.796). The checker verifies exact parsing without percent
+rescaling, demonstrates admission only under explicitly supplied enabled/no-fault
+conditions, and asserts that loaded bus voltage stays unknown. Unit checks cover
+signed/overspeed/missing/nonfinite values, unknown independent gates and the
+saved-fraction boundary. Ordinary physics does not reuse a saved RPM snapshot as
+live engine state and does not infer RPM from the throttle/power model.
+
+Next is a live engine RPM provider and original source-current/battery dynamics,
+followed by loaded bus state and live OAT/V. Full engine simulation, scenario
+restoration and FSX 1:1 parity remain unfinished; live original-FSX capture stays
+deferred by the user.
+
+202 all-feature Rust test executions pass in
+`target/generator-rpm-workspace-tests-01.log`. Named original mapping evidence is
+in `target/generator-rpm-trace-reference-01/report.json` (30 cases); preceding
+admission/scalar modes pass in `target/generator-rpm-admission-regression-02/`
+(87 cases) and `target/generator-rpm-scalar-regression-01/` (23 cases). Installed
+C172/FLT and explicit snapshot runtime checks pass in
+`target/generator-rpm-runtime-check-01/report.json`. Formatting, architecture and
+generated documentation checks pass.
+
+### Previous generator-admission stage — 23 October 2026
+
 After `d99b762`, bounded reference execution now covers original pre-load
 generator admission in sim1 10.0.62615.0. The additional mode runs 87 cases:
 source-enable mask, switch, failure and battery-master combinations, the exact
