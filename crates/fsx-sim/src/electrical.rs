@@ -156,6 +156,54 @@ impl CircuitNetwork {
             dt,
         )
     }
+    /// Explicit known-input frame path. Mode/override provenance, complete load,
+    /// response factor, circuit presence and surrounding bus inputs must come
+    /// from providers. No ordinary physics call selects these values implicitly.
+    pub fn step_legacy_electrical_frame(
+        &mut self,
+        dt: f64,
+        load_amps: Option<f64>,
+        response_factor: Option<f32>,
+        tail: Option<crate::legacy_voltage::TailEnvironment>,
+    ) -> Result<Option<crate::legacy_voltage::FrameStep>, String> {
+        if self.source_defaults != SourceDefaults::FsxSteam62615SinglePiston {
+            return Err("Electrical frame requires the versioned single-piston profile".into());
+        }
+        let feed = self.generator.feed(Bus::Generator(1))?;
+        let mut config = self.source_configuration();
+        config.generator_voltage = feed.voltage;
+        config.max_generator_amps = feed.capacity_amps;
+        let mut staged = self.voltage_core.clone();
+        let output = staged.advance_frame(
+            &config,
+            crate::legacy_voltage::Inputs {
+                generator_online: feed.online,
+                battery_master: self.switches.battery,
+                load_amps,
+                response_factor,
+            },
+            tail,
+            dt,
+        )?;
+        let voltages = if let Some(frame) = output {
+            if frame
+                .tail
+                .bus_voltage
+                .iter()
+                .any(|v| !(0. ..=1000.).contains(v))
+            {
+                return Err("Computed electrical frame is outside observed bus envelope".into());
+            }
+            frame.tail.bus_voltage.map(Some)
+        } else {
+            [None; 8]
+        };
+        self.voltage_core = staged;
+        self.voltage = voltages;
+        self.battery_current_request = None;
+        self.last_battery_flow = None;
+        Ok(output)
+    }
     pub fn switches(&self) -> &FlightElectrical {
         &self.switches
     }
@@ -304,13 +352,16 @@ impl CircuitNetwork {
         }
         let mut circuits = Vec::new();
         let mut authored_bus_demand_amps = [Some(0.); 8];
+        let voltage_checks_disabled = self.configuration.max_battery_voltage == Some(0.);
         for (name, circuit) in &self.configuration.circuits {
             let index = circuit.bus.index()?;
             let voltage = self.voltage[index];
             let requested = self.requests.get(name).copied();
-            let powered = if requested == Some(false)
-                || voltage.is_some_and(|v| v == 0. || v < circuit.min_voltage)
-            {
+            let powered = if requested == Some(false) {
+                Some(false)
+            } else if voltage_checks_disabled {
+                requested
+            } else if voltage.is_some_and(|v| v <= circuit.min_voltage) {
                 Some(false)
             } else if requested == Some(true) && voltage.is_some() {
                 Some(true)
@@ -380,6 +431,9 @@ mod tests {
         );
         n.request("light_nav", Some(false)).unwrap();
         n.set_bus_voltage(Bus::Main, Some(17.)).unwrap();
+        assert_eq!(n.snapshot().unwrap().authored_bus_demand_amps[0], Some(0.));
+        n.set_bus_voltage(Bus::Main, Some(f64::from_bits(17f64.to_bits() + 1)))
+            .unwrap();
         assert_eq!(n.snapshot().unwrap().authored_bus_demand_amps[0], Some(2.));
         n.request("light_nav", Some(true)).unwrap();
         assert_eq!(n.snapshot().unwrap().authored_bus_demand_amps[0], Some(7.));
@@ -699,5 +753,88 @@ mod tests {
         assert_eq!(n.legacy_voltage_state(), None);
         let mut unresolved = CircuitNetwork::new(Electrical::default()).unwrap();
         assert!(unresolved.seed_legacy_voltage_state(None).is_err());
+    }
+    #[test]
+    fn complete_known_frame_publishes_tail_outputs_and_missing_context_clears_stale_buses() {
+        let mut n = CircuitNetwork::new_with_source_defaults(
+            Electrical::default(),
+            SourceDefaults::FsxSteam62615SinglePiston,
+        )
+        .unwrap();
+        let mut saved = FlightElectrical::default();
+        saved.battery = Some(true);
+        saved.generators[0] = Some(true);
+        saved.engine_rpm_fraction[0] = Some(0.9);
+        n.apply_switches(&saved);
+        n.update_generator_from_saved_flt(Some(true), Some(false))
+            .unwrap();
+        n.seed_legacy_voltage_state(Some(crate::legacy_voltage::State {
+            battery_voltage: 22.,
+            filtered_net_amps: 0.,
+            generator_amps: 0.,
+        }))
+        .unwrap();
+        let tail = crate::legacy_voltage::TailEnvironment {
+            incoming_bus_voltage: [0.; 8],
+            incoming_generator_amps: [0.; 4],
+            battery_failed: false,
+            avionics_master: true,
+            voltage_mode: true,
+            override_power: false,
+            avionics_circuit: Some(crate::legacy_power::Circuit {
+                bus: 0,
+                min_voltage: 17.,
+                forced_off: false,
+            }),
+            navcom1_circuit: None,
+        };
+        n.step_legacy_electrical_frame(1. / 120., Some(12.), Some(1.), Some(tail))
+            .unwrap();
+        assert_eq!(n.bus_voltage(Bus::Main).unwrap(), Some(28.));
+        assert_eq!(n.bus_voltage(Bus::Avionics).unwrap(), Some(28.));
+        let state = n.legacy_voltage_state();
+        assert!(n
+            .step_legacy_electrical_frame(0., Some(12.), Some(1.), Some(tail))
+            .is_err());
+        assert_eq!(n.legacy_voltage_state(), state);
+        n.step_legacy_electrical_frame(
+            1. / 120.,
+            Some(12.),
+            Some(1.),
+            Some(crate::legacy_voltage::TailEnvironment {
+                battery_failed: true,
+                ..tail
+            }),
+        )
+        .unwrap();
+        assert_eq!(n.bus_voltage(Bus::Main).unwrap(), Some(0.));
+        assert_eq!(
+            n.step_legacy_electrical_frame(1. / 120., Some(12.), Some(1.), None)
+                .unwrap(),
+            None
+        );
+        assert_eq!(n.bus_voltage(Bus::Main).unwrap(), None);
+    }
+    #[test]
+    fn authored_zero_battery_rating_bypasses_voltage_checks_but_not_unknown_device_requests() {
+        let mut cfg = Electrical {
+            max_battery_voltage: Some(0.),
+            ..Default::default()
+        };
+        cfg.circuits.insert(
+            "pitot_heat".into(),
+            Circuit {
+                bus: Bus::Main,
+                max_amps: 2.,
+                min_voltage: 17.,
+            },
+        );
+        let mut n = CircuitNetwork::new(cfg).unwrap();
+        assert_eq!(n.snapshot().unwrap().circuits[0].powered, None);
+        n.request("pitot_heat", Some(true)).unwrap();
+        n.set_bus_voltage(Bus::Main, Some(0.)).unwrap();
+        assert_eq!(n.snapshot().unwrap().circuits[0].powered, Some(true));
+        n.request("pitot_heat", Some(false)).unwrap();
+        assert_eq!(n.snapshot().unwrap().circuits[0].powered, Some(false));
     }
 }

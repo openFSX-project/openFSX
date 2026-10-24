@@ -83,7 +83,8 @@ fn main() -> Result<(), String> {
     simulation.electrical.request("light_nav", Some(true))?;
     for (name, voltage, expected) in [
         ("below_minimum", 16.99, 0.),
-        ("at_minimum", 17., 7.),
+        ("at_minimum", 17., 0.),
+        ("above_minimum", f64::from_bits(17f64.to_bits() + 1), 7.),
         ("inspection_28v", 28., 7.),
         ("deenergized", 0., 0.),
     ] {
@@ -474,7 +475,70 @@ fn main() -> Result<(), String> {
         timed.electrical.battery.charge_fraction().is_none(),
         "Lost terminal-current knowledge retained a charge estimate",
     )?;
-    let report = json!({"schema":8,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
+    let mut frame_fixture = simulation.electrical.clone();
+    let saved = FlightElectrical::load(&root.join("lessons/student/Lesson 1.FLT"), true)?;
+    frame_fixture.apply_switches(&saved);
+    frame_fixture.update_generator_from_saved_flt(Some(true), Some(false))?;
+    frame_fixture.seed_legacy_voltage_state(Some(fsx_sim::legacy_voltage::State {
+        battery_voltage: 22.,
+        filtered_net_amps: 0.,
+        generator_amps: 0.,
+    }))?;
+    let authored_avionics = &configuration.circuits["avionics_bus"];
+    let tail = fsx_sim::legacy_voltage::TailEnvironment {
+        incoming_bus_voltage: [0.; 8],
+        incoming_generator_amps: [0.; 4],
+        battery_failed: false,
+        avionics_master: true,
+        voltage_mode: true,
+        override_power: false,
+        avionics_circuit: Some(fsx_sim::legacy_power::Circuit {
+            bus: authored_avionics.bus.index()? as u32,
+            min_voltage: authored_avionics.min_voltage,
+            forced_off: false,
+        }),
+        navcom1_circuit: Some(fsx_sim::legacy_power::Circuit {
+            bus: 1,
+            min_voltage: 17.,
+            forced_off: false,
+        }),
+    };
+    let healthy = frame_fixture
+        .step_legacy_electrical_frame(1. / 120., Some(12.), Some(1.), Some(tail))?
+        .ok_or("Unknown explicit frame fixture")?;
+    ensure(
+        frame_fixture.bus_voltage(Bus::Main)? == Some(28.)
+            && frame_fixture.bus_voltage(Bus::Avionics)? == Some(28.)
+            && healthy.tail.navcom1_active,
+        "Known frame fixture did not publish calculated buses",
+    )?;
+    let failed = frame_fixture
+        .step_legacy_electrical_frame(
+            1. / 120.,
+            Some(12.),
+            Some(1.),
+            Some(fsx_sim::legacy_voltage::TailEnvironment {
+                battery_failed: true,
+                ..tail
+            }),
+        )?
+        .ok_or("Unknown failed frame fixture")?;
+    ensure(
+        failed.tail.bus_voltage == [0.; 8]
+            && failed.state.generator_amps == 0.
+            && failed.state.battery_voltage == failed.prefix.state.battery_voltage,
+        "Failure tail lost state or retained stale source current",
+    )?;
+    ensure(
+        frame_fixture
+            .step_legacy_electrical_frame(1. / 120., Some(12.), Some(1.), None)?
+            .is_none()
+            && frame_fixture.bus_voltage(Bus::Main)?.is_none(),
+        "Missing frame context retained stale published voltage",
+    )?;
+    let controlled_frame = json!({"scope":"explicit seed/load/response/mode/failure/bus observations and synthetic NAVCOM presence; not default flight providers",
+        "healthy_main_voltage":healthy.tail.bus_voltage[0],"healthy_avionics_voltage":healthy.tail.bus_voltage[1],"failed_bus_voltage":failed.tail.bus_voltage,"failure_preserves_battery_state":true,"unknown_context_clears_bus_observation":true});
+    let report = json!({"schema":9,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
         "effective_source_ratings":{"profile":"FsxSteam62615SinglePiston","max_battery_voltage":effective_sources.max_battery_voltage,"generator_voltage":effective_sources.generator_voltage,"max_generator_amps":effective_sources.max_generator_amps,
             "reference":"bounded original scalar initialization; not live generation or measured bus voltage","capacity_and_charge_limit_resolved":false},
         "battery_max_capacity_amph":configuration.battery_max_capacity_amph,"battery_charging_current":configuration.battery_charging_current,
@@ -485,6 +549,7 @@ fn main() -> Result<(), String> {
         "installed_flight_switches":flight_switch_cases,"synthetic_simulation_time_battery":{"capacity_amph":40,"current_request_amps":36,"elapsed_seconds":1,"charge_fraction":timed_fraction,"unknown_request_clears_charge":true,"bus_voltage":null},
         "explicit_generator_admission_cases":admission_cases,"rpm_fraction_physical_mapping_verified":true,
         "explicit_generator_current_cases":current_cases,
+        "known_input_frame_fixture":controlled_frame,
         "installed_source_generation":false,"installed_battery_dynamics":false,"sdk_omitted_circuit_defaults_resolved":false,"total_aircraft_current":false,"fsx_parity_verified":false});
     fs::create_dir(&output).map_err(|e| e.to_string())?;
     fs::write(

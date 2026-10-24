@@ -37,11 +37,97 @@ pub struct Step {
     pub pre_load_battery_voltage: f64,
     pub pre_load_hot_battery_voltage: f64,
 }
+/// Known tail context and surrounding bus observations. None circuit entries
+/// mean explicitly absent equipment; unresolved presence needs no frame call.
+#[derive(Debug, Clone, Copy)]
+pub struct TailEnvironment {
+    pub incoming_bus_voltage: [f64; 8],
+    pub incoming_generator_amps: [f64; 4],
+    pub battery_failed: bool,
+    pub avionics_master: bool,
+    pub voltage_mode: bool,
+    pub override_power: bool,
+    pub avionics_circuit: Option<crate::legacy_power::Circuit>,
+    pub navcom1_circuit: Option<crate::legacy_power::Circuit>,
+}
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameStep {
+    pub prefix: Step,
+    pub tail: crate::legacy_power::TailStep,
+    pub state: State,
+}
 #[derive(Debug, Clone, Default)]
 pub struct Core {
     state: Option<State>,
 }
 impl Core {
+    /// Compose the checked prefix and tail atomically for known providers. A
+    /// failure clears the stored allocated current before the next prefix sum.
+    pub fn advance_frame(
+        &mut self,
+        config: &Electrical,
+        input: Inputs,
+        tail: Option<TailEnvironment>,
+        dt: f64,
+    ) -> Result<Option<FrameStep>, String> {
+        if tail.is_some_and(|t| {
+            t.incoming_bus_voltage
+                .iter()
+                .chain(t.incoming_generator_amps.iter())
+                .any(|v| !v.is_finite())
+                || !crate::legacy_power::valid_circuit(t.avionics_circuit)
+                || !crate::legacy_power::valid_circuit(t.navcom1_circuit)
+        }) {
+            return Err("Invalid legacy frame-tail environment".into());
+        }
+        let mut staged = self.clone();
+        let prefix = staged.advance(config, input, dt)?;
+        let (Some(prefix), Some(tail)) = (prefix, tail) else {
+            self.state = None;
+            return Ok(None);
+        };
+        let mut buses = tail.incoming_bus_voltage;
+        buses[0] = prefix.pre_load_main_voltage;
+        buses[2] = prefix.pre_load_battery_voltage;
+        buses[3] = prefix.pre_load_hot_battery_voltage;
+        let nominal = config
+            .generator_voltage
+            .ok_or("Missing checked generator rating")?;
+        buses[4] = if input.generator_online == Some(true) && nominal > 0. {
+            nominal
+        } else {
+            0.
+        };
+        let mut amps = tail.incoming_generator_amps;
+        amps[0] = prefix.state.generator_amps;
+        let tail = crate::legacy_power::finish(crate::legacy_power::TailInput {
+            context: crate::legacy_power::Context {
+                voltage_mode: tail.voltage_mode,
+                battery_master: input
+                    .battery_master
+                    .ok_or("Missing checked master position")?,
+                max_battery_voltage: config
+                    .max_battery_voltage
+                    .ok_or("Missing checked battery rating")?,
+                override_power: tail.override_power,
+            },
+            bus_voltage: buses,
+            generator_amps: amps,
+            source_sum_amps: prefix.source_sum_used_amps,
+            battery_failed: tail.battery_failed,
+            avionics_master: tail.avionics_master,
+            avionics_circuit: tail.avionics_circuit,
+            navcom1_circuit: tail.navcom1_circuit,
+        })?;
+        let mut state = prefix.state;
+        state.generator_amps = tail.generator_amps[0];
+        self.state = Some(state);
+        Ok(Some(FrameStep {
+            prefix,
+            tail,
+            state,
+        }))
+    }
     pub fn state(&self) -> Option<State> {
         self.state
     }
@@ -267,5 +353,66 @@ mod tests {
         zero.max_battery_voltage = Some(0.);
         assert!(c.advance(&zero, input(), 1. / 120.).is_err());
         assert_eq!(c.state(), Some(s.state));
+    }
+    #[test]
+    fn failure_tail_updates_next_prefix_current_and_invalid_tail_is_atomic() {
+        let mut core = Core::default();
+        core.seed(Some(seed())).unwrap();
+        let circuit = crate::legacy_power::Circuit {
+            bus: 0,
+            min_voltage: 17.,
+            forced_off: false,
+        };
+        let tail = TailEnvironment {
+            incoming_bus_voltage: [0.; 8],
+            incoming_generator_amps: [0.; 4],
+            battery_failed: true,
+            avionics_master: true,
+            voltage_mode: true,
+            override_power: false,
+            avionics_circuit: Some(circuit),
+            navcom1_circuit: Some(crate::legacy_power::Circuit { bus: 1, ..circuit }),
+        };
+        let first = core
+            .advance_frame(&config(), input(), Some(tail), 1. / 120.)
+            .unwrap()
+            .unwrap();
+        assert!(first.prefix.state.generator_amps > 14.);
+        assert_eq!(first.state.generator_amps, 0.);
+        assert_eq!(first.tail.bus_voltage, [0.; 8]);
+        let saved = core.state();
+        let mut invalid = tail;
+        invalid.incoming_generator_amps[2] = f64::NAN;
+        assert!(core
+            .advance_frame(&config(), input(), Some(invalid), 1. / 120.)
+            .is_err());
+        assert_eq!(core.state(), saved);
+        assert!(core
+            .advance_frame(
+                &config(),
+                Inputs {
+                    response_factor: None,
+                    ..input()
+                },
+                Some(invalid),
+                1. / 120.
+            )
+            .is_err());
+        assert_eq!(core.state(), saved);
+        let next = core
+            .advance_frame(
+                &config(),
+                input(),
+                Some(TailEnvironment {
+                    battery_failed: false,
+                    ..tail
+                }),
+                1. / 120.,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.prefix.source_sum_used_amps, 0.);
+        assert_eq!(next.tail.bus_voltage[1], 28.);
+        assert!(next.tail.navcom1_active);
     }
 }

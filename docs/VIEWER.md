@@ -866,6 +866,23 @@ error is about 1.42e-14 (tolerance 1e-9). The prefix stops before battery-failur
 and avionics processing. Its response factor and initial state are explicit
 inputs; the factor's physical source is still unverified. Network core APIs do
 not run automatically in flight or publish these pre-load values as loaded buses.
+Original circuit/tail and complete controlled-frame checks are available as:
+
+```powershell
+python scripts/check-electrical-tail.py FSX/sim1.dll target/power-tail-reference
+cargo run -p fsx-app --example legacy-power-tail-check --locked -- target/power-tail-reference/report.json target/power-tail-comparison
+```
+
+1280 predicates / 165 tails match exactly; 68 complete controlled frames match
+within 1e-9 (maximum error about 3.55e-15). The checks correct an earlier boundary:
+a 17 V-minimum consumer requires strictly more than 17 V. They also preserve the
+zero-rating bypass and context fallback. These active flags can be true with zero
+voltage and are distinct from physical supply.
+The installed checker uses labeled known inputs to publish 28 V main/avionics,
+then zero on battery failure and None when context is lost. This explicit frame
+API does not yet run automatically in flight; response factor, context/override,
+seed, live RPM and complete load providers remain unresolved. Its injected NAVCOM
+presence is not expansion of omitted C172 CFG defaults.
 Actual engine/load providers, C172 topology and remaining legacy defaults still
 need implementation before live OAT/V binding. FLT loading is an explicit API and
 checker path; it does not yet restore a flight into the viewer.

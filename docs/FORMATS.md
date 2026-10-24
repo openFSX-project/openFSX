@@ -864,9 +864,13 @@ Simulation owns a CircuitNetwork initialized from that schema. All bus readings
 and requested device states start unavailable. Callers may explicitly supply a
 finite observation or clear it with None; known 0 V denotes a deenergized bus.
 Device requests are case-insensitive and must name an authored circuit. A device
-is off when not requested or when a known bus is zero/below its threshold. With a
-known sufficient bus and a true request it is powered; otherwise the result is
-unknown. Exactly-at-minimum is included in this initial bus-fed profile. A
+is off when not requested or when a known bus is at/below its threshold. With a
+known strictly sufficient bus and a true request it is powered; otherwise the
+result is unknown. Original predicate checks corrected the earlier inclusive
+minimum assumption: equality is off. An explicit zero maximum battery rating
+bypasses voltage checks in this regular inspection profile; unknown requests stay
+unknown, known true/false requests remain true/false even at zero observed volts.
+This is legacy availability, not measured energy delivery. A
 requested powered consumer contributes its authored maximum amps; an off consumer
 contributes zero; unavailable positive-load demand propagates None to the sum.
 Zero authored maximum contributes known zero even when its state is unavailable.
@@ -1205,3 +1209,62 @@ Simulation.step does not invoke this provider-dependent prefix automatically.
 Results are not published to the observed bus array or used as charge fraction.
 Tail failure/avionics behavior, factor provenance, actual initial/live inputs and
 loaded-bus integration remain unfinished.
+
+
+## Original circuit predicate and electrical frame tail
+
+```powershell
+python scripts/check-electrical-tail.py FSX/sim1.dll target/power-tail-reference
+cargo run -p fsx-app --example legacy-power-tail-check --locked -- target/power-tail-reference/report.json target/power-tail-comparison
+```
+
+Use new output directories. This reference pins the same sim1 fingerprint and
+executes original predicate, bus lookup and frame-tail code with guarded CPU
+instruction/write ranges and a 4096-instruction budget per call. Raw context flag,
+mode-service return, battery-failure response and AVIONICS MASTER SWITCH query
+(ID/name/ABI checked) are injected. The mode/override live origins are unresolved;
+this does not map them to CFG electric_always_available or assume a flight mode.
+
+1280 predicates and 165 tails compare exactly to the Rust implementation. In
+voltage mode, absent circuit metadata returns false; invalid bus mapping returns
+true early (the normal CFG parser still rejects invalid bus codes). Otherwise
+availability is true for the global override, zero maximum battery voltage, or
+bus voltage strictly greater than minimum with no forced-off flag. Equality is
+false. Outside voltage mode the original returns battery-master position before
+checking circuit presence, bus, rating or override. Rust legacy_power::Context
+selects this resolved mode explicitly; Option<Circuit> None means known absence,
+not unresolved presence. All supplied numeric values must be finite.
+
+Battery failure clears all eight buses, four generator current slots and source
+sum. It does not clear stored battery voltage or filtered net current. The tail
+then evaluates avionics circuit availability, applies avionics master and copies
+main to avionics voltage only when both allow it. Navcom1 is evaluated after that
+copy/clear. Override/fallback can set active flags even when failed buses remain
+0 V; callers must not equate these flags to nonzero voltage. Previous avionics
+voltage can matter when the configured avionics circuit points at its own bus.
+
+The same reference runs four complete controlled sequences / 68 frames through
+the original method with one generator and two declared consumers (NAVCOM and
+avionics). Their requested maxima are 12/5 A and presence is explicit. Actual load
+for each next frame is computed from prior active flags; there is no automatic
+aircraft equipment inference. Failure/avionics/mode services, float32 response
+factor and seeds are controlled. Original and composed Rust states match within
+1e-9, maximum observed absolute error about 3.55e-15. This proves these complete
+controlled method calls, not all aircraft loads, environments or live FSX parity.
+
+legacy_voltage::Core.advance_frame stages prefix and tail together. The tail's
+post-failure generator current becomes the next core sum; internal battery/filter
+state is preserved through a failure. TailEnvironment requires known surrounding
+bus/current observations, circuit presence, failure/master state and mode/override.
+Unresolved context loses frame knowledge; invalid environment fails atomically.
+The low-level prefix API remains separate and does not publish loaded buses.
+
+CircuitNetwork.step_legacy_electrical_frame explicitly selects the versioned
+single-piston path. It combines stored battery-master/source availability with
+provider-supplied load/response and tail environment, validates resulting buses
+in 0..1000 V and publishes all eight together. Failure produces known zeros;
+missing providers clear prior observations to None. Invalid input preserves both
+state and observations. The independent Coulomb-current request/flow is cleared;
+voltage state is not converted into a charge fraction. Ordinary Simulation.step
+still does not call this path, choose factor 1, infer mode/override, manufacture
+initial voltage, reuse FLT RPM indefinitely or resolve omitted equipment defaults.

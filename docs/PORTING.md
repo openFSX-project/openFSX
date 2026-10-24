@@ -3,7 +3,61 @@
 The target remains FSX 1:1 across interface, flight behavior, content and APIs.
 This is a long-term acceptance target; no subsystem claims complete parity.
 
-## Current stage — 23 October 2026
+## Current stage — 24 October 2026
+
+After `a162101`, original circuit availability and the battery-failure/avionics
+tail are ported and checked. 1280 original predicates cover exact/nextafter voltage
+thresholds, absent equipment, invalid bus mapping, forced-off, zero maximum battery
+voltage, global override and context fallback. 165 original tails cover failure
+clearing, avionics-master control, sequential navcom checks and unusual prior-bus
+inputs. Rust matches every tested predicate and tail output exactly.
+
+This exposed and corrected the earlier regular inspection threshold: voltage must
+be strictly above the declared minimum, not equal. At 17 V the C172 17 V consumers
+are off; nextafter(17,+infinity) admits the requested 7 A pitot/nav maxima. An
+explicit zero maximum battery rating disables regular voltage checks; device
+requests still govern the inspection subset. The separate raw predicate also
+preserves original early fallback/bypass ordering. The global override's origin
+and context mode's live mapping remain unverified; they are explicit inputs.
+
+A battery failure clears all eight bus voltages, four generator-current slots and
+reported source sum, while retaining stored battery voltage and filtered current.
+Avionics availability is then evaluated, its bus copies main voltage only when
+master and availability permit, and navcom1 is checked against the updated bus.
+Availability flags can remain true at zero voltage under bypass/fallback; they
+are not a claim of physical energy delivery.
+
+The full original electrical method also runs in four controlled sequences / 68
+frames with one generator and two explicit consumers. Load is summed from prior
+consumer flags, then prefix and tail execute in original order. Toggle, failure/
+recovery, exact threshold and empty-battery override cases match Rust within
+1e-9 (maximum observed error about 3.55e-15). This does not infer actual aircraft
+equipment presence, source/response/mode providers or all 33 consumers.
+
+Core.advance_frame composes both phases atomically and stores post-failure source
+current for the next step. Network.step_legacy_electrical_frame requires the
+versioned profile and complete explicit inputs, publishes validated final bus
+values, and clears stale observations when providers are unavailable. Invalid
+input leaves state and observed buses intact. The installed C172 checker proves
+known-input 28 V main/avionics publication, failure-to-zero and loss-to-unknown
+using labeled synthetic seed/load/response/context/NAVCOM data. Ordinary physics
+still does not select those inputs or run this path automatically.
+
+Next is confirming response-factor, context/override and initial-state providers,
+live engine RPM and complete equipment load activity, followed by automatic flight
+and secondary OAT/V binding. Full FSX 1:1 remains unfinished; user-deferred live
+original-FSX acquisition has not been attempted.
+
+213 all-feature Rust test executions pass in
+`target/legacy-power-tail-workspace-tests-02.log`. Original predicate/tail/frame
+evidence is in `target/legacy-power-tail-reference-03/report.json`; comparison
+passes in `target/legacy-power-tail-comparison-03/`. Installed C172 and explicit
+frame publication checks pass in `target/legacy-power-tail-installed-check-02/`.
+Native clock/buttons/picking/GPU/121-frame flight/pause/reset/view/ground regression
+passes in `target/legacy-power-tail-flight-regression-01.log`. Formatting,
+architecture and generated documentation checks pass.
+
+### Previous voltage-core stage — 23 October 2026
 
 After `a89f7ae`, original electrical frame ordering is checked through battery
 voltage storage, before the battery-failure and avionics tail. Nine bounded
