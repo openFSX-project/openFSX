@@ -1,7 +1,7 @@
 """Pinned original circuit predicate and frame-tail checks in x86 emulation.
 No FSX process or Windows DLL loading. Requires pefile and unicorn.
-Context-mode, failure and avionics services are explicitly injected; their live
-provider mappings and the global override's origin are not established here.
+Context-mode, failure and avionics services are explicitly injected. A bounded
+CFG lookup separately checks the global override's configuration provenance.
 """
 import argparse
 import hashlib
@@ -12,7 +12,7 @@ from pathlib import Path
 import struct
 import pefile
 from unicorn import Uc,UC_ARCH_X86,UC_MODE_32,UC_HOOK_CODE,UC_HOOK_MEM_WRITE
-from unicorn.x86_const import UC_X86_REG_EAX,UC_X86_REG_ECX,UC_X86_REG_ESI,UC_X86_REG_EDI,UC_X86_REG_EBP,UC_X86_REG_ESP,UC_X86_REG_EIP,UC_X86_REG_FPCW
+from unicorn.x86_const import UC_X86_REG_EAX,UC_X86_REG_EBX,UC_X86_REG_ECX,UC_X86_REG_ESI,UC_X86_REG_EDI,UC_X86_REG_EBP,UC_X86_REG_ESP,UC_X86_REG_EIP,UC_X86_REG_FPCW
 
 SHA256='4bb9ef1b9669bb48676ef16ede667a2c590af27943eb34f03f09332a5417ae0e'
 CONTEXT,CONFIG,FAILURE,MODE,STATE,STACK,SENTINEL=0x100000,0x102000,0x104000,0x108000,0x110000,0x200000,0x220000
@@ -141,6 +141,50 @@ def frame_sequence(image,base,name,voltage,frames):
     return {'name':name,'configuration':{'max_battery_voltage':24.,'generator_voltage':28.,'max_generator_amps':60.},'initial':{'battery_voltage':voltage,'filtered_net_amps':0.,'generator_amps':0.},'avionics_circuit':av,'navcom1_circuit':nav,'avionics_max_amps':5.,'navcom1_max_amps':12.,'frames':records}
 
 
+def override_sequence(image,base,initial,authored_values):
+    """Execute the final two original boolean CFG reads, with exact ABI checks.
+    Missing lookup deliberately writes nothing, as the injected CFG contract.
+    No process-start default, engine setup or full configuration load is claimed.
+    """
+    context={'context_flag':True,'mode_query':0,'battery_master':False,'max_battery_voltage':24.,'override_power':initial}
+    m=Machine(image,base,context);v=m.vm
+    m.ranges += [(0x20B263A4,0x20B263EC)]
+    root=0x101000;m.word(root+0x46C,0)
+    current=None;calls=[]
+    def lookup(vm,address,_size,_data):
+        if address not in (0x20B263C8,0x20B263E3):return
+        sp=vm.reg_read(UC_X86_REG_ESP)
+        section,key,out,handle,flags=[m.u32(sp+i*4) for i in range(5)]
+        def string(a):return bytes(vm.mem_read(a,64)).split(b'\0')[0]
+        expected=b'alternators' if address==0x20B263C8 else b'electric_always_available'
+        expected_out=STACK+0xF000-0xC if address==0x20B263C8 else 0x20B989B8
+        if string(section)!=b'Electrical' or string(key)!=expected or (out,handle,flags)!=(expected_out,0x12345678,0x24):raise ValueError('Unexpected original boolean CFG lookup ABI')
+        before=m.u32(out)
+        if address==0x20B263E3:
+            if current is not None:m.word(out,int(current))
+            calls.append({'authored':current,'before':bool(before),'after':bool(m.u32(out))})
+        vm.reg_write(UC_X86_REG_EAX,int(current is not None));vm.reg_write(UC_X86_REG_ESP,sp+20);vm.reg_write(UC_X86_REG_EIP,address+2)
+    v.hook_add(UC_HOOK_CODE,lookup)
+    expected=initial
+    for current in authored_values:
+        fp=STACK+0xF000;m.word(fp-8,0x12345678)
+        v.mem_write(fp-0x28,b'Electrical\0')
+        # The entry is inside the original CFG initializer, after four saves.
+        for reg,value in [(UC_X86_REG_EBP,fp),(UC_X86_REG_ESP,fp-0x60),(UC_X86_REG_EDI,root),(UC_X86_REG_EBX,CONFIG),(UC_X86_REG_ESI,0x12345678)]:v.reg_write(reg,value)
+        m.word(fp,0);m.word(fp+4,SENTINEL)
+        m.execute(0x20B263A4,fp+8)
+        expected=expected if current is None else current
+        if bool(m.u32(0x20B989B8))!=expected:raise ValueError('Original missing CFG key did not retain override')
+        m.circuit(5,{'bus':0,'min_voltage':17.,'forced_off':True});m.buses([0.]*8)
+        sp=STACK+0xF000;m.word(sp,SENTINEL);m.word(sp+4,5);m.word(sp+8,CONTEXT)
+        v.reg_write(UC_X86_REG_ESP,sp);v.reg_write(UC_X86_REG_ECX,STATE)
+        m.execute(0x20B25120,sp+12)
+        available=bool(v.reg_read(UC_X86_REG_EAX))
+        if available!=expected:raise ValueError('CFG global did not control original power bypass')
+        calls[-1]['available_with_zero_voltage_and_forced_off']=available
+    return {'initial':initial,'loads':calls}
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('dll',type=Path);parser.add_argument('output',type=Path);args=parser.parse_args()
     if args.output.exists():raise ValueError('Output directory must be new')
@@ -166,11 +210,12 @@ def main():
         frame_sequence(image,base,'battery_failure_recovery',22.,[(True,True,False,False)]*6+[(True,True,True,False)]*6+[(True,True,False,False)]*8),
         frame_sequence(image,base,'strict_threshold',17.,[(False,True,False,False)]*6),
         frame_sequence(image,base,'override_with_empty_battery',0.,[(False,True,False,True)]*8)]
+    overrides=[override_sequence(image,base,initial,[None,True,None,False,None,False,True,None]) for initial in (False,True)]
     args.output.mkdir()
-    report={'schema':2,'source':'bounded-installed-sim1-power-tail','sha256':SHA256,'file_version':'10.0.62615.0','power_cases':powers,'tail_cases':tails,'frame_cases':frames,
-        'scope':'original predicate/tail and controlled one-generator/two-consumer complete frames; context/failure/avionics services and float32 response injected; no live provider provenance or equipment-presence inference','game_launched':False,'guarded_instruction_ranges':True,'guarded_writes':True,'instruction_budget_per_case':4096}
+    report={'schema':3,'source':'bounded-installed-sim1-power-tail','sha256':SHA256,'file_version':'10.0.62615.0','power_cases':powers,'tail_cases':tails,'frame_cases':frames,'override_sequences':overrides,
+        'scope':'original predicate/tail and controlled one-generator/two-consumer frames plus CFG global-override lookup/retention; context/failure/avionics/response and CFG service injected; no startup override or equipment-presence inference','game_launched':False,'guarded_instruction_ranges':True,'guarded_writes':True,'instruction_budget_per_case':4096}
     (args.output/'report.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
-    print(f'PASS: {len(powers)} original predicates, {len(tails)} tails, {sum(len(c["frames"]) for c in frames)} complete controlled frames; strict threshold, bypasses, failure/current/load lag verified')
+    print(f'PASS: {len(powers)} original predicates, {len(tails)} tails, {sum(len(c["frames"]) for c in frames)} controlled frames, {sum(len(c["loads"]) for c in overrides)} CFG override loads; strict threshold, bypasses, failure/current/load lag verified')
 
 
 if __name__=='__main__':main()

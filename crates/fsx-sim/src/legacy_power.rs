@@ -1,5 +1,27 @@
 //! Versioned finite-input circuit predicate and battery-failure/avionics tail.
-//! Context mode and override origin require providers; no live mode is inferred.
+//! Context mode requires a provider; configuration overrides retain process state.
+/// Original process-global override, updated only by a present CFG key. Keep
+/// this across aircraft loads; a new unresolved process has no assumed value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PowerOverride {
+    value: Option<bool>,
+}
+impl PowerOverride {
+    /// Supply an observed process value, or None when startup is unverified.
+    pub fn observed(value: Option<bool>) -> Self {
+        Self { value }
+    }
+    pub fn value(self) -> Option<bool> {
+        self.value
+    }
+    /// Versioned sim1 10.0.62615 configuration-load behavior. Missing keys leave
+    /// the previous process value intact, including unknown state.
+    pub fn load_configuration(&mut self, configuration: &fsx_vehicle::electrical::Electrical) {
+        if let Some(value) = configuration.always_available {
+            self.value = Some(value);
+        }
+    }
+}
 #[derive(Debug, Clone, Copy)]
 pub struct Context {
     /// Original context flag OR mode-service result == 1.

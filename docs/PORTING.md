@@ -5,6 +5,36 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 24 October 2026
 
+After `7202ab2`, the original global power override is traced to the final
+Electrical/electric_always_available CFG lookup. Two bounded sequences execute
+16 original configuration-read tails, including absent, true and false keys
+with both observed initial values. The injected CFG lookup writes only for a
+present key. The original code does not initialize this destination before the
+lookup: a missing key retains the prior process value. Each resulting global is
+then consumed by the original power predicate at zero voltage with forced-off
+equipment, proving the bypass connection. All 16 transitions match Rust exactly;
+the existing 1280 predicates, 165 tails and 68 complete controlled frames still
+pass (maximum frame error about 3.55e-15).
+
+legacy_power::PowerOverride models this versioned process state separately from
+an aircraft network. Call load_configuration with each parsed Electrical, and
+carry the object across aircraft changes. Its initial value is unknown unless
+observed; an omitted key cannot turn unknown into false. An explicit key resolves
+the value. The resolved value can supply TailEnvironment.override_power. Process
+startup, other writers, automatic viewer ownership and live context mode remain
+unverified. The regular circuit inspector still rejects its existing override
+mode; these raw bypass flags are not evidence of delivered electrical energy.
+
+Reference evidence is in target/legacy-power-override-reference-03/report.json;
+Rust comparison is in target/legacy-power-override-comparison-01/report.json.
+All-feature workspace tests pass in
+target/legacy-power-override-workspace-tests-01.log. Formatting, architecture and
+generated documentation checks pass. Next: confirm full initialization and the
+response/context providers, then real RPM, equipment activity and flight binding.
+Original-FSX live capture remains deferred; the full FSX 1:1 Goal is active.
+
+### Previous electrical-tail stage — 24 October 2026
+
 After `a162101`, original circuit availability and the battery-failure/avionics
 tail are ported and checked. 1280 original predicates cover exact/nextafter voltage
 thresholds, absent equipment, invalid bus mapping, forced-off, zero maximum battery

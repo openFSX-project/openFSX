@@ -92,7 +92,7 @@ fn main() -> Result<(), String> {
     }
     let report: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     if report["source"] != "bounded-installed-sim1-power-tail"
-        || (report["schema"] != 1 && report["schema"] != 2)
+        || !matches!(report["schema"].as_u64(), Some(1..=3))
         || report["sha256"] != "4bb9ef1b9669bb48676ef16ede667a2c590af27943eb34f03f09332a5417ae0e"
     {
         return Err("Unexpected original tail profile".into());
@@ -138,7 +138,7 @@ fn main() -> Result<(), String> {
     let mut frames_checked = 0;
     let mut frame_error = 0.;
     let mut sequences = 0;
-    if report["schema"] == 2 {
+    if matches!(report["schema"].as_u64(), Some(2..=3)) {
         let cases = report["frame_cases"]
             .as_array()
             .filter(|v| !v.is_empty() && v.len() <= 16)
@@ -248,10 +248,66 @@ fn main() -> Result<(), String> {
             }
         }
     }
+    let mut override_loads = 0;
+    if report["schema"] == 3 {
+        let sequences = report["override_sequences"]
+            .as_array()
+            .filter(|v| !v.is_empty() && v.len() <= 16)
+            .ok_or("Invalid override sequence budget")?;
+        for sequence in sequences {
+            let mut state =
+                legacy_power::PowerOverride::observed(Some(boolean(sequence, "initial")?));
+            let loads = sequence["loads"]
+                .as_array()
+                .filter(|v| !v.is_empty() && v.len() <= 100)
+                .ok_or("Invalid override load budget")?;
+            for load in loads {
+                if state.value() != Some(boolean(load, "before")?) {
+                    return Err("Original pre-load override mismatch".into());
+                }
+                let cfg = Electrical {
+                    always_available: if load["authored"].is_null() {
+                        None
+                    } else {
+                        Some(boolean(load, "authored")?)
+                    },
+                    ..Default::default()
+                };
+                state.load_configuration(&cfg);
+                if state.value() != Some(boolean(load, "after")?) {
+                    return Err("Original post-load override mismatch".into());
+                }
+                let got = legacy_power::available(
+                    Context {
+                        voltage_mode: true,
+                        battery_master: false,
+                        max_battery_voltage: 24.,
+                        override_power: state.value().ok_or("Missing loaded override")?,
+                    },
+                    Some(Circuit {
+                        bus: 0,
+                        min_voltage: 17.,
+                        forced_off: true,
+                    }),
+                    [0.; 8],
+                )?;
+                if got != boolean(load, "available_with_zero_voltage_and_forced_off")? {
+                    return Err("Loaded override bypass mismatch".into());
+                }
+                override_loads += 1;
+            }
+        }
+        // An unresolved process must stay unresolved through a missing key.
+        let mut unresolved = legacy_power::PowerOverride::default();
+        unresolved.load_configuration(&Electrical::default());
+        if unresolved.value().is_some() {
+            return Err("Invented startup override".into());
+        }
+    }
     fs::create_dir(&output).map_err(|e| e.to_string())?;
-    fs::write(output.join("report.json"),serde_json::to_vec_pretty(&json!({"schema":2,"source":"rust-original-power-tail-comparison","predicate_cases":powers.len(),"tail_cases":tails.len(),"all_tail_values_equal":true,"frame_sequences":sequences,"frames_checked":frames_checked,"frame_max_error":frame_error,"frame_tolerance":1e-9,"scope":"known finite contexts and injected services; live mode/override provenance and equipment presence remain provider inputs"})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    fs::write(output.join("report.json"),serde_json::to_vec_pretty(&json!({"schema":3,"source":"rust-original-power-tail-comparison","predicate_cases":powers.len(),"tail_cases":tails.len(),"all_tail_values_equal":true,"frame_sequences":sequences,"frames_checked":frames_checked,"frame_max_error":frame_error,"frame_tolerance":1e-9,"override_configuration_loads":override_loads,"scope":"known finite contexts, injected services and CFG override retention; startup override, live mode and equipment presence remain provider inputs"})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
     println!(
-        "PASS: {} predicates / {} tails equal; {sequences} composed sequences / {frames_checked} frames, max error {frame_error:e}",
+        "PASS: {} predicates / {} tails equal; {sequences} composed sequences / {frames_checked} frames, max error {frame_error:e}; {override_loads} override loads",
         powers.len(),tails.len()
     );
     Ok(())

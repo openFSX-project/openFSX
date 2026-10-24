@@ -880,8 +880,12 @@ zero-rating bypass and context fallback. These active flags can be true with zer
 voltage and are distinct from physical supply.
 The installed checker uses labeled known inputs to publish 28 V main/avionics,
 then zero on battery failure and None when context is lost. This explicit frame
-API does not yet run automatically in flight; response factor, context/override,
-seed, live RPM and complete load providers remain unresolved. Its injected NAVCOM
+API does not yet run automatically in flight; response factor, context mode,
+seed, live RPM and complete load providers remain unresolved. The power override
+is now traced to electric_always_available: 16 bounded CFG-load/predicate checks
+prove missing keys preserve its previous process value. PowerOverride retains
+that value across aircraft loads, with unknown startup state; viewer ownership
+is still pending. Its injected NAVCOM
 presence is not expansion of omitted C172 CFG defaults.
 Actual engine/load providers, C172 topology and remaining legacy defaults still
 need implementation before live OAT/V binding. FLT loading is an explicit API and

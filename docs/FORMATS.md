@@ -1222,8 +1222,24 @@ Use new output directories. This reference pins the same sim1 fingerprint and
 executes original predicate, bus lookup and frame-tail code with guarded CPU
 instruction/write ranges and a 4096-instruction budget per call. Raw context flag,
 mode-service return, battery-failure response and AVIONICS MASTER SWITCH query
-(ID/name/ABI checked) are injected. The mode/override live origins are unresolved;
-this does not map them to CFG electric_always_available or assume a flight mode.
+(ID/name/ABI checked) are injected. Context mode remains an explicit provider;
+no flight mode is assumed. Schema 3 additionally executes the original final
+boolean CFG reads with an injected lookup contract: present keys write the value,
+absent keys leave the destination untouched. Exact section/key/output/handle/flags
+are checked. Electrical/electric_always_available writes the same global used by
+the power predicate. No code in this bounded tail resets that global first.
+
+Two sequences / 16 loads cover both observed initial values and missing/true/false
+keys. Each load is followed by the original predicate at zero voltage with a
+forced-off circuit, verifying that the loaded global controls the bypass. Rust
+legacy_power::PowerOverride retains this process value across configuration loads;
+load_configuration consumes Electrical.always_available. Default is unknown, an
+absent key preserves unknown or the previous value, and an explicit key resolves
+it. Carry this object across aircraft changes and supply its known value to
+TailEnvironment.override_power. Do not create a new false value per aircraft or
+infer the initial process value. Startup, other writers and automatic viewer
+ownership are outside this check. The regular inspector's unsupported override
+mode is unchanged; raw availability is separate from physical supply.
 
 1280 predicates and 165 tails compare exactly to the Rust implementation. In
 voltage mode, absent circuit metadata returns false; invalid bus mapping returns
