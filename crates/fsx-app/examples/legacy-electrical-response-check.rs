@@ -20,7 +20,7 @@ fn main() -> Result<(), String> {
         return Err("Reference exceeds byte budget".into());
     }
     let report: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    if report["schema"] != 1
+    if !matches!(report["schema"].as_u64(), Some(1..=2))
         || report["source"] != "bounded-original-realism-electrical-response"
         || report["sim1_sha256"]
             != "4bb9ef1b9669bb48676ef16ede667a2c590af27943eb34f03f09332a5417ae0e"
@@ -48,19 +48,31 @@ fn main() -> Result<(), String> {
                 .as_f64()
                 .ok_or("Missing prior")? as f32,
         ))?;
-        response.copy_settings(
-            settings,
-            Some(
-                case["context_queries_active"]
-                    .as_bool()
-                    .ok_or("Missing gate")?,
-            ),
-            Some(
-                case["general_copy_active"]
-                    .as_bool()
-                    .ok_or("Missing copy gate")?,
-            ),
-        )?;
+        if report["schema"] == 2 {
+            let raw = |key: &str| -> Result<u32, String> {
+                u32::try_from(case[key].as_u64().ok_or("Missing raw context flag")?)
+                    .map_err(|e| e.to_string())
+            };
+            response.copy_concrete_context_settings(
+                settings,
+                Some(raw("context_flag_raw")?),
+                Some(raw("copy_context_flag_raw")?),
+            )?;
+        } else {
+            response.copy_settings(
+                settings,
+                Some(
+                    case["context_queries_active"]
+                        .as_bool()
+                        .ok_or("Missing gate")?,
+                ),
+                Some(
+                    case["general_copy_active"]
+                        .as_bool()
+                        .ok_or("Missing copy gate")?,
+                ),
+            )?;
+        }
         let factor = response.factor().ok_or("Unknown copied factor")?;
         if Some(factor as f64) != case["response_factor"].as_f64() {
             return Err("Original copied factor differs".into());

@@ -25,7 +25,10 @@ def run(sim,main,value,active,copy_active):
     def u32(a):return struct.unpack('<I',v.mem_read(a,4))[0]
     def f64(a):return struct.unpack('<d',v.mem_read(a,8))[0]
     def f32(a):return struct.unpack('<f',v.mem_read(a,4))[0]
-    word(obj,ctx);word(ctx,other);word(ctx+0x34,other)
+    word(obj,ctx);word(ctx,0x20AE364C);word(ctx+0x34,other)
+    word(other,0x20AE364C);word(ctx+0xB4,int(active));word(other+0xB4,int(copy_active))
+    query=struct.unpack("<I",sim.get_data(0x20AE364C+0x50-sim.OPTIONAL_HEADER.ImageBase,4))[0]
+    if query!=0x20AF6380:raise ValueError("Unexpected concrete context query")
     word(ctx+0x2D8,obj);real(settings+0x20,value);word(settings+0x2C,1)
     v.mem_write(ctx+0x38,struct.pack('<f',0.75))
     # Validate actual named settings descriptor and getter export identity.
@@ -36,11 +39,9 @@ def run(sim,main,value,active,copy_active):
     if section!=b'REALISM':raise ValueError('Unexpected settings section')
     export=next(e for e in main.DIRECTORY_ENTRY_EXPORT.symbols if e.ordinal==57)
     if main.OPTIONAL_HEADER.ImageBase+export.address!=0x209A2EC0:raise ValueError('Unexpected settings getter')
-    ranges=[(0x209A2EC0,0x209A2EC6),(0x20B1C310,0x20B1C430),(0x20B24C86,0x20B24CE8)]
+    ranges=[(0x209A2EC0,0x209A2EC6),(0x20B1C310,0x20B1C430),(0x20B24C86,0x20B24CE8),(0x20AF6380,0x20AF6387)]
     def code(vm,address,_size,_data):
         if not any(a<=address<b for a,b in ranges):raise ValueError('Response trace left instruction whitelist')
-        if address in (0x20B1C32B,0x20B1C33E):
-            vm.reg_write(UC_X86_REG_EAX,int(active if address==0x20B1C32B else copy_active));vm.reg_write(UC_X86_REG_EIP,address+3)
     def writes(_vm,_access,a,size,_value,_data):
         if not any(lo<=a and a+size<=hi for lo,hi in [(obj,obj+0x10000),(stack,stack+0x10000)]):raise ValueError('Response trace wrote outside guards')
     v.hook_add(UC_HOOK_CODE,code);v.hook_add(UC_HOOK_MEM_WRITE,writes)
@@ -63,7 +64,7 @@ def run(sim,main,value,active,copy_active):
     if v.reg_read(UC_X86_REG_EIP)!=0x20B24CE8:raise ValueError('Core fragment did not reach endpoint')
     filtered=-12.*4./120.;voltage=max(0.,22.+filtered*0.000555*expected/120.)
     if abs(f64(state+0x94)-voltage)>1e-12 or abs(f64(state+0x9C)-filtered)>1e-12:raise ValueError('Copied General did not drive voltage update')
-    return {'general':value,'context_queries_active':active,'general_copy_active':copy_active,'prior_response_factor':0.75,'response_factor':expected,'filtered_net_amps':f64(state+0x9C),'battery_voltage':f64(state+0x94)}
+    return {'general':value,'context_queries_active':bool(active),'general_copy_active':bool(copy_active),'context_flag_raw':int(active),'copy_context_flag_raw':int(copy_active),'prior_response_factor':0.75,'response_factor':expected,'filtered_net_amps':f64(state+0x9C),'battery_voltage':f64(state+0x94)}
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('root',type=Path);p.add_argument('output',type=Path);a=p.parse_args()
@@ -73,8 +74,8 @@ def main():
         data=(a.root/name).read_bytes()
         if hashlib.sha256(data).hexdigest()!=digest:raise ValueError('Unsupported '+name+' fingerprint')
         binaries.append(pefile.PE(data=data))
-    cases=[run(*binaries,x,active,copy_active) for x in (0.,0.1,0.5,1.,1.25) for active in (False,True) for copy_active in (False,True)]
-    a.output.mkdir();(a.output/'report.json').write_text(json.dumps({'schema':1,'source':'bounded-original-realism-electrical-response','sim1_sha256':SIM,'main_sha256':MAIN,'cases':cases,'scope':'named descriptor/getter, guarded context copy and core fragment with injected active queries and settings values; no settings-file parsing/default or automatic viewer provider claim'},indent=2)+'\n',encoding='utf-8')
+    cases=[run(*binaries,x,active,copy_active) for x in (0.,0.1,0.5,1.,1.25) for active in (0,1,2,0xFFFFFFFF) for copy_active in (0,1,2,0xFFFFFFFF)]
+    a.output.mkdir();(a.output/'report.json').write_text(json.dumps({'schema':2,'source':'bounded-original-realism-electrical-response','sim1_sha256':SIM,'main_sha256':MAIN,'cases':cases,'scope':'named descriptor/getter, guarded context copy and core fragment with original concrete-context queries and explicit settings/raw flags; linked context uses the same concrete vtable as an explicit fixture; no settings-file parsing/default or automatic viewer provider claim'},indent=2)+'\n',encoding='utf-8')
     print(f'PASS: {len(cases)} General settings -> float32 context -> original electrical voltage traces')
 
 if __name__=='__main__':main()

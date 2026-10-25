@@ -5,6 +5,21 @@ pub struct Response {
     factor: Option<f32>,
 }
 impl Response {
+    /// Concrete sim1 context vtable query returns its raw +0xB4 field. Both
+    /// receivers must be verified instances of this context type; the linked
+    /// receiver's live type/ownership is not inferred. Any nonzero word is true.
+    pub fn copy_concrete_context_settings(
+        &mut self,
+        settings: fsx_vehicle::realism::Realism,
+        context_flag: Option<u32>,
+        linked_context_flag: Option<u32>,
+    ) -> Result<(), String> {
+        self.copy_settings(
+            settings,
+            context_flag.map(|v| v != 0),
+            linked_context_flag.map(|v| v != 0),
+        )
+    }
     pub fn observed(factor: Option<f32>) -> Result<Self, String> {
         if factor.is_some_and(|v| !v.is_finite() || v < 0.) {
             return Err("Invalid observed electrical response".into());

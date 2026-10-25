@@ -5,6 +5,26 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 25 October 2026
 
+After `c2e1477`, the primary realism-update query is resolved through the
+original concrete context vtable: slot 0x50 returns raw context+0xB4. This is the
+same primary field already consumed by the electrical availability predicate.
+The response reference now executes that original getter instead of intercepting
+its calls. Its linked receiver at primary+0x34 is explicitly instantiated with
+the same concrete vtable for this fixture; the actual linked object's runtime
+type/ownership is not yet established.
+
+80 cases cover General 0/0.1/0.5/1/1.25 and both raw flags 0/1/2/0xFFFFFFFF.
+Every nonzero flag admits the relevant branch. The provider's new
+copy_concrete_context_settings path resolves known raw words, preserving missing
+flags as unknown, and feeds the existing voltage core. All 80 factors/filter/
+voltage results match original instructions with zero observed error in
+target/legacy-electrical-response-context-comparison-01/report.json, using
+target/legacy-electrical-response-context-reference-01/report.json. Workspace
+tests pass in target/legacy-response-context-tests-01.log. No automatic mode,
+linked-context type or flight provider is inferred. Full Goal remains active.
+
+### Previous provider-to-core stage — 25 October 2026
+
 After `a37fb0b`, the response comparison now feeds the parsed/copied factor into
 the Rust voltage core and compares both filtered current and battery voltage
 against all 20 original filter/voltage traces. Tolerance is 1e-12; observed

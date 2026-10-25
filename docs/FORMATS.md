@@ -1381,3 +1381,15 @@ as the original fragment. Both voltage and filtered current are compared at
 must invalidate evolving core knowledge; invalid provider updates are checked
 for atomic retention of the preceding factor. These are explicit-input checks,
 not evidence of automatic flight context selection.
+
+Schema 2 of the response reference executes the concrete context getter from
+its actual sim1 vtable slot 0x50: it returns raw +0xB4. The primary field is the
+same one tested directly by the original electrical availability predicate.
+The linked receiver (primary+0x34) is assigned the same concrete vtable explicitly
+in this fixture; its live runtime type and ownership remain unverified. 80 cases
+vary both raw words over 0/1/2/0xFFFFFFFF, confirming nonzero truth semantics,
+and compare the factor plus provider-driven voltage/filter output.
+Response.copy_concrete_context_settings accepts optional raw words only when
+both receiver types are established by the caller. It converts nonzero to true
+and preserves unknown inputs. This removes the injected query-result stub from
+the reference without claiming automatic context discovery or flight-mode mapping.
