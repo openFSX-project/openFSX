@@ -275,6 +275,20 @@ pub struct Simulation {
     pub ground_contact: bool,
 }
 impl Simulation {
+    /// Sum original slots 1..=33 from prior activity before this frame. Providers
+    /// own activity/presence and must carry the preceding frame's flags; this
+    /// method does not infer omitted circuits or update all equipment activity.
+    pub fn step_with_legacy_consumers(
+        &mut self,
+        controls: Controls,
+        dt: f64,
+        consumers: &[crate::legacy_consumers::Consumer; crate::legacy_consumers::SLOTS],
+        response: crate::legacy_response::Response,
+        tail: Option<crate::legacy_voltage::TailEnvironment>,
+    ) -> Result<Option<crate::legacy_voltage::FrameStep>> {
+        let load = crate::legacy_consumers::sum(consumers)?;
+        self.step_with_legacy_electrical(controls, dt, load, response, tail)
+    }
     /// Commit one provider-driven legacy electrical frame with one caller flight
     /// interval. Ground RK4 subdivision does not repeat the electrical frame.
     /// Pause is represented by making no call. Providers describe this interval;
@@ -541,13 +555,25 @@ mod tests {
                 navcom1_circuit: None,
             };
             let mut direct = s.electrical.clone();
+            let mut consumers = [crate::legacy_consumers::Consumer {
+                active: Some(0),
+                max_amps: None,
+            }; crate::legacy_consumers::SLOTS];
+            consumers[0] = crate::legacy_consumers::Consumer {
+                active: Some(1),
+                max_amps: Some(500.),
+            };
+            consumers[1] = crate::legacy_consumers::Consumer {
+                active: Some(2),
+                max_amps: Some(12.),
+            };
             for _ in 0..120 {
                 let expected = direct
                     .step_legacy_electrical_frame(STEP, Some(12.), response.factor(), Some(tail))
                     .unwrap()
                     .unwrap();
                 let got = s
-                    .step_with_legacy_electrical(s.controls, STEP, Some(12.), response, Some(tail))
+                    .step_with_legacy_consumers(s.controls, STEP, &consumers, response, Some(tail))
                     .unwrap()
                     .unwrap();
                 assert_eq!(got, expected);

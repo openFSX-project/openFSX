@@ -1439,3 +1439,31 @@ calls, verifies rollback after both invalid controls and physical failure, and
 checks unknown response/reset. It does not infer provider values or change the
 viewer to use this path automatically. The transactional API currently clones
 simulation state; performance tuning and live provider ownership remain open.
+
+### Ordered original consumer load
+
+```powershell
+python scripts/check-electrical-consumers.py FSX/sim1.dll target/consumers-reference
+cargo run -p fsx-app --example legacy-consumers-check --locked -- target/consumers-reference/report.json target/consumers-comparison
+```
+
+The pinned original sum visits record slots 1..33 in index order; slot 0 is
+ignored. A nonzero raw prior activity word adds that record's configured maximum
+to a double accumulator, storing after each addition. This phase does not query
+voltage, switch requests or equipment presence. The guarded reference checks
+156 single-slot/raw-flag and mixed-magnitude cases; Rust matches every load exactly.
+No original process, code bytes or assets are exported.
+
+legacy_consumers::Consumer stores optional raw activity and optional max_amps;
+None means unresolved, not absent equipment or zero. Inactive slots do not need
+metadata. Unknown activity or an active unresolved maximum makes the sum unknown.
+Visited maxima are validated as finite 0..1,000,000 A; ignored slot 0 is not
+inspected. The sum may exceed 1,000,000 A, but the downstream voltage core's
+existing aggregate limit rejects that case atomically. These supported domains
+do not claim the original CFG parser's complete rejection policy.
+
+Simulation.step_with_legacy_consumers sums the supplied preceding-frame array
+then invokes the atomic electrical/physics interval. It does not update all
+activity flags, map omitted aircraft equipment or generate defaults. Providers
+must carry actual prior flags and metadata. The air/ground coupling test feeds
+the array path and compares it to direct known-load frames.

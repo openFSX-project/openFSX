@@ -5,6 +5,29 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 26 October 2026
 
+After `79dcda4`, the original consumer-load summation is ported. Its 34 record
+slots contain one ignored slot 0 and 33 summed slots 1..33. Each nonzero prior
+activity word admits that record's configured maximum; summation stores double
+after each addition in original index order. No bus voltage or request is
+re-evaluated inside this phase. The bounded reference checks 156 cases, including
+every slot/raw 0/1/2/0xFFFFFFFF flag, inactive null metadata and mixed magnitudes.
+Rust matches every resulting load exactly in target/legacy-consumers-comparison-01/report.json
+using target/legacy-consumers-reference-01/report.json.
+
+legacy_consumers::sum requires explicit activity/metadata. An inactive slot may
+omit its maximum; active unresolved metadata or unknown activity makes load
+unknown. Invalid maxima in visited slots fail; ignored slot 0 is not inspected.
+Per-slot supported maxima are 0..1,000,000 A; full sums can exceed the existing
+voltage-core aggregate domain, which rejects >1,000,000 A atomically.
+Simulation.step_with_legacy_consumers computes this load and uses the atomic
+electrical/physics path. Its provider arrays must describe prior activity; it
+does not discover equipment or synthesize missing CFG defaults. The 120-air /
+120-ground regression now takes consumer arrays and still matches direct frames.
+Workspace tests pass in target/legacy-consumers-workspace-tests-01.log.
+Formatting/architecture/generated documentation checks pass. Live equipment
+activity generation and automatic viewer ownership remain open; Goal active.
+
+### Previous electrical-flight coupling stage — 26 October 2026
 After `9fab65a`, Simulation.step_with_legacy_electrical commits a known-input
 electrical frame and physics interval together. It accepts the checked Response
 provider, explicit load and TailEnvironment, using stored switch/source state.
