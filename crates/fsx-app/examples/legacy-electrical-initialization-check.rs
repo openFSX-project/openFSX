@@ -56,7 +56,7 @@ fn main() -> Result<(), String> {
         return Err("Reference exceeds byte budget".into());
     }
     let report: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    if report["schema"] != 1
+    if report["schema"] != 2
         || report["source"] != "bounded-installed-sim1-electrical-initialization"
         || report["sha256"] != "4bb9ef1b9669bb48676ef16ede667a2c590af27943eb34f03f09332a5417ae0e"
     {
@@ -135,7 +135,7 @@ fn main() -> Result<(), String> {
                             min_voltage: 0.,
                             forced_off: false,
                         }),
-                        navcom1_circuit: Some(Circuit {
+                        additional_system_circuit: Some(Circuit {
                             bus: 0,
                             min_voltage: 0.,
                             forced_off: false,
@@ -148,7 +148,8 @@ fn main() -> Result<(), String> {
             if got.state != state(&expected["state"])?
                 || got.tail.source_sum_amps != number(expected, "source_sum")?
                 || got.tail.avionics_active != boolean(expected, "avionics_active")?
-                || got.tail.navcom1_active != boolean(expected, "navcom1_active")?
+                || got.tail.additional_system_active
+                    != boolean(expected, "additional_system_active")?
             {
                 return Err("First initialized frame state differs".into());
             }

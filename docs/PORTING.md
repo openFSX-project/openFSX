@@ -5,6 +5,32 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 26 October 2026
 
+After `f0b1143`, original CFG triple storage confirms all 33 consumer slot names.
+This corrects an earlier semantic error: slot 1 is additional_system, not NAVCOM1.
+Slot 5 is avionics_bus. Existing arithmetic tests had used explicit synthetic
+slot-1 metadata, so their numeric evidence remains valid, but the API/JSON fields
+and documentation now use additional_system_circuit/active/max_amps. Old tail
+report schemas are rejected; regenerate schema 4. Initialization reference
+schema is now 2 for the corrected activity field. This is a deliberate diagnostic
+schema/API rename to prevent connecting the wrong aircraft equipment.
+
+scripts/check-electrical-circuit-slots.py executes the original 33 named CFG
+reads/stores with guarded writes/instructions and injected distinct bus/current/
+minimum triples. Every value reaches its identified record. The direct Rust
+comparison verifies LEGACY_CONSUMER_KEYS and authored load binding in
+target/legacy-circuit-slots-comparison-01/report.json, using
+target/legacy-circuit-slots-reference-01/report.json. legacy_consumers::authored
+binds only declared maxima plus provider activity; missing keys stay unknown.
+NAVCOM-named authored metadata is not silently substituted for additional_system.
+
+Corrected-schema references and comparisons pass in target/legacy-corrected-circuit-*
+(1280 predicates, 165 tails, 68 controlled frames, 16 override loads, 40
+initializations and 32 first frames). Workspace tests pass in
+target/legacy-corrected-circuit-tests-01.log. Installed regression passes in
+target/legacy-corrected-circuit-installed-01.log. Formatting/architecture/docs
+checks pass. Live activity generation and omitted default triples remain open.
+
+### Previous consumer-summation stage — 26 October 2026
 After `79dcda4`, the original consumer-load summation is ported. Its 34 record
 slots contain one ignored slot 0 and 33 summed slots 1..33. Each nonzero prior
 activity word admits that record's configured maximum; summation stores double
@@ -214,7 +240,7 @@ ordinary Simulation.step are unchanged. This explicit fresh-allocation API is
 not FLT restoration or a live state provider for an already running aircraft.
 
 The installed C172 checker confirms fresh 24 V initialization, then applies
-Lesson 1 switches/RPM with explicit load/response/context/failure/NAVCOM inputs
+Lesson 1 switches/RPM with explicit load/response/context/failure/additional-system inputs
 and reaches 28 V main/avionics. Existing 1280 predicate / 165 tail / 68 frame /
 16 override-load regression passes. 214 all-feature test executions pass in
 target/legacy-electrical-initialization-workspace-tests-02.log. Original evidence:
@@ -266,7 +292,7 @@ After `a162101`, original circuit availability and the battery-failure/avionics
 tail are ported and checked. 1280 original predicates cover exact/nextafter voltage
 thresholds, absent equipment, invalid bus mapping, forced-off, zero maximum battery
 voltage, global override and context fallback. 165 original tails cover failure
-clearing, avionics-master control, sequential navcom checks and unusual prior-bus
+clearing, avionics-master control, sequential additional-system checks and unusual prior-bus
 inputs. Rust matches every tested predicate and tail output exactly.
 
 This exposed and corrected the earlier regular inspection threshold: voltage must
@@ -280,7 +306,7 @@ and context mode's live mapping remain unverified; they are explicit inputs.
 A battery failure clears all eight bus voltages, four generator-current slots and
 reported source sum, while retaining stored battery voltage and filtered current.
 Avionics availability is then evaluated, its bus copies main voltage only when
-master and availability permit, and navcom1 is checked against the updated bus.
+master and availability permit, and additional_system is checked against the updated bus.
 Availability flags can remain true at zero voltage under bypass/fallback; they
 are not a claim of physical energy delivery.
 
@@ -297,7 +323,7 @@ versioned profile and complete explicit inputs, publishes validated final bus
 values, and clears stale observations when providers are unavailable. Invalid
 input leaves state and observed buses intact. The installed C172 checker proves
 known-input 28 V main/avionics publication, failure-to-zero and loss-to-unknown
-using labeled synthetic seed/load/response/context/NAVCOM data. Ordinary physics
+using labeled synthetic seed/load/response/context/additional-system data. Ordinary physics
 still does not select those inputs or run this path automatically.
 
 Next is confirming response-factor, context/override and initial-state providers,

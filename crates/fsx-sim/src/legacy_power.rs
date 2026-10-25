@@ -79,7 +79,7 @@ pub struct TailInput {
     pub battery_failed: bool,
     pub avionics_master: bool,
     pub avionics_circuit: Option<Circuit>,
-    pub navcom1_circuit: Option<Circuit>,
+    pub additional_system_circuit: Option<Circuit>,
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TailStep {
@@ -87,7 +87,7 @@ pub struct TailStep {
     pub generator_amps: [f64; 4],
     pub source_sum_amps: f64,
     pub avionics_active: bool,
-    pub navcom1_active: bool,
+    pub additional_system_active: bool,
 }
 /// Original frame tail, given the preceding core outputs and known services.
 /// Active flags are legacy availability, not a proof of nonzero bus voltage:
@@ -95,7 +95,7 @@ pub struct TailStep {
 pub fn finish(input: TailInput) -> Result<TailStep, String> {
     if !valid_context(input.context)
         || !valid_circuit(input.avionics_circuit)
-        || !valid_circuit(input.navcom1_circuit)
+        || !valid_circuit(input.additional_system_circuit)
         || input
             .bus_voltage
             .iter()
@@ -110,7 +110,7 @@ pub fn finish(input: TailInput) -> Result<TailStep, String> {
         generator_amps: input.generator_amps,
         source_sum_amps: input.source_sum_amps,
         avionics_active: false,
-        navcom1_active: false,
+        additional_system_active: false,
     };
     if input.battery_failed {
         output.bus_voltage = [0.; 8];
@@ -124,7 +124,11 @@ pub fn finish(input: TailInput) -> Result<TailStep, String> {
     } else {
         0.
     };
-    output.navcom1_active = available(input.context, input.navcom1_circuit, output.bus_voltage)?;
+    output.additional_system_active = available(
+        input.context,
+        input.additional_system_circuit,
+        output.bus_voltage,
+    )?;
     Ok(output)
 }
 #[cfg(test)]
@@ -198,7 +202,7 @@ mod tests {
         .unwrap());
     }
     #[test]
-    fn failure_clears_all_buses_and_current_slots_before_avionics_and_navcom_checks() {
+    fn failure_clears_all_buses_and_current_slots_before_avionics_and_additional_system_checks() {
         let input = TailInput {
             context: context(),
             bus_voltage: [22., 27., 22., 22., 28., 0., 0., 0.],
@@ -207,18 +211,18 @@ mod tests {
             battery_failed: false,
             avionics_master: true,
             avionics_circuit: circuit(0),
-            navcom1_circuit: circuit(1),
+            additional_system_circuit: circuit(1),
         };
         let on = finish(input).unwrap();
         assert_eq!(on.bus_voltage[1], 22.);
-        assert!(on.navcom1_active);
+        assert!(on.additional_system_active);
         let off = finish(TailInput {
             avionics_master: false,
             ..input
         })
         .unwrap();
         assert_eq!(off.bus_voltage[1], 0.);
-        assert!(!off.navcom1_active);
+        assert!(!off.additional_system_active);
         let failed = finish(TailInput {
             battery_failed: true,
             ..input
@@ -236,7 +240,7 @@ mod tests {
             ..input
         })
         .unwrap();
-        assert!(bypass.avionics_active && bypass.navcom1_active);
+        assert!(bypass.avionics_active && bypass.additional_system_active);
         assert_eq!(bypass.bus_voltage, [0.; 8]);
     }
 }

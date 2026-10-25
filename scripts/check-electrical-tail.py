@@ -106,8 +106,8 @@ def tail_case(image,base,context,failed,avionics,main,circuit_av=None,circuit_na
     actual=[m.f64(STATE+4+i*16) for i in range(8)];amps=[m.f64(STATE+0x4C+i*16) for i in range(4)]
     if actual!=buses or amps!=([0.]*4 if failed else currents) or m.f64(STATE+12)!=(0. if failed else 12.) or m.u32(STATE+0xE8)!=int(av_active) or m.u32(STATE+0xB8)!=int(nav_active) or m.f64(STATE+0x94)!=23.5 or m.f64(STATE+0x9C)!=3.:
         raise ValueError('Original battery-failure/avionics tail mismatch')
-    return {'context':context,'battery_failed':failed,'avionics_master':avionics,'avionics_circuit':av,'navcom1_circuit':nav,'incoming_bus_voltage':incoming,'incoming_generator_amps':currents,'incoming_source_sum':12.,
-        'bus_voltage':actual,'generator_amps':amps,'source_sum':m.f64(STATE+12),'avionics_active':av_active,'navcom1_active':nav_active,'battery_voltage_unchanged':m.f64(STATE+0x94),'filtered_net_unchanged':m.f64(STATE+0x9C)}
+    return {'context':context,'battery_failed':failed,'avionics_master':avionics,'avionics_circuit':av,'additional_system_circuit':nav,'incoming_bus_voltage':incoming,'incoming_generator_amps':currents,'incoming_source_sum':12.,
+        'bus_voltage':actual,'generator_amps':amps,'source_sum':m.f64(STATE+12),'avionics_active':av_active,'additional_system_active':nav_active,'battery_voltage_unchanged':m.f64(STATE+0x94),'filtered_net_unchanged':m.f64(STATE+0x9C)}
 
 
 def frame_sequence(image,base,name,voltage,frames):
@@ -137,8 +137,8 @@ def frame_sequence(image,base,name,voltage,frames):
         records.append({'context':context,'input':{'generator_online':online,'avionics_master':avionics,'battery_failed':failed,'dt':1./120.,'response_factor':1.},
             'before':before,'before_bus_voltage':before_buses,'before_generator_amps':before_amps,'load_used_amps':load,'prefix':m.prefix,
             'state':m.state(),'bus_voltage':[m.f64(STATE+4+i*16) for i in range(8)],'generator_amps':[m.f64(STATE+0x4C+i*16) for i in range(4)],'source_sum':m.f64(STATE+12),
-            'avionics_active':bool(m.u32(STATE+0xE8)),'navcom1_active':bool(m.u32(STATE+0xB8))})
-    return {'name':name,'configuration':{'max_battery_voltage':24.,'generator_voltage':28.,'max_generator_amps':60.},'initial':{'battery_voltage':voltage,'filtered_net_amps':0.,'generator_amps':0.},'avionics_circuit':av,'navcom1_circuit':nav,'avionics_max_amps':5.,'navcom1_max_amps':12.,'frames':records}
+            'avionics_active':bool(m.u32(STATE+0xE8)),'additional_system_active':bool(m.u32(STATE+0xB8))})
+    return {'name':name,'configuration':{'max_battery_voltage':24.,'generator_voltage':28.,'max_generator_amps':60.},'initial':{'battery_voltage':voltage,'filtered_net_amps':0.,'generator_amps':0.},'avionics_circuit':av,'additional_system_circuit':nav,'avionics_max_amps':5.,'additional_system_max_amps':12.,'frames':records}
 
 
 def override_sequence(image,base,initial,authored_values):
@@ -212,7 +212,7 @@ def main():
         frame_sequence(image,base,'override_with_empty_battery',0.,[(False,True,False,True)]*8)]
     overrides=[override_sequence(image,base,initial,[None,True,None,False,None,False,True,None]) for initial in (False,True)]
     args.output.mkdir()
-    report={'schema':3,'source':'bounded-installed-sim1-power-tail','sha256':SHA256,'file_version':'10.0.62615.0','power_cases':powers,'tail_cases':tails,'frame_cases':frames,'override_sequences':overrides,
+    report={'schema':4,'source':'bounded-installed-sim1-power-tail','sha256':SHA256,'file_version':'10.0.62615.0','power_cases':powers,'tail_cases':tails,'frame_cases':frames,'override_sequences':overrides,
         'scope':'original predicate/tail and controlled one-generator/two-consumer frames plus CFG global-override lookup/retention; context/failure/avionics/response and CFG service injected; no startup override or equipment-presence inference','game_launched':False,'guarded_instruction_ranges':True,'guarded_writes':True,'instruction_budget_per_case':4096}
     (args.output/'report.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     print(f'PASS: {len(powers)} original predicates, {len(tails)} tails, {sum(len(c["frames"]) for c in frames)} controlled frames, {sum(len(c["loads"]) for c in overrides)} CFG override loads; strict threshold, bypasses, failure/current/load lag verified')

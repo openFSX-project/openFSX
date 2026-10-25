@@ -51,7 +51,7 @@ pub struct TailEnvironment {
     pub voltage_mode: bool,
     pub override_power: bool,
     pub avionics_circuit: Option<crate::legacy_power::Circuit>,
-    pub navcom1_circuit: Option<crate::legacy_power::Circuit>,
+    pub additional_system_circuit: Option<crate::legacy_power::Circuit>,
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FrameStep {
@@ -118,7 +118,7 @@ impl Core {
                     .chain(t.incoming_generator_amps.iter())
                     .any(|v| !v.is_finite())
                 || !crate::legacy_power::valid_circuit(t.avionics_circuit)
-                || !crate::legacy_power::valid_circuit(t.navcom1_circuit)
+                || !crate::legacy_power::valid_circuit(t.additional_system_circuit)
         }) {
             return Err("Invalid legacy frame-tail environment".into());
         }
@@ -161,7 +161,7 @@ impl Core {
             battery_failed: tail.battery_failed,
             avionics_master: tail.avionics_master,
             avionics_circuit: tail.avionics_circuit,
-            navcom1_circuit: tail.navcom1_circuit,
+            additional_system_circuit: tail.additional_system_circuit,
         })?;
         let mut state = prefix.state;
         state.generator_amps = tail.generator_amps[0];
@@ -303,7 +303,7 @@ mod tests {
                 voltage_mode: true,
                 override_power: false,
                 avionics_circuit: None,
-                navcom1_circuit: None,
+                additional_system_circuit: None,
             };
             let input = Inputs {
                 generator_online: Some(false),
@@ -473,7 +473,7 @@ mod tests {
             voltage_mode: true,
             override_power: false,
             avionics_circuit: Some(circuit),
-            navcom1_circuit: Some(crate::legacy_power::Circuit { bus: 1, ..circuit }),
+            additional_system_circuit: Some(crate::legacy_power::Circuit { bus: 1, ..circuit }),
         };
         let first = core
             .advance_frame(&config(), input(), Some(tail), 1. / 120.)
@@ -515,6 +515,6 @@ mod tests {
             .unwrap();
         assert_eq!(next.prefix.source_sum_used_amps, 0.);
         assert_eq!(next.tail.bus_voltage[1], 28.);
-        assert!(next.tail.navcom1_active);
+        assert!(next.tail.additional_system_active);
     }
 }

@@ -92,7 +92,7 @@ fn main() -> Result<(), String> {
     }
     let report: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     if report["source"] != "bounded-installed-sim1-power-tail"
-        || !matches!(report["schema"].as_u64(), Some(1..=3))
+        || report["schema"] != 4
         || report["sha256"] != "4bb9ef1b9669bb48676ef16ede667a2c590af27943eb34f03f09332a5417ae0e"
     {
         return Err("Unexpected original tail profile".into());
@@ -124,13 +124,13 @@ fn main() -> Result<(), String> {
             battery_failed: boolean(c, "battery_failed")?,
             avionics_master: boolean(c, "avionics_master")?,
             avionics_circuit: circuit(&c["avionics_circuit"])?,
-            navcom1_circuit: circuit(&c["navcom1_circuit"])?,
+            additional_system_circuit: circuit(&c["additional_system_circuit"])?,
         })?;
         if got.bus_voltage != array::<8>(&c["bus_voltage"])?
             || got.generator_amps != array::<4>(&c["generator_amps"])?
             || got.source_sum_amps != number(c, "source_sum")?
             || got.avionics_active != boolean(c, "avionics_active")?
-            || got.navcom1_active != boolean(c, "navcom1_active")?
+            || got.additional_system_active != boolean(c, "additional_system_active")?
         {
             return Err(format!("Frame-tail mismatch at case {index}"));
         }
@@ -138,7 +138,7 @@ fn main() -> Result<(), String> {
     let mut frames_checked = 0;
     let mut frame_error = 0.;
     let mut sequences = 0;
-    if matches!(report["schema"].as_u64(), Some(2..=3)) {
+    if report["schema"] == 4 {
         let cases = report["frame_cases"]
             .as_array()
             .filter(|v| !v.is_empty() && v.len() <= 16)
@@ -179,7 +179,7 @@ fn main() -> Result<(), String> {
                 } else {
                     0.
                 } + if nav_active {
-                    number(c, "navcom1_max_amps")?
+                    number(c, "additional_system_max_amps")?
                 } else {
                     0.
                 };
@@ -204,7 +204,7 @@ fn main() -> Result<(), String> {
                             voltage_mode: context.voltage_mode,
                             override_power: context.override_power,
                             avionics_circuit: circuit(&c["avionics_circuit"])?,
-                            navcom1_circuit: circuit(&c["navcom1_circuit"])?,
+                            additional_system_circuit: circuit(&c["additional_system_circuit"])?,
                         }),
                         number(input, "dt")?,
                     )?
@@ -237,20 +237,21 @@ fn main() -> Result<(), String> {
                     &mut frame_error,
                 )?;
                 if got.tail.avionics_active != boolean(frame, "avionics_active")?
-                    || got.tail.navcom1_active != boolean(frame, "navcom1_active")?
+                    || got.tail.additional_system_active
+                        != boolean(frame, "additional_system_active")?
                 {
                     return Err("Complete frame consumer flags differ".into());
                 }
                 buses = got.tail.bus_voltage;
                 amps = got.tail.generator_amps;
                 av_active = got.tail.avionics_active;
-                nav_active = got.tail.navcom1_active;
+                nav_active = got.tail.additional_system_active;
                 frames_checked += 1;
             }
         }
     }
     let mut override_loads = 0;
-    if report["schema"] == 3 {
+    if report["schema"] == 4 {
         let sequences = report["override_sequences"]
             .as_array()
             .filter(|v| !v.is_empty() && v.len() <= 16)
@@ -306,7 +307,7 @@ fn main() -> Result<(), String> {
         }
     }
     fs::create_dir(&output).map_err(|e| e.to_string())?;
-    fs::write(output.join("report.json"),serde_json::to_vec_pretty(&json!({"schema":3,"source":"rust-original-power-tail-comparison","predicate_cases":powers.len(),"tail_cases":tails.len(),"all_tail_values_equal":true,"frame_sequences":sequences,"frames_checked":frames_checked,"frame_max_error":frame_error,"frame_tolerance":1e-9,"override_configuration_loads":override_loads,"scope":"known finite contexts, injected services and CFG override retention; startup override, live mode and equipment presence remain provider inputs"})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    fs::write(output.join("report.json"),serde_json::to_vec_pretty(&json!({"schema":4,"source":"rust-original-power-tail-comparison","predicate_cases":powers.len(),"tail_cases":tails.len(),"all_tail_values_equal":true,"frame_sequences":sequences,"frames_checked":frames_checked,"frame_max_error":frame_error,"frame_tolerance":1e-9,"override_configuration_loads":override_loads,"scope":"known finite contexts, injected services and CFG override retention; startup override, live mode and equipment presence remain provider inputs"})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
     println!(
         "PASS: {} predicates / {} tails equal; {sequences} composed sequences / {frames_checked} frames, max error {frame_error:e}; {override_loads} override loads",
         powers.len(),tails.len()

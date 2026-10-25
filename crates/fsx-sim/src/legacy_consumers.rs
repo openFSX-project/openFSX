@@ -8,6 +8,25 @@ pub struct Consumer {
     /// Known configured maximum. None is unresolved, not a fabricated zero.
     pub max_amps: Option<f64>,
 }
+/// Bind only authored maxima to verified slots. Activity is supplied from the
+/// preceding frame; absent CFG keys remain unresolved, not zero or absent gear.
+pub fn authored(
+    config: &fsx_vehicle::electrical::Electrical,
+    activity: [Option<u32>; SLOTS],
+) -> [Consumer; SLOTS] {
+    let mut result = [Consumer::default(); SLOTS];
+    result[0].active = activity[0];
+    for (i, key) in fsx_vehicle::electrical::LEGACY_CONSUMER_KEYS
+        .iter()
+        .enumerate()
+    {
+        result[i + 1] = Consumer {
+            active: activity[i + 1],
+            max_amps: config.circuits.get(*key).map(|c| c.max_amps),
+        };
+    }
+    result
+}
 pub fn sum(consumers: &[Consumer; SLOTS]) -> Result<Option<f64>, String> {
     let mut total = 0.;
     let mut known = true;

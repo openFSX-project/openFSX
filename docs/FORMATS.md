@@ -1254,13 +1254,13 @@ not unresolved presence. All supplied numeric values must be finite.
 Battery failure clears all eight buses, four generator current slots and source
 sum. It does not clear stored battery voltage or filtered net current. The tail
 then evaluates avionics circuit availability, applies avionics master and copies
-main to avionics voltage only when both allow it. Navcom1 is evaluated after that
+main to avionics voltage only when both allow it. Additional-system slot 1 is evaluated after that
 copy/clear. Override/fallback can set active flags even when failed buses remain
 0 V; callers must not equate these flags to nonzero voltage. Previous avionics
 voltage can matter when the configured avionics circuit points at its own bus.
 
 The same reference runs four complete controlled sequences / 68 frames through
-the original method with one generator and two declared consumers (NAVCOM and
+the original method with one generator and two declared consumers (additional-system and
 avionics). Their requested maxima are 12/5 A and presence is explicit. Actual load
 for each next frame is computed from prior active flags; there is no automatic
 aircraft equipment inference. Failure/avionics/mode services, float32 response
@@ -1331,7 +1331,7 @@ battery master and generator admission are off, and Coulomb charge is unknown.
 Call only for a genuinely fresh allocation, before applying flight state. This
 is not an assumption about an already running aircraft or a saved-flight restore.
 The installed checker proves C172 fresh 24 V buses, followed by Lesson 1 switches
-and RPM plus explicit load/response/context/failure/NAVCOM inputs reaching 28 V
+and RPM plus explicit load/response/context/failure/additional-system inputs reaching 28 V
 main/avionics. Existing construction/reset still leaves observations unknown;
 ordinary physics has no automatic new initialization or legacy frame invocation.
 
@@ -1467,3 +1467,23 @@ then invokes the atomic electrical/physics interval. It does not update all
 activity flags, map omitted aircraft equipment or generate defaults. Providers
 must carry actual prior flags and metadata. The air/ground coupling test feeds
 the array path and compares it to direct known-load frames.
+
+### Named original consumer slots
+
+```powershell
+python scripts/check-electrical-circuit-slots.py FSX/sim1.dll target/circuit-slots-reference
+cargo run -p fsx-app --example legacy-circuit-slots-check --locked -- target/circuit-slots-reference/report.json target/circuit-slots-comparison
+```
+
+The original 33 CFG triple reads/stores establish LEGACY_CONSUMER_KEYS in slots
+1..33. Slot 1 is additional_system, correcting the earlier NAVCOM1 label; slot 5
+is avionics_bus. Rust tail APIs/JSON now name additional_system_circuit/active;
+the synthetic 12 A slot-1 fixture is an additional-system fixture, not evidence
+of radio presence. Tail reports use schema 4 and reject earlier mislabeled
+schemas; initialization reports use schema 2. Regenerate old ignored reports.
+
+The reference injects distinct bus/max/min triples into each named CFG lookup
+and verifies their actual record destinations. It does not emulate the external
+CFG parser or establish omitted defaults. legacy_consumers::authored maps only
+present authored maxima and supplied activity to these verified slots. Missing
+metadata stays unknown; a navcom1 key does not populate additional_system.

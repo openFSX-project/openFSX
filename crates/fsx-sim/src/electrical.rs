@@ -804,7 +804,7 @@ mod tests {
                 min_voltage: 17.,
                 forced_off: false,
             }),
-            navcom1_circuit: None,
+            additional_system_circuit: None,
         };
         n.step_legacy_electrical_frame(1. / 120., Some(12.), Some(1.), Some(tail))
             .unwrap();

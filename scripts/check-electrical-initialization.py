@@ -82,7 +82,7 @@ def case(image, base, maximum, nominal, reused, enabled):
         m.word(sp,SENTINEL);m.word(sp+4,CONTEXT);m.real(sp+8,1./120.)
         v.reg_write(UC_X86_REG_ESP,sp);v.reg_write(UC_X86_REG_ECX,STATE)
         m.execute(0x20B24C60,sp+16)
-        first_frame={'state':m.state(),'bus_voltage':[m.f64(STATE+4+i*16) for i in range(8)],'generator_amps':[m.f64(STATE+0x4C+i*16) for i in range(4)],'source_sum':m.f64(STATE+12),'load_amps':m.f64(STATE+0xA4),'avionics_active':bool(m.u32(STATE+0xE8)),'navcom1_active':bool(m.u32(STATE+0xB8))}
+        first_frame={'state':m.state(),'bus_voltage':[m.f64(STATE+4+i*16) for i in range(8)],'generator_amps':[m.f64(STATE+0x4C+i*16) for i in range(4)],'source_sum':m.f64(STATE+12),'load_amps':m.f64(STATE+0xA4),'avionics_active':bool(m.u32(STATE+0xE8)),'additional_system_active':bool(m.u32(STATE+0xB8))}
     return {'max_battery_voltage':maximum,'generator_voltage':nominal,'generator_enabled':enabled,'reused':reused,'constructed':constructed,'before':before,'result':result,'services':calls,'first_frame':first_frame}
 
 
@@ -96,7 +96,7 @@ def main():
     image=pe.get_memory_mapped_image()
     cases=[case(image,base,maximum,nominal,reused,enabled) for maximum in (0.,12.,24.,28.,1000.) for nominal in (0.,28.) for reused in (False,True) for enabled in (False,True)]
     a.output.mkdir()
-    report={'schema':1,'source':'bounded-installed-sim1-electrical-initialization','sha256':SHA256,'file_version':'10.0.62615.0','cases':cases,'game_launched':False,'scope':'original constructor/full initializer and first frames with one configured engine, enabled/disabled generator and zero/positive rating; injected context/failure/naming/response/zero-auxiliary services and zero circuit metadata; no FLT restore or live provider claim','instruction_budget_per_call':4096,'guarded_writes':True,'guarded_instruction_ranges':True}
+    report={'schema':2,'source':'bounded-installed-sim1-electrical-initialization','sha256':SHA256,'file_version':'10.0.62615.0','cases':cases,'game_launched':False,'scope':'original constructor/full initializer and first frames with one configured engine, enabled/disabled generator and zero/positive rating; injected context/failure/naming/response/zero-auxiliary services and zero circuit metadata; no FLT restore or live provider claim','instruction_budget_per_call':4096,'guarded_writes':True,'guarded_instruction_ranges':True}
     (a.output/'report.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     print(f'PASS: {len(cases)} original constructor/initializer cases / {sum(c["first_frame"] is not None for c in cases)} first frames; fresh zeros, rated buses, reused-state retention and skipped generator voltage writes')
 

@@ -98,6 +98,43 @@ const CIRCUITS: &[&str] = &[
     "directional_gyro",
     "directional_gyro_slaving",
 ];
+/// Pinned sim1 10.0.62615 CFG triple destinations, in slots 1..=33.
+/// Slot 0 is separate/ignored by load summation. Omitted defaults are unresolved.
+pub const LEGACY_CONSUMER_KEYS: [&str; 33] = [
+    "additional_system",
+    "flap_motor",
+    "gear_motor",
+    "autopilot",
+    "avionics_bus",
+    "avionics",
+    "pitot_heat",
+    "prop_sync",
+    "auto_feather",
+    "auto_brakes",
+    "standby_vacuum",
+    "marker_beacon",
+    "gear_warning",
+    "hydraulic_pump",
+    "fuel_pump",
+    "fuel_transfer_pump",
+    "propeller_deice",
+    "starter1",
+    "starter2",
+    "starter3",
+    "starter4",
+    "light_nav",
+    "light_beacon",
+    "light_landing",
+    "light_taxi",
+    "light_strobe",
+    "light_panel",
+    "light_recognition",
+    "light_wing",
+    "light_logo",
+    "light_cabin",
+    "directional_gyro",
+    "directional_gyro_slaving",
+];
 fn number(value: &str, maximum: f64) -> Result<f64, String> {
     let number = value
         .trim()

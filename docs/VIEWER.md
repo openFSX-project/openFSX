@@ -886,7 +886,7 @@ initialization path below; saved/running state still needs a provider. The power
 is now traced to electric_always_available: 16 bounded CFG-load/predicate checks
 prove missing keys preserve its previous process value. PowerOverride retains
 that value across aircraft loads, with unknown startup state; viewer ownership
-is still pending. Its injected NAVCOM
+is still pending. Its injected additional-system
 presence is not expansion of omitted C172 CFG defaults.
 Actual engine/load providers, C172 topology and remaining legacy defaults still
 need implementation before live OAT/V binding. FLT loading is an explicit API and

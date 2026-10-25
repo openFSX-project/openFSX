@@ -552,7 +552,7 @@ mod tests {
                 voltage_mode: true,
                 override_power: false,
                 avionics_circuit: None,
-                navcom1_circuit: None,
+                additional_system_circuit: None,
             };
             let mut direct = s.electrical.clone();
             let mut consumers = [crate::legacy_consumers::Consumer {

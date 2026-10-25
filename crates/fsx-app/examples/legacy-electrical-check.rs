@@ -498,7 +498,7 @@ fn main() -> Result<(), String> {
             min_voltage: authored_avionics.min_voltage,
             forced_off: false,
         }),
-        navcom1_circuit: Some(fsx_sim::legacy_power::Circuit {
+        additional_system_circuit: Some(fsx_sim::legacy_power::Circuit {
             bus: 1,
             min_voltage: 17.,
             forced_off: false,
@@ -557,7 +557,7 @@ fn main() -> Result<(), String> {
     ensure(
         frame_fixture.bus_voltage(Bus::Main)? == Some(28.)
             && frame_fixture.bus_voltage(Bus::Avionics)? == Some(28.)
-            && healthy.tail.navcom1_active,
+            && healthy.tail.additional_system_active,
         "Known frame fixture did not publish calculated buses",
     )?;
     let failed = frame_fixture
@@ -584,10 +584,10 @@ fn main() -> Result<(), String> {
             && frame_fixture.bus_voltage(Bus::Main)?.is_none(),
         "Missing frame context retained stale published voltage",
     )?;
-    let controlled_frame = json!({"scope":"explicit seed/load/response/mode/failure/bus observations and synthetic NAVCOM presence; not default flight providers",
+    let controlled_frame = json!({"scope":"explicit seed/load/response/mode/failure/bus observations and synthetic additional-system presence; not default flight providers",
         "healthy_main_voltage":healthy.tail.bus_voltage[0],"healthy_avionics_voltage":healthy.tail.bus_voltage[1],"failed_bus_voltage":failed.tail.bus_voltage,"failure_preserves_battery_state":true,"unknown_context_clears_bus_observation":true});
-    let report = json!({"schema":10,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
-        "fresh_allocation_fixture":{"initial_all_bus_voltage":initial_voltage,"initial_battery_master":false,"initial_filter_and_current":0.,"charge_fraction":null,"first_main_voltage":fresh_frame.tail.bus_voltage[0],"first_avionics_voltage":fresh_frame.tail.bus_voltage[1],"scope":"original fresh initialization, then saved FLT switches/RPM and explicit load/response/failure/context/NAVCOM inputs; not automatic flight restoration"},
+    let report = json!({"schema":11,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
+        "fresh_allocation_fixture":{"initial_all_bus_voltage":initial_voltage,"initial_battery_master":false,"initial_filter_and_current":0.,"charge_fraction":null,"first_main_voltage":fresh_frame.tail.bus_voltage[0],"first_avionics_voltage":fresh_frame.tail.bus_voltage[1],"scope":"original fresh initialization, then saved FLT switches/RPM and explicit load/response/failure/context/additional-system inputs; not automatic flight restoration"},
         "effective_source_ratings":{"profile":"FsxSteam62615SinglePiston","max_battery_voltage":effective_sources.max_battery_voltage,"generator_voltage":effective_sources.generator_voltage,"max_generator_amps":effective_sources.max_generator_amps,
             "reference":"bounded original scalar initialization; not live generation or measured bus voltage","capacity_and_charge_limit_resolved":false},
         "battery_max_capacity_amph":configuration.battery_max_capacity_amph,"battery_charging_current":configuration.battery_charging_current,
