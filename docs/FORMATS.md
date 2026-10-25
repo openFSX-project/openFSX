@@ -1404,3 +1404,10 @@ flags or admitted missing settings do not imply a nominal value. This proves
 initial self ownership only; later pointer changes and the flag's semantic
 flight-mode identity remain unverified. The reference runs bounded constructor
 fragments, not every unrelated constructor allocation/service.
+
+Fresh reference cases also poison the flag field and execute its original
+constructor argument-copy fragment. The third raw argument is stored unchanged
+at +0xB4 before the self-link/query/copy/voltage phases. The first pointer argument
+is independently checked at +0x64 to guard stack layout. This proves argument
+provenance and nonzero truth handling; it does not identify the argument as a
+player/AI flag or any named flight mode.

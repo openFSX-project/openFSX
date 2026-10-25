@@ -5,6 +5,22 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 26 October 2026
 
+After `4bf628f`, the constructor reference no longer supplies its context flag
+directly for fresh cases. It poisons +0xB4, executes the original argument-copy
+fragment and confirms the third constructor word is stored unchanged there.
+The same word then drives actual queries, General copy and voltage response.
+Raw 0/1/2/0xFFFFFFFF all preserve their exact bits; the later branches interpret
+nonzero as true. The constructor's first pointer argument is checked separately
+at +0x64 to guard the stack layout. The argument's higher-level meaning remains
+unverified; no player/AI or flight-mode label is assigned.
+
+All 100 factor/filter/voltage comparisons pass in
+target/legacy-constructor-argument-comparison-01/report.json using
+target/legacy-constructor-argument-reference-01/report.json. This is stronger
+constructor-to-core evidence, not a complete constructor or live FSX run. The
+remaining automatic providers and full compatibility Goal stay unfinished.
+
+### Previous self-context stage — 26 October 2026
 After `7112c78`, the original base-context constructor resolves initial ownership:
 it writes self into +0x34 unconditionally, then queries its own +0xB4 through
 both virtual calls before copying General from the actual main.dll getter.

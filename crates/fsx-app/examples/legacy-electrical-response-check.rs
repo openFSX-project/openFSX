@@ -50,6 +50,11 @@ fn main() -> Result<(), String> {
                     .ok_or("Missing constructor flag")?,
             )
             .map_err(|e| e.to_string())?;
+            if !case["constructor_third_argument"].is_null()
+                && case["constructor_third_argument"].as_u64() != Some(u64::from(raw))
+            {
+                return Err("Constructor argument differs from queried flag".into());
+            }
             let constructed = Response::constructed_self_context(settings, Some(raw))?;
             if constructed.factor().map(f64::from) != case["prior_response_factor"].as_f64() {
                 return Err("Original self-context constructor differs".into());

@@ -39,7 +39,7 @@ def run(sim,main,value,active,copy_active,self_link=False):
     if section!=b'REALISM':raise ValueError('Unexpected settings section')
     export=next(e for e in main.DIRECTORY_ENTRY_EXPORT.symbols if e.ordinal==57)
     if main.OPTIONAL_HEADER.ImageBase+export.address!=0x209A2EC0:raise ValueError('Unexpected settings getter')
-    ranges=[(0x20AF668F,0x20AF66AB),(0x20AF68C7,0x20AF6905),(0x209A2EC0,0x209A2EC6),(0x20B1C310,0x20B1C430),(0x20B24C86,0x20B24CE8),(0x20AF6380,0x20AF6387)]
+    ranges=[(0x20AF668F,0x20AF66AB),(0x20AF66B9,0x20AF66D9),(0x20AF68C7,0x20AF6905),(0x209A2EC0,0x209A2EC6),(0x20B1C310,0x20B1C430),(0x20B24C86,0x20B24CE8),(0x20AF6380,0x20AF6387)]
     def code(vm,address,_size,_data):
         if not any(a<=address<b for a,b in ranges):raise ValueError('Response trace left instruction whitelist')
     def writes(_vm,_access,a,size,_value,_data):
@@ -56,6 +56,13 @@ def run(sim,main,value,active,copy_active,self_link=False):
         v.reg_write(UC_X86_REG_EBX,ctx)
         v.emu_start(0x20AF668F,0x20AF66AB,count=4096)
         if v.reg_read(UC_X86_REG_EIP)!=0x20AF66AB or f32(ctx+0x38)!=0.:raise ValueError('Constructor zero prefix failed')
+        # Actual constructor argument transfer: +0xB4 is the third raw word.
+        # Use poison so the result cannot come from the fixture's earlier seed.
+        word(ctx+0xB4,0xA5A5A5A5)
+        word(sp+8,other);word(sp+12,0x12345678);word(sp+16,int(active))
+        v.reg_write(UC_X86_REG_EBP,sp);v.reg_write(UC_X86_REG_ESP,sp-0x100)
+        v.emu_start(0x20AF66B9,0x20AF66D9,count=4096)
+        if v.reg_read(UC_X86_REG_EIP)!=0x20AF66D9 or u32(ctx+0xB4)!=int(active) or u32(ctx+0x64)!=other:raise ValueError('Constructor argument/flag transfer differs')
         real(0x209C2330+0x20,value)
         # Resolve this identified import to the pinned original export.
         word(0x20B9A320,0x209A2EC0)
@@ -79,7 +86,7 @@ def run(sim,main,value,active,copy_active,self_link=False):
     if v.reg_read(UC_X86_REG_EIP)!=0x20B24CE8:raise ValueError('Core fragment did not reach endpoint')
     filtered=-12.*4./120.;voltage=max(0.,22.+filtered*0.000555*expected/120.)
     if abs(f64(state+0x94)-voltage)>1e-12 or abs(f64(state+0x9C)-filtered)>1e-12:raise ValueError('Copied General did not drive voltage update')
-    return {'general':value,'context_queries_active':bool(active),'general_copy_active':bool(active if self_link else copy_active),'context_flag_raw':int(active),'copy_context_flag_raw':int(active if self_link else copy_active),'constructor_self_link':self_link,'prior_response_factor':prior,'response_factor':expected,'filtered_net_amps':f64(state+0x9C),'battery_voltage':f64(state+0x94)}
+    return {'general':value,'context_queries_active':bool(active),'general_copy_active':bool(active if self_link else copy_active),'context_flag_raw':int(active),'copy_context_flag_raw':int(active if self_link else copy_active),'constructor_self_link':self_link,'constructor_third_argument':int(active) if self_link else None,'prior_response_factor':prior,'response_factor':expected,'filtered_net_amps':f64(state+0x9C),'battery_voltage':f64(state+0x94)}
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('root',type=Path);p.add_argument('output',type=Path);a=p.parse_args()
