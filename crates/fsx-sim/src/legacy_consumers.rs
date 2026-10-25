@@ -1,12 +1,57 @@
 //! Original ordered consumer-load sum. Slot 0 is not visited; slots 1..=33 are.
 //! Metadata/presence and prior activity need providers; CFG omissions are unknown.
 pub const SLOTS: usize = 34;
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Consumer {
     /// Raw original prior-frame activity word; any nonzero value is active.
     pub active: Option<u32>,
     /// Known configured maximum. None is unresolved, not a fabricated zero.
     pub max_amps: Option<f64>,
+}
+/// Prior equipment activity owned independently of power availability. Fresh
+/// allocation zeros all activity; existing/unknown aircraft must use unknown().
+#[derive(Debug, Clone)]
+pub struct ConsumerState {
+    records: [Consumer; SLOTS],
+}
+impl ConsumerState {
+    pub fn observed(
+        config: &fsx_vehicle::electrical::Electrical,
+        activity: [Option<u32>; SLOTS],
+    ) -> Self {
+        Self {
+            records: authored(config, activity),
+        }
+    }
+    pub fn fresh(config: &fsx_vehicle::electrical::Electrical) -> Self {
+        Self {
+            records: authored(config, [Some(0); SLOTS]),
+        }
+    }
+    pub fn unknown(config: &fsx_vehicle::electrical::Electrical) -> Self {
+        Self {
+            records: authored(config, [None; SLOTS]),
+        }
+    }
+    pub fn records(&self) -> &[Consumer; SLOTS] {
+        &self.records
+    }
+    /// Original equipment adapter activation/deactivation normalizes to 1/0;
+    /// it does not query voltage or alter other records. None loses observation.
+    pub fn set_active(&mut self, slot: usize, active: Option<bool>) -> Result<(), String> {
+        let record = self
+            .records
+            .get_mut(slot)
+            .ok_or("Legacy consumer slot must be 0..33")?;
+        record.active = active.map(u32::from);
+        Ok(())
+    }
+    /// The original electrical tail writes only these activity records. Other
+    /// equipment providers retain ownership of their flags between frames.
+    pub fn observe_frame(&mut self, frame: Option<crate::legacy_voltage::FrameStep>) {
+        self.records[1].active = frame.map(|f| u32::from(f.tail.additional_system_active));
+        self.records[5].active = frame.map(|f| u32::from(f.tail.avionics_active));
+    }
 }
 /// Bind only authored maxima to verified slots. Activity is supplied from the
 /// preceding frame; absent CFG keys remain unresolved, not zero or absent gear.

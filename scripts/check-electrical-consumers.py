@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import struct
 from pathlib import Path
 import pefile
 from unicorn.x86_const import UC_X86_REG_ECX,UC_X86_REG_ESP
@@ -44,7 +45,28 @@ def main():
     for seed in range(20):
         records=[{'active':0 if (i+seed)%3==0 else (2 if i%2 else 1),'max_amps':(1e6 if i%5==0 else (1e-10 if i%5==1 else (i+seed)/8.))} for i in range(34)]
         cases.append(run(image,base,records))
-    a.output.mkdir();(a.output/'report.json').write_text(json.dumps({'schema':1,'source':'bounded-original-electrical-consumers','sha256':_tail.SHA256,'cases':cases,'scope':'original ordered slots 1..33 with explicit prior activity/metadata; slot0 ignored; no aircraft presence/default or activity-generation inference'},indent=2)+'\n',encoding='utf-8')
-    print(f'PASS: {len(cases)} original ordered consumer sums; slot 0 ignored, raw nonzero activity and sequential rounding')
+    activity_cases=[activity(image,base,slot,previous,enabled) for slot in range(34) for previous in (0,2,0xFFFFFFFF) for enabled in (False,True)]
+    a.output.mkdir();(a.output/'report.json').write_text(json.dumps({'schema':2,'source':'bounded-original-electrical-consumers','sha256':_tail.SHA256,'cases':cases,'activity_cases':activity_cases,'scope':'original ordered sum and equipment adapter activity setters; explicit slots/metadata, no live activation scheduler or aircraft presence inference'},indent=2)+'\n',encoding='utf-8')
+    print(f'PASS: {len(cases)} original ordered sums / {len(activity_cases)} activity setters; only selected record changes, normalized activity feeds next load')
+
+def activity(image,base,slot,previous,enabled):
+    t=_tail;m=t.Machine(image,base,{'context_flag':True,'mode_query':0,'battery_master':True,'max_battery_voltage':24.,'override_power':False})
+    m.ranges += [(0x20B0DEA0,0x20B0DEBB),(0x20B0DED0,0x20B0DEEB),(0x20B24ED0,0x20B24F3C)]
+    adapter=t.CONTEXT+0xC000;m.word(adapter+0x10,t.STATE)
+    for i in range(34):
+        ptr=t.CONFIG+0x20+i*20;m.real(ptr,7.25);m.word(t.STATE+0xB4+i*12,ptr)
+    m.word(t.STATE+0xAC+slot*12,previous)
+    before=bytes(m.vm.mem_read(t.STATE,0x250))
+    sp=t.STACK+0xF000;m.word(sp,t.SENTINEL);m.word(sp+4,slot)
+    m.vm.reg_write(UC_X86_REG_ESP,sp);m.vm.reg_write(UC_X86_REG_ECX,adapter)
+    m.execute(0x20B0DED0 if enabled else 0x20B0DEA0,sp+8)
+    expected=bytearray(before);struct.pack_into('<I',expected,0xAC+slot*12,int(enabled))
+    if bytes(m.vm.mem_read(t.STATE,0x250))!=bytes(expected):raise ValueError('Activity setter changed unexpected electrical state')
+    m.word(sp,t.SENTINEL);m.vm.reg_write(UC_X86_REG_ESP,sp);m.vm.reg_write(UC_X86_REG_ECX,t.STATE)
+    m.execute(0x20B24ED0,sp+4)
+    load=m.f64(t.STATE+0xA4)
+    if load!=(7.25 if enabled and slot else 0.):raise ValueError('Activity setter did not feed original load')
+    return {'slot':slot,'previous':previous,'enabled':enabled,'active':m.u32(t.STATE+0xAC+slot*12),'load_amps':load}
+
 
 if __name__=='__main__':main()

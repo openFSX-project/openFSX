@@ -275,6 +275,22 @@ pub struct Simulation {
     pub ground_contact: bool,
 }
 impl Simulation {
+    /// Commit physics and equipment history together. Load uses prior records;
+    /// only successful frame outputs replace additional-system/avionics flags.
+    /// Other equipment still needs its real activation provider.
+    pub fn step_with_legacy_consumer_state(
+        &mut self,
+        controls: Controls,
+        dt: f64,
+        consumers: &mut crate::legacy_consumers::ConsumerState,
+        response: crate::legacy_response::Response,
+        tail: Option<crate::legacy_voltage::TailEnvironment>,
+    ) -> Result<Option<crate::legacy_voltage::FrameStep>> {
+        let frame =
+            self.step_with_legacy_consumers(controls, dt, consumers.records(), response, tail)?;
+        consumers.observe_frame(frame);
+        Ok(frame)
+    }
     /// Sum original slots 1..=33 from prior activity before this frame. Providers
     /// own activity/presence and must carry the preceding frame's flags; this
     /// method does not infer omitted circuits or update all equipment activity.
@@ -518,6 +534,102 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::aircraft::own_parameters;
+    #[test]
+    fn consumer_history_commits_tail_flags_after_load_and_preserves_other_equipment() {
+        use crate::legacy_consumers::{self, ConsumerState};
+        use crate::legacy_power::Circuit;
+        use crate::legacy_response::Response;
+        use crate::legacy_voltage::TailEnvironment;
+        use fsx_vehicle::flight_electrical::FlightElectrical;
+        let mut s = Simulation::trimmed(own_parameters(), 50., 300.).unwrap();
+        s.electrical =
+            crate::electrical::CircuitNetwork::new_fresh_legacy(s.parameters.electrical.clone())
+                .unwrap();
+        let config = s.electrical.source_configuration();
+        let mut consumers = ConsumerState::fresh(&config);
+        consumers.set_active(7, Some(true)).unwrap();
+        let mut switches = FlightElectrical::default();
+        switches.battery = Some(true);
+        switches.generators[0] = Some(false);
+        s.electrical.apply_switches(&switches);
+        s.electrical
+            .update_generator_from_fsx_steam_signals(Some(true), Some(0.), Some(false))
+            .unwrap();
+        let response = Response::observed(Some(1.)).unwrap();
+        let mut tail = TailEnvironment {
+            generator_enabled: true,
+            incoming_bus_voltage: [24.; 8],
+            incoming_generator_amps: [0.; 4],
+            battery_failed: false,
+            avionics_master: true,
+            voltage_mode: true,
+            override_power: false,
+            additional_system_circuit: Some(Circuit {
+                bus: 0,
+                min_voltage: 16.8,
+                forced_off: false,
+            }),
+            avionics_circuit: Some(Circuit {
+                bus: 0,
+                min_voltage: 16.8,
+                forced_off: false,
+            }),
+        };
+        let mut direct = s.electrical.clone();
+        for expected_load in [5., 25., 25.] {
+            assert_eq!(
+                legacy_consumers::sum(consumers.records()).unwrap(),
+                Some(expected_load)
+            );
+            let expected = direct
+                .step_legacy_electrical_frame(
+                    STEP,
+                    Some(expected_load),
+                    response.factor(),
+                    Some(tail),
+                )
+                .unwrap()
+                .unwrap();
+            let got = s
+                .step_with_legacy_consumer_state(
+                    s.controls,
+                    STEP,
+                    &mut consumers,
+                    response,
+                    Some(tail),
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(got, expected);
+            assert_eq!(consumers.records()[1].active, Some(1));
+            assert_eq!(consumers.records()[5].active, Some(1));
+            assert_eq!(consumers.records()[7].active, Some(1));
+            tail.incoming_bus_voltage = got.tail.bus_voltage;
+            tail.incoming_generator_amps = got.tail.generator_amps;
+        }
+        let before = *consumers.records();
+        let time = s.time;
+        let mut invalid = s.controls;
+        invalid.pitch = f64::NAN;
+        assert!(s
+            .step_with_legacy_consumer_state(invalid, STEP, &mut consumers, response, Some(tail))
+            .is_err());
+        assert_eq!(consumers.records(), &before);
+        assert_eq!(s.time, time);
+        assert!(s
+            .step_with_legacy_consumer_state(
+                s.controls,
+                STEP,
+                &mut consumers,
+                Response::default(),
+                Some(tail)
+            )
+            .unwrap()
+            .is_none());
+        assert_eq!(consumers.records()[1].active, None);
+        assert_eq!(consumers.records()[5].active, None);
+        assert_eq!(consumers.records()[7].active, Some(1));
+    }
     #[test]
     fn provider_electrical_frame_commits_once_with_flight_and_rolls_back_on_errors() {
         use crate::legacy_response::Response;

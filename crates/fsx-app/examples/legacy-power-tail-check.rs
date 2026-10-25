@@ -146,7 +146,7 @@ fn main() -> Result<(), String> {
         sequences = cases.len();
         for c in cases {
             let cfg = &c["configuration"];
-            let config = Electrical {
+            let mut config = Electrical {
                 max_battery_voltage: Some(number(cfg, "max_battery_voltage")?),
                 generator_voltage: Some(number(cfg, "generator_voltage")?),
                 max_generator_amps: Some(number(cfg, "max_generator_amps")?),
@@ -156,8 +156,27 @@ fn main() -> Result<(), String> {
             core.seed(Some(state(&c["initial"])?))?;
             let mut buses = [0.; 8];
             let mut amps = [0.; 4];
-            let mut av_active = false;
-            let mut nav_active = false;
+            for (key, field, maximum) in [
+                (
+                    "additional_system",
+                    "additional_system_circuit",
+                    "additional_system_max_amps",
+                ),
+                ("avionics_bus", "avionics_circuit", "avionics_max_amps"),
+            ] {
+                let record = circuit(&c[field])?.ok_or("Missing declared sequence circuit")?;
+                config.circuits.insert(
+                    key.into(),
+                    fsx_vehicle::electrical::Circuit {
+                        bus: fsx_vehicle::electrical::Bus::from_index(
+                            u8::try_from(record.bus).map_err(|e| e.to_string())?,
+                        )?,
+                        max_amps: number(c, maximum)?,
+                        min_voltage: record.min_voltage,
+                    },
+                );
+            }
+            let mut consumers = fsx_sim::legacy_consumers::ConsumerState::fresh(&config);
             let frames = c["frames"]
                 .as_array()
                 .filter(|v| !v.is_empty() && v.len() <= 300)
@@ -174,15 +193,8 @@ fn main() -> Result<(), String> {
                 {
                     compare(a, b, &mut frame_error)?;
                 }
-                let load = if av_active {
-                    number(c, "avionics_max_amps")?
-                } else {
-                    0.
-                } + if nav_active {
-                    number(c, "additional_system_max_amps")?
-                } else {
-                    0.
-                };
+                let load = fsx_sim::legacy_consumers::sum(consumers.records())?
+                    .ok_or("Unknown sequence load")?;
                 compare(load, number(frame, "load_used_amps")?, &mut frame_error)?;
                 let input = &frame["input"];
                 let context = context(&frame["context"])?;
@@ -244,8 +256,7 @@ fn main() -> Result<(), String> {
                 }
                 buses = got.tail.bus_voltage;
                 amps = got.tail.generator_amps;
-                av_active = got.tail.avionics_active;
-                nav_active = got.tail.additional_system_active;
+                consumers.observe_frame(Some(got));
                 frames_checked += 1;
             }
         }

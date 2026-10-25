@@ -506,6 +506,20 @@ fn main() -> Result<(), String> {
     };
     let mut fresh = fsx_sim::electrical::CircuitNetwork::new_fresh_legacy(configuration.clone())?;
     let resolved = fresh.source_configuration();
+    let mut equipment = fsx_sim::legacy_consumers::ConsumerState::fresh(&resolved);
+    ensure(
+        fsx_sim::legacy_consumers::sum(equipment.records())? == Some(0.),
+        "Fresh equipment activity was not zero",
+    )?;
+    equipment.set_active(7, Some(true))?;
+    equipment.set_active(22, Some(true))?;
+    ensure(
+        fsx_sim::legacy_consumers::sum(equipment.records())?
+            == Some(
+                resolved.circuits["pitot_heat"].max_amps + resolved.circuits["light_nav"].max_amps,
+            ),
+        "Explicit C172 activity did not feed authored circuit loads",
+    )?;
     for key in fsx_vehicle::electrical::LEGACY_CONSUMER_KEYS {
         ensure(
             resolved.circuits.contains_key(key),

@@ -1509,3 +1509,32 @@ JSON reference parsing enables serde_json float_roundtrip to recover original
 f64 values exactly, including 19.599999999999998 V. A one-ULP rounding in the
 former parser caused exact default comparison to fail; the strict voltage
 predicate and reference tolerance were not relaxed.
+
+### Equipment activity history
+
+Schema 2 of check-electrical-consumers.py adds 204 original equipment-adapter
+activation/deactivation calls to the 156 original sum cases. Each selected slot
+0..33 starts at raw word 0/2/0xFFFFFFFF; the method writes 1 or 0 without querying
+power. Whole electrical-state buffers are compared to ensure only the chosen
+word changes. A subsequent original sum verifies the load effect, including the
+ignored slot 0. legacy-consumers-check compares both setters and resulting loads.
+
+legacy_consumers::ConsumerState binds supplied configuration maxima and carries
+activity between frames. fresh establishes original constructor zeros; observed
+accepts explicit raw words; unknown represents an existing unresolved aircraft.
+set_active(slot, Option<bool>) normalizes known activation to 1/0, loses knowledge
+for None and rejects slots beyond 33 without mutation. Power availability is
+separate: the adapter does not turn an availability query into active load.
+
+observe_frame accepts a successfully computed electrical frame and replaces only
+slot 1 additional_system and slot 5 avionics_bus activity, matching the original
+tail. None invalidates those two observations; other device flags are preserved.
+The original controlled 68-frame replay uses this state to compute each next
+load and checks source/failure/toggle lag against actual original instructions.
+
+Simulation.step_with_legacy_consumer_state sums prior records, commits the
+electrical/physics interval, then records its tail outputs. Failed intervals do
+not change the table. Explicit provider activation remains necessary for other
+equipment. Recreate the table with a fresh network/reset or reload its observed
+state; the simulation does not own this external table's lifecycle. This adds no
+automatic viewer scheduler, live RPM, failure/mode default or switch-to-load guess.

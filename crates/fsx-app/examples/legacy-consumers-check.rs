@@ -1,5 +1,6 @@
 //! Compare original consumer sums without inventing aircraft equipment.
-use fsx_sim::legacy_consumers::{self, Consumer, SLOTS};
+use fsx_sim::legacy_consumers::{self, Consumer, ConsumerState, SLOTS};
+use fsx_vehicle::electrical::{Bus, Circuit, Electrical, LEGACY_CONSUMER_KEYS};
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
 fn main() -> Result<(), String> {
@@ -19,7 +20,7 @@ fn main() -> Result<(), String> {
         return Err("Reference exceeds byte budget".into());
     }
     let report: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    if report["schema"] != 1
+    if !matches!(report["schema"].as_u64(), Some(1..=2))
         || report["source"] != "bounded-original-electrical-consumers"
         || report["sha256"] != "4bb9ef1b9669bb48676ef16ede667a2c590af27943eb34f03f09332a5417ae0e"
     {
@@ -84,8 +85,65 @@ fn main() -> Result<(), String> {
     if legacy_consumers::sum(&inputs).is_ok() {
         return Err("Invalid supported-slot metadata accepted".into());
     }
+    let mut setters_checked = 0;
+    if report["schema"] == 2 {
+        let cases = report["activity_cases"]
+            .as_array()
+            .filter(|v| !v.is_empty() && v.len() <= 300)
+            .ok_or("Invalid setter case budget")?;
+        let mut config = Electrical::default();
+        for key in LEGACY_CONSUMER_KEYS {
+            config.circuits.insert(
+                key.into(),
+                Circuit {
+                    bus: Bus::Main,
+                    max_amps: 7.25,
+                    min_voltage: 17.,
+                },
+            );
+        }
+        for case in cases {
+            let slot = usize::try_from(case["slot"].as_u64().ok_or("Missing setter slot")?)
+                .map_err(|e| e.to_string())?;
+            if slot >= SLOTS {
+                return Err("Setter slot outside budget".into());
+            }
+            let previous = u32::try_from(case["previous"].as_u64().ok_or("Missing previous word")?)
+                .map_err(|e| e.to_string())?;
+            let mut words = [Some(0); SLOTS];
+            words[slot] = Some(previous);
+            let mut state = ConsumerState::observed(&config, words);
+            state.set_active(
+                slot,
+                Some(case["enabled"].as_bool().ok_or("Missing enabled")?),
+            )?;
+            if state.records()[slot].active.map(u64::from) != case["active"].as_u64()
+                || legacy_consumers::sum(state.records())? != case["load_amps"].as_f64()
+            {
+                return Err("Original setter/load differs".into());
+            }
+            for (i, record) in state.records().iter().enumerate() {
+                if i != slot && record.active != Some(0) {
+                    return Err("Setter changed another slot".into());
+                }
+            }
+            setters_checked += 1;
+        }
+        let mut state = ConsumerState::fresh(&config);
+        if state.set_active(SLOTS, Some(true)).is_ok()
+            || legacy_consumers::sum(state.records())? != Some(0.)
+        {
+            return Err("Invalid setter mutated state".into());
+        }
+        state.set_active(7, None)?;
+        if legacy_consumers::sum(state.records())?.is_some()
+            || legacy_consumers::sum(ConsumerState::unknown(&config).records())?.is_some()
+        {
+            return Err("Unknown equipment became active/off".into());
+        }
+    }
     fs::create_dir(&output).map_err(|e| e.to_string())?;
-    fs::write(output.join("report.json"),serde_json::to_vec_pretty(&json!({"schema":1,"original_cases":cases.len(),"all_loads_equal":true,"unknown_and_invalid_inputs_checked":true,"scope":"explicit 34-slot prior activity/metadata, ordered original slots 1..33; no presence/default inference"})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
-    println!("PASS: {} original consumer sums equal; ignored slot, unknown activity/metadata and invalid input checked",cases.len());
+    fs::write(output.join("report.json"),serde_json::to_vec_pretty(&json!({"schema":2,"original_cases":cases.len(),"activity_setters_checked":setters_checked,"all_loads_equal":true,"unknown_and_invalid_inputs_checked":true,"scope":"original 34-slot equipment activity setters and ordered sum; no live activation scheduler"})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    println!("PASS: {} original sums / {setters_checked} setters equal; ignored slot, unknown metadata/activity and invalid input checked",cases.len());
     Ok(())
 }

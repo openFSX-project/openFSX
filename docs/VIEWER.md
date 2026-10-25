@@ -919,6 +919,15 @@ missing providers invalidate electrical knowledge. The viewer still uses ordinar
 step until actual live providers are available; this API supplies no default RPM,
 load, mode or failure state. Paused frames make no simulation call.
 
+ConsumerState now carries original equipment activity across explicit provider
+frames. Activation/deactivation changes one flag without querying voltage;
+the electrical frame feeds additional_system/avionics_bus activity back into the
+next load. step_with_legacy_consumer_state commits this feedback only after a
+successful combined interval. Fresh state zeros flags; an existing aircraft
+can start unknown. Other device activation and the table's reset/reload lifecycle
+remain caller-owned. No new viewer switch or automatic equipment scheduling is
+enabled by this API.
+
 ## Visibility inspection
 
 VISL conditions link to scene nodes through SGVL. The reader supports direct

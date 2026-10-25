@@ -10,6 +10,39 @@ changes. Keep the full FSX 1:1 objective active until its original scope is met.
 
 ## Current stage — 26 October 2026
 
+After `b29a3a3`, original equipment-adapter activate/deactivate methods are checked
+and ported into legacy_consumers::ConsumerState. Each method writes exactly 1/0
+to one selected activity word; it does not query supply, change another record
+or establish physical current. 204 guarded original cases cover all 34 slots,
+both operations and preceding words 0/2/0xFFFFFFFF. Each then executes the original
+load sum, checking ignored slot 0 and next-load effects. The 156 prior sum cases
+still pass. Reference: target/legacy-consumer-activity-reference-02/report.json;
+comparison: target/legacy-consumer-activity-comparison-02/report.json.
+
+ConsumerState supports explicit fresh zeros, observed raw words or unknown
+existing activity with supplied configuration metadata. set_active changes only
+one flag; None loses knowledge. observe_frame records the original electrical
+tail's additional_system (slot 1) and avionics_bus (slot 5) results for the next
+load. Other equipment providers retain their flags. Unknown completed frames
+invalidate only these tail-owned observations. Recreate this state alongside a
+fresh network/reset; no automatic external-table lifecycle is assumed.
+
+Simulation.step_with_legacy_consumer_state commits physics/network and these
+activity results together, after summing the preceding records. Any failed
+physics/electrical interval leaves the equipment table untouched. The original
+68-frame comparison now uses ConsumerState, not separately reimplemented flag
+booleans: all states/load/buses match within 1e-9 (maximum about 4.44e-16) in
+target/legacy-consumer-state-frames-comparison-01/report.json. A coupled-flight
+regression verifies prior-load ordering, retention of pitot activity, rollback
+and unknown-response behavior. The installed C172 check validates fresh zero
+activity and explicit pitot/nav-light activation against its configured maxima.
+Workspace tests pass in target/legacy-consumer-state-tests-01.log; installed
+checks pass in target/legacy-consumer-state-installed-01.log. Formatting,
+architecture and generated docs checks pass. This ports the equipment adapter
+and history bridge; live activation scheduling, RPM, mode/failure providers and
+automatic viewer binding remain open. The full Goal remains active.
+
+### Previous circuit-defaults stage — 26 October 2026
 After `710c654`, the pinned circuit initializer's missing-key defaults are
 ported. The guarded triple reference now captures initialized lookup values and
 runs missing-key lookups without writing their destinations. Five effective
