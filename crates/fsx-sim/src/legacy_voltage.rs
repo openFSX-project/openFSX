@@ -1,5 +1,5 @@
-//! Versioned single-piston, zero-auxiliary voltage-core prefix. This ends before
-//! battery-failure/avionics processing and does not establish loaded bus state.
+//! Versioned single-piston initialization and zero-auxiliary voltage core.
+//! advance() is the prefix; advance_frame() composes the failure/avionics tail.
 use fsx_vehicle::electrical::Electrical;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,6 +41,9 @@ pub struct Step {
 /// mean explicitly absent equipment; unresolved presence needs no frame call.
 #[derive(Debug, Clone, Copy)]
 pub struct TailEnvironment {
+    /// Original generator-map bit. Disabled equipment skips the voltage write;
+    /// an enabled but offline source writes zero when its nominal rating > 0.
+    pub generator_enabled: bool,
     pub incoming_bus_voltage: [f64; 8],
     pub incoming_generator_amps: [f64; 4],
     pub battery_failed: bool,
@@ -61,6 +64,44 @@ pub struct Core {
     state: Option<State>,
 }
 impl Core {
+    /// Original state constructor, before aircraft initialization. Default
+    /// remains unknown for callers that have not observed a fresh allocation.
+    pub fn constructed() -> Self {
+        Self {
+            state: Some(State {
+                battery_voltage: 0.,
+                filtered_net_amps: 0.,
+                generator_amps: 0.,
+            }),
+        }
+    }
+    /// Original initializer replaces battery voltage and all eight bus voltages
+    /// with the effective maximum. It preserves prior filter/allocation history;
+    /// only constructed() establishes fresh zeros. Unknown history stays unknown.
+    /// Zero rating is valid here, although the dynamic core rejects that case.
+    pub fn initialize_rated_voltage(
+        &mut self,
+        config: &Electrical,
+    ) -> Result<[Option<f64>; 8], String> {
+        if config
+            .max_battery_voltage
+            .is_some_and(|v| !v.is_finite() || !(0. ..=1000.).contains(&v))
+        {
+            return Err("Invalid legacy initialization voltage".into());
+        }
+        match config.max_battery_voltage {
+            Some(voltage) => {
+                if let Some(state) = &mut self.state {
+                    state.battery_voltage = voltage;
+                }
+                Ok([Some(voltage); 8])
+            }
+            None => {
+                self.state = None;
+                Ok([None; 8])
+            }
+        }
+    }
     /// Compose the checked prefix and tail atomically for known providers. A
     /// failure clears the stored allocated current before the next prefix sum.
     pub fn advance_frame(
@@ -71,10 +112,11 @@ impl Core {
         dt: f64,
     ) -> Result<Option<FrameStep>, String> {
         if tail.is_some_and(|t| {
-            t.incoming_bus_voltage
-                .iter()
-                .chain(t.incoming_generator_amps.iter())
-                .any(|v| !v.is_finite())
+            (!t.generator_enabled && input.generator_online == Some(true))
+                || t.incoming_bus_voltage
+                    .iter()
+                    .chain(t.incoming_generator_amps.iter())
+                    .any(|v| !v.is_finite())
                 || !crate::legacy_power::valid_circuit(t.avionics_circuit)
                 || !crate::legacy_power::valid_circuit(t.navcom1_circuit)
         }) {
@@ -93,11 +135,13 @@ impl Core {
         let nominal = config
             .generator_voltage
             .ok_or("Missing checked generator rating")?;
-        buses[4] = if input.generator_online == Some(true) && nominal > 0. {
-            nominal
-        } else {
-            0.
-        };
+        if tail.generator_enabled && nominal > 0. {
+            buses[4] = if input.generator_online == Some(true) {
+                nominal
+            } else {
+                0.
+            };
+        }
         let mut amps = tail.incoming_generator_amps;
         amps[0] = prefix.state.generator_amps;
         let tail = crate::legacy_power::finish(crate::legacy_power::TailInput {
@@ -236,6 +280,63 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn first_frame_preserves_generator_voltage_only_when_original_skips_the_write() {
+        for (nominal, enabled, expected) in [(0., true, 24.), (28., false, 24.), (28., true, 0.)] {
+            let cfg = Electrical {
+                max_battery_voltage: Some(24.),
+                generator_voltage: Some(nominal),
+                max_generator_amps: Some(60.),
+                ..Default::default()
+            };
+            let mut core = Core::constructed();
+            let buses = core
+                .initialize_rated_voltage(&cfg)
+                .unwrap()
+                .map(Option::unwrap);
+            let tail = TailEnvironment {
+                generator_enabled: enabled,
+                incoming_bus_voltage: buses,
+                incoming_generator_amps: [0.; 4],
+                battery_failed: false,
+                avionics_master: false,
+                voltage_mode: true,
+                override_power: false,
+                avionics_circuit: None,
+                navcom1_circuit: None,
+            };
+            let input = Inputs {
+                generator_online: Some(false),
+                battery_master: Some(false),
+                load_amps: Some(0.),
+                response_factor: Some(1.),
+            };
+            let frame = core
+                .advance_frame(&cfg, input, Some(tail), 1. / 120.)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                frame.tail.bus_voltage,
+                [0., 0., 0., 24., expected, 24., 24., 24.]
+            );
+            let before = core.state();
+            assert!(core
+                .advance_frame(
+                    &cfg,
+                    Inputs {
+                        generator_online: Some(true),
+                        ..input
+                    },
+                    Some(TailEnvironment {
+                        generator_enabled: false,
+                        ..tail
+                    }),
+                    1. / 120.
+                )
+                .is_err());
+            assert_eq!(core.state(), before);
+        }
+    }
     fn config() -> Electrical {
         Electrical {
             max_battery_voltage: Some(24.),
@@ -364,6 +465,7 @@ mod tests {
             forced_off: false,
         };
         let tail = TailEnvironment {
+            generator_enabled: true,
             incoming_bus_voltage: [0.; 8],
             incoming_generator_amps: [0.; 4],
             battery_failed: true,

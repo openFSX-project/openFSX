@@ -486,6 +486,7 @@ fn main() -> Result<(), String> {
     }))?;
     let authored_avionics = &configuration.circuits["avionics_bus"];
     let tail = fsx_sim::legacy_voltage::TailEnvironment {
+        generator_enabled: true,
         incoming_bus_voltage: [0.; 8],
         incoming_generator_amps: [0.; 4],
         battery_failed: false,
@@ -503,6 +504,53 @@ fn main() -> Result<(), String> {
             forced_off: false,
         }),
     };
+    let mut fresh = fsx_sim::electrical::CircuitNetwork::new_fresh_legacy(configuration.clone())?;
+    let initial_voltage = effective_sources
+        .max_battery_voltage
+        .ok_or("Missing fresh rating")?;
+    ensure(
+        fresh.legacy_voltage_state()
+            == Some(fsx_sim::legacy_voltage::State {
+                battery_voltage: initial_voltage,
+                filtered_net_amps: 0.,
+                generator_amps: 0.,
+            })
+            && fresh.switches().battery == Some(false)
+            && fresh.battery.charge_fraction().is_none(),
+        "Fresh installed configuration did not initialize original state",
+    )?;
+    for bus in [
+        Bus::Main,
+        Bus::Avionics,
+        Bus::Battery,
+        Bus::HotBattery,
+        Bus::Generator(1),
+        Bus::Generator(2),
+        Bus::Generator(3),
+        Bus::Generator(4),
+    ] {
+        ensure(
+            fresh.bus_voltage(bus)? == Some(initial_voltage),
+            "Fresh original bus voltage differs",
+        )?;
+    }
+    fresh.apply_switches(&saved);
+    fresh.update_generator_from_saved_flt(Some(true), Some(false))?;
+    let fresh_frame = fresh
+        .step_legacy_electrical_frame(
+            1. / 120.,
+            Some(12.),
+            Some(1.),
+            Some(fsx_sim::legacy_voltage::TailEnvironment {
+                incoming_bus_voltage: [initial_voltage; 8],
+                ..tail
+            }),
+        )?
+        .ok_or("Unknown fresh fixture frame")?;
+    ensure(
+        fresh_frame.tail.bus_voltage[0] == 28. && fresh_frame.tail.bus_voltage[1] == 28.,
+        "Fresh fixture did not reach powered frame",
+    )?;
     let healthy = frame_fixture
         .step_legacy_electrical_frame(1. / 120., Some(12.), Some(1.), Some(tail))?
         .ok_or("Unknown explicit frame fixture")?;
@@ -538,7 +586,8 @@ fn main() -> Result<(), String> {
     )?;
     let controlled_frame = json!({"scope":"explicit seed/load/response/mode/failure/bus observations and synthetic NAVCOM presence; not default flight providers",
         "healthy_main_voltage":healthy.tail.bus_voltage[0],"healthy_avionics_voltage":healthy.tail.bus_voltage[1],"failed_bus_voltage":failed.tail.bus_voltage,"failure_preserves_battery_state":true,"unknown_context_clears_bus_observation":true});
-    let report = json!({"schema":9,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
+    let report = json!({"schema":10,"source":"legacy-electrical-authored-circuit-check","authored_circuits":circuits,"max_battery_voltage":configuration.max_battery_voltage,
+        "fresh_allocation_fixture":{"initial_all_bus_voltage":initial_voltage,"initial_battery_master":false,"initial_filter_and_current":0.,"charge_fraction":null,"first_main_voltage":fresh_frame.tail.bus_voltage[0],"first_avionics_voltage":fresh_frame.tail.bus_voltage[1],"scope":"original fresh initialization, then saved FLT switches/RPM and explicit load/response/failure/context/NAVCOM inputs; not automatic flight restoration"},
         "effective_source_ratings":{"profile":"FsxSteam62615SinglePiston","max_battery_voltage":effective_sources.max_battery_voltage,"generator_voltage":effective_sources.generator_voltage,"max_generator_amps":effective_sources.max_generator_amps,
             "reference":"bounded original scalar initialization; not live generation or measured bus voltage","capacity_and_charge_limit_resolved":false},
         "battery_max_capacity_amph":configuration.battery_max_capacity_amph,"battery_charging_current":configuration.battery_charging_current,

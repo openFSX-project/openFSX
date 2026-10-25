@@ -1271,7 +1271,10 @@ controlled method calls, not all aircraft loads, environments or live FSX parity
 legacy_voltage::Core.advance_frame stages prefix and tail together. The tail's
 post-failure generator current becomes the next core sum; internal battery/filter
 state is preserved through a failure. TailEnvironment requires known surrounding
-bus/current observations, circuit presence, failure/master state and mode/override.
+bus/current observations, source-map generator_enabled, circuit presence,
+failure/master state and mode/override. Disabled-source or zero-nominal admission
+preserves the incoming generator bus voltage; an enabled but offline positive
+nominal source writes zero. An online/disabled contradiction is rejected.
 Unresolved context loses frame knowledge; invalid environment fails atomically.
 The low-level prefix API remains separate and does not publish loaded buses.
 
@@ -1283,4 +1286,51 @@ missing providers clear prior observations to None. Invalid input preserves both
 state and observations. The independent Coulomb-current request/flow is cleared;
 voltage state is not converted into a charge fraction. Ordinary Simulation.step
 still does not call this path, choose factor 1, infer mode/override, manufacture
-initial voltage, reuse FLT RPM indefinitely or resolve omitted equipment defaults.
+initial voltage for an existing aircraft, reuse FLT RPM indefinitely or resolve
+omitted equipment defaults.
+
+### Original electrical allocation and initialization
+
+```powershell
+python scripts/check-electrical-initialization.py FSX/sim1.dll target/electrical-initialization-reference
+cargo run -p fsx-app --example legacy-electrical-initialization-check --locked -- target/electrical-initialization-reference/report.json target/electrical-initialization-comparison
+```
+
+Use new output directories. The reference uses the same version/hash as the
+electrical tail checker and reuses its guarded emulation harness. It executes
+the complete original state constructor against poisoned memory and the complete
+initializer, with context service, failure-object factories and generator naming
+injected at checked ABIs. It exports only numeric observations and metadata.
+40 cases cover fresh/reused states, max battery 0/12/24/28/1000 V, generator
+nominal 0/28 V and generator-map enabled/disabled. The constructor clears scalar
+voltages/currents/filter/load/master/count and consumer records. Initialization
+sets battery voltage and every bus voltage to the effective maximum, preserving
+existing filter/current/load/master/count state. Generator bus pointers alias
+the four internal voltage/current records.
+
+32 fresh/reused positive-battery cases execute a first full frame with known
+factor 1, zero auxiliary, retained battery-master position, generator/avionics
+switches off and explicitly zero circuit metadata. These are
+controlled fixtures, not inferred omitted aircraft equipment. Rust matches all
+compared initialization/first-frame values exactly. This exposed a prior full-frame
+port bug: disabled or zero-nominal generation leaves its previous bus observation
+intact. TailEnvironment.generator_enabled now distinguishes this from an enabled
+but offline source, which writes zero for a positive nominal rating. Generator
+bus readings may thus retain initial battery voltage even when not admitted.
+
+legacy_voltage::Core.constructed establishes the original fresh zero history;
+Default still means unknown. initialize_rated_voltage updates battery and bus
+voltages from the effective rating and retains known filter/current history.
+An unknown history stays unknown even when initial bus voltages are known.
+Missing ratings invalidate knowledge, invalid ratings fail atomically. Zero is
+valid for initialization; the dynamic voltage core still excludes zero maximum.
+
+CircuitNetwork.new_fresh_legacy creates this fresh state using the pinned
+single-piston source profile. All buses initially equal max battery voltage,
+battery master and generator admission are off, and Coulomb charge is unknown.
+Call only for a genuinely fresh allocation, before applying flight state. This
+is not an assumption about an already running aircraft or a saved-flight restore.
+The installed checker proves C172 fresh 24 V buses, followed by Lesson 1 switches
+and RPM plus explicit load/response/context/failure/NAVCOM inputs reaching 28 V
+main/avionics. Existing construction/reset still leaves observations unknown;
+ordinary physics has no automatic new initialization or legacy frame invocation.

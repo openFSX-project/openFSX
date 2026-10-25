@@ -34,6 +34,23 @@ pub struct CircuitNetwork {
     voltage_core: crate::legacy_voltage::Core,
 }
 impl CircuitNetwork {
+    /// Explicit fresh original allocation + initialization, using the pinned
+    /// FSX Steam single-piston source profile. This is not FLT restoration or a
+    /// guess about an already running aircraft. Initial bus readings precede
+    /// admission/failure/avionics: even offline generator buses contain the
+    /// battery maximum until the first frame. No Coulomb charge is inferred.
+    pub fn new_fresh_legacy(configuration: Electrical) -> Result<Self, String> {
+        let mut network = Self::new_with_source_defaults(
+            configuration,
+            SourceDefaults::FsxSteam62615SinglePiston,
+        )?;
+        let mut core = crate::legacy_voltage::Core::constructed();
+        network.voltage = core.initialize_rated_voltage(&network.source_configuration())?;
+        network.voltage_core = core;
+        network.switches.battery = Some(false);
+        network.generator.set_online(Some(false));
+        Ok(network)
+    }
     pub fn new(configuration: Electrical) -> Result<Self, String> {
         if configuration.circuits.len() > 256 {
             return Err("Electrical network exceeds circuit budget".into());
@@ -775,6 +792,7 @@ mod tests {
         }))
         .unwrap();
         let tail = crate::legacy_voltage::TailEnvironment {
+            generator_enabled: true,
             incoming_bus_voltage: [0.; 8],
             incoming_generator_amps: [0.; 4],
             battery_failed: false,

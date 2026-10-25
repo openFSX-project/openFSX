@@ -850,8 +850,8 @@ The installed checker adds eight explicit single-source allocation cases. For
 14 A request; excess demand caps at 60 A. An above-maximum voltage fixture verifies
 that the original allocation has no zero floor. These outputs are neither
 measured current nor a solved battery terminal current. Source current is not
-fed automatically into charge or loaded bus voltage; original frame ordering and
-filtering still require implementation.
+fed automatically into charge or loaded bus voltage; live input providers and
+automatic flight hookup remain incomplete.
 A fifth mode traces the original voltage-core prefix, and a separate Rust checker
 compares every recorded state/value:
 
@@ -881,7 +881,8 @@ voltage and are distinct from physical supply.
 The installed checker uses labeled known inputs to publish 28 V main/avionics,
 then zero on battery failure and None when context is lost. This explicit frame
 API does not yet run automatically in flight; response factor, context mode,
-seed, live RPM and complete load providers remain unresolved. The power override
+live RPM and complete load providers remain unresolved. Fresh state has a checked
+initialization path below; saved/running state still needs a provider. The power override
 is now traced to electric_always_available: 16 bounded CFG-load/predicate checks
 prove missing keys preserve its previous process value. PowerOverride retains
 that value across aircraft loads, with unknown startup state; viewer ownership
@@ -890,6 +891,23 @@ presence is not expansion of omitted C172 CFG defaults.
 Actual engine/load providers, C172 topology and remaining legacy defaults still
 need implementation before live OAT/V binding. FLT loading is an explicit API and
 checker path; it does not yet restore a flight into the viewer.
+
+Fresh-allocation and repeated-initialization behavior can be checked with:
+
+```powershell
+python scripts/check-electrical-initialization.py FSX/sim1.dll target/electrical-initialization-reference
+cargo run -p fsx-app --example legacy-electrical-initialization-check --locked -- target/electrical-initialization-reference/report.json target/electrical-initialization-comparison
+```
+
+40 original initializations and 32 first frames match the Rust checks exactly.
+The constructor zeros current/filter history; initialization puts effective max
+battery voltage on all eight buses while preserving existing history. A disabled
+or zero-nominal generator skips its bus voltage write, so the preceding voltage
+can persist while admission is off. The explicit new_fresh_legacy network factory
+uses this fresh path; it establishes no Coulomb charge or saved-flight state.
+The installed C172 checker also exercises fresh 24 V state before explicit-input
+28 V generation. The viewer does not select this factory or legacy frame timing
+automatically; actual mode/response/RPM/load providers remain necessary.
 
 ## Visibility inspection
 

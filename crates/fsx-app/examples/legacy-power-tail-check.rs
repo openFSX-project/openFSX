@@ -196,6 +196,7 @@ fn main() -> Result<(), String> {
                             response_factor: Some(number(input, "response_factor")? as f32),
                         },
                         Some(TailEnvironment {
+                            generator_enabled: true,
                             incoming_bus_voltage: buses,
                             incoming_generator_amps: amps,
                             battery_failed: boolean(input, "battery_failed")?,

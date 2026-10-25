@@ -3,7 +3,59 @@
 The target remains FSX 1:1 across interface, flight behavior, content and APIs.
 This is a long-term acceptance target; no subsystem claims complete parity.
 
-## Current stage — 24 October 2026
+## Current stage — 25 October 2026
+
+After `0ed7c4b`, fresh electrical allocation and complete initialization are
+checked against the pinned original. The original constructor runs on poisoned
+memory and clears bus/current/filter/load/master/count scalars and consumer
+records. The initializer sets stored battery voltage and all eight bus voltages
+to effective max_battery_voltage. It preserves current/filter/load/master/count
+history when called on an existing object; initialization is not a fresh reset.
+
+40 original cases cover fresh/reused state, 0/12/24/28/1000 V battery ratings,
+0/28 V generator ratings and enabled/disabled generator configuration. Context,
+failure-object factories and generator naming are guarded injected services.
+32 positive-rating fresh/reused cases then execute one full electrical frame
+using explicit factor 1, zero auxiliary, retained battery-master state and zero
+circuit metadata. All
+compared Rust initialization and first-frame values match exactly.
+
+The first-frame comparison found a port bug hidden by earlier zero incoming
+generator-bus fixtures: original admission skips writing generator bus voltage
+when nominal generation is zero or the source-map bit is disabled. The port
+now preserves its previous observation in those branches. TailEnvironment
+requires generator_enabled explicitly; an enabled offline positive-rated source
+still writes zero. An online/disabled contradiction is rejected atomically.
+These initialized or retained voltages are legacy observations, not energy
+delivery inferred from generator admission.
+
+Core.constructed creates the checked zero state. initialize_rated_voltage
+replaces voltage, preserves known filter/current history and leaves missing
+history unknown. Missing ratings clear knowledge; invalid ratings are atomic.
+CircuitNetwork.new_fresh_legacy selects the pinned single-piston source profile,
+publishes initialized buses and establishes battery master/source admission off.
+Coulomb charge remains unknown. Existing unknown construction, generic reset and
+ordinary Simulation.step are unchanged. This explicit fresh-allocation API is
+not FLT restoration or a live state provider for an already running aircraft.
+
+The installed C172 checker confirms fresh 24 V initialization, then applies
+Lesson 1 switches/RPM with explicit load/response/context/failure/NAVCOM inputs
+and reaches 28 V main/avionics. Existing 1280 predicate / 165 tail / 68 frame /
+16 override-load regression passes. 214 all-feature test executions pass in
+target/legacy-electrical-initialization-workspace-tests-02.log. Original evidence:
+target/legacy-electrical-initialization-reference-05/report.json; direct Rust
+comparison: target/legacy-electrical-initialization-comparison-03/report.json;
+installed checks: target/legacy-electrical-initialization-installed-check-01/;
+tail regression: target/legacy-electrical-initialization-tail-regression-01.log.
+Formatting, architecture and generated documentation checks pass.
+
+Next: response-factor/context providers, actual evolving RPM and equipment load
+activity, process override ownership, then automatic flight and OAT/V binding.
+Original-FSX live capture remains deferred. REA MCP is requested but unavailable
+in this session's tool inventory/configuration; connection details are pending.
+The full FSX 1:1 Goal remains active.
+
+### Previous global-override stage — 24 October 2026
 
 After `7202ab2`, the original global power override is traced to the final
 Electrical/electric_always_available CFG lookup. Two bounded sequences execute
