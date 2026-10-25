@@ -265,7 +265,7 @@ impl AircraftDynamics for Parameters {
         })
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Simulation {
     pub electrical: crate::electrical::CircuitNetwork,
     pub parameters: Parameters,
@@ -275,6 +275,30 @@ pub struct Simulation {
     pub ground_contact: bool,
 }
 impl Simulation {
+    /// Commit one provider-driven legacy electrical frame with one caller flight
+    /// interval. Ground RK4 subdivision does not repeat the electrical frame.
+    /// Pause is represented by making no call. Providers describe this interval;
+    /// no stored FLT RPM, load, context or response default is selected here.
+    /// All physics/electrical mutations roll back together on any error.
+    pub fn step_with_legacy_electrical(
+        &mut self,
+        controls: Controls,
+        dt: f64,
+        load_amps: Option<f64>,
+        response: crate::legacy_response::Response,
+        tail: Option<crate::legacy_voltage::TailEnvironment>,
+    ) -> Result<Option<crate::legacy_voltage::FrameStep>> {
+        let mut staged = self.clone();
+        let mut electrical = self.electrical.clone();
+        let frame =
+            electrical.step_legacy_electrical_frame(dt, load_amps, response.factor(), tail)?;
+        staged.step_physics(controls, dt, false)?;
+        // The chosen original voltage/current path supersedes independent
+        // Coulomb integration; never run both for this interval.
+        staged.electrical = electrical;
+        *self = staged;
+        Ok(frame)
+    }
     pub fn on_ground(parameters: Parameters) -> Result<Self> {
         let mut s = Self::trimmed(parameters, 65. * crate::aircraft::KNOT, 300.)?;
         let p = &s.parameters;
@@ -400,6 +424,14 @@ impl Simulation {
         })
     }
     pub fn step(&mut self, controls: Controls, dt: f64) -> Result<()> {
+        self.step_physics(controls, dt, true)
+    }
+    fn step_physics(
+        &mut self,
+        controls: Controls,
+        dt: f64,
+        independent_electrical: bool,
+    ) -> Result<()> {
         if !dt.is_finite() || dt <= 0. || dt > 1. / 60. {
             return Err(
                 "Flight integration step must be positive and no larger than 1/60 second".into(),
@@ -411,7 +443,7 @@ impl Simulation {
         if dt > 1. / 480. && (-self.state.position[2] < 10. || self.ground_contact) {
             let count = (dt / (1. / 480.)).ceil() as usize;
             for _ in 0..count {
-                self.step(controls, dt / count as f64)?;
+                self.step_physics(controls, dt / count as f64, independent_electrical)?;
             }
             return Ok(());
         }
@@ -434,7 +466,9 @@ impl Simulation {
         }
         // No electrical mutation until this physics substep has passed all
         // fallible calculations. Contact subdivision advances each interval once.
-        self.electrical.advance_time(dt)?;
+        if independent_electrical {
+            self.electrical.advance_time(dt)?;
+        }
         self.ground_contact = self
             .parameters
             .gear
@@ -470,6 +504,103 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::aircraft::own_parameters;
+    #[test]
+    fn provider_electrical_frame_commits_once_with_flight_and_rolls_back_on_errors() {
+        use crate::legacy_response::Response;
+        use crate::legacy_voltage::TailEnvironment;
+        use fsx_vehicle::electrical::Bus;
+        use fsx_vehicle::flight_electrical::FlightElectrical;
+        for ground in [false, true] {
+            let p = own_parameters();
+            let mut s = if ground {
+                Simulation::on_ground(p).unwrap()
+            } else {
+                Simulation::trimmed(p, 50., 300.).unwrap()
+            };
+            s.electrical = crate::electrical::CircuitNetwork::new_fresh_legacy(
+                s.parameters.electrical.clone(),
+            )
+            .unwrap();
+            let mut switches = FlightElectrical::default();
+            switches.battery = Some(true);
+            switches.generators[0] = Some(false);
+            s.electrical.apply_switches(&switches);
+            s.electrical
+                .update_generator_from_fsx_steam_signals(Some(true), Some(0.), Some(false))
+                .unwrap();
+            let response = Response::observed(Some(0.5)).unwrap();
+            let mut tail = TailEnvironment {
+                generator_enabled: true,
+                incoming_bus_voltage: [24.; 8],
+                incoming_generator_amps: [0.; 4],
+                battery_failed: false,
+                avionics_master: false,
+                voltage_mode: true,
+                override_power: false,
+                avionics_circuit: None,
+                navcom1_circuit: None,
+            };
+            let mut direct = s.electrical.clone();
+            for _ in 0..120 {
+                let expected = direct
+                    .step_legacy_electrical_frame(STEP, Some(12.), response.factor(), Some(tail))
+                    .unwrap()
+                    .unwrap();
+                let got = s
+                    .step_with_legacy_electrical(s.controls, STEP, Some(12.), response, Some(tail))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(got, expected);
+                assert_eq!(s.electrical.last_battery_flow(), None);
+                tail.incoming_bus_voltage = got.tail.bus_voltage;
+                tail.incoming_generator_amps = got.tail.generator_amps;
+            }
+            assert!((s.time - 1.).abs() < 1e-12);
+            let before = s.clone();
+            let mut bad = s.controls;
+            bad.pitch = f64::NAN;
+            assert!(s
+                .step_with_legacy_electrical(bad, STEP, Some(12.), response, Some(tail))
+                .is_err());
+            assert_eq!(s.state.position, before.state.position);
+            assert_eq!(s.time, before.time);
+            assert_eq!(
+                s.electrical.legacy_voltage_state(),
+                before.electrical.legacy_voltage_state()
+            );
+            assert_eq!(
+                s.electrical.bus_voltage(Bus::Main).unwrap(),
+                before.electrical.bus_voltage(Bus::Main).unwrap()
+            );
+            // Force a physical failure after electrical staging, not just invalid controls.
+            s.state.velocity = [1000., 0., 0.];
+            let failed_state = s.state;
+            assert!(s
+                .step_with_legacy_electrical(s.controls, STEP, Some(12.), response, Some(tail))
+                .is_err());
+            assert_eq!(s.state.velocity, failed_state.velocity);
+            assert_eq!(s.time, before.time);
+            assert_eq!(
+                s.electrical.legacy_voltage_state(),
+                before.electrical.legacy_voltage_state()
+            );
+            s.state = before.state;
+            assert!(s
+                .step_with_legacy_electrical(
+                    s.controls,
+                    STEP,
+                    Some(12.),
+                    Response::default(),
+                    Some(tail)
+                )
+                .unwrap()
+                .is_none());
+            assert_eq!(s.electrical.legacy_voltage_state(), None);
+            assert_eq!(s.electrical.bus_voltage(Bus::Main).unwrap(), None);
+            s.electrical.reset();
+            assert_eq!(s.electrical.legacy_voltage_state(), None);
+        }
+    }
     #[test]
     fn battery_uses_committed_airborne_and_contact_substep_time_without_double_counting() {
         let mut p = own_parameters();

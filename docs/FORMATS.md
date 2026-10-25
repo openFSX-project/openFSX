@@ -1420,3 +1420,22 @@ cases and all factor/filter/voltage outputs match the port. This is query
 inheritance evidence only: helicopter electrical dynamics and full category
 factory execution remain outside the supported single-piston model. The response
 comparator accepts only those four pinned vtable identities, at most 400 cases.
+
+### Provider-driven electrical flight intervals
+
+Simulation.step_with_legacy_electrical accepts controls/dt, explicit optional load,
+checked Response and optional TailEnvironment. The existing source/switch values
+belong to its network. It stages one original electrical frame and physics over
+the same caller interval, committing both only when all calculations succeed.
+Internal contact subdivisions do not multiply electrical frame execution; this
+is an explicitly chosen caller cadence, not a measured original global scheduler.
+Independent Coulomb integration is skipped for this path. Ordinary step keeps
+its existing behavior. Pause means no call, and zero dt is still rejected.
+Unknown providers commit loss of electrical knowledge with successful physics;
+invalid inputs or physical failure preserve prior time/state/buses atomically.
+
+The regression compares 120 air and 120 ground intervals to direct network-frame
+calls, verifies rollback after both invalid controls and physical failure, and
+checks unknown response/reset. It does not infer provider values or change the
+viewer to use this path automatically. The transactional API currently clones
+simulation state; performance tuning and live provider ownership remain open.

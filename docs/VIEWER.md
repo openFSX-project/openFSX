@@ -909,6 +909,16 @@ The installed C172 checker also exercises fresh 24 V state before explicit-input
 28 V generation. The viewer does not select this factory or legacy frame timing
 automatically; actual mode/response/RPM/load providers remain necessary.
 
+Simulation.step_with_legacy_electrical now offers an explicit provider-driven
+flight interval: it advances one checked electrical frame at caller cadence and
+commits it with physics atomically. Ground contact substeps do not repeat the
+electrical frame, and independent Coulomb integration is skipped for that path.
+It consumes a checked Response plus explicit load/tail inputs and existing
+switch/source state. Invalid inputs or physical errors preserve prior state/time;
+missing providers invalidate electrical knowledge. The viewer still uses ordinary
+step until actual live providers are available; this API supplies no default RPM,
+load, mode or failure state. Paused frames make no simulation call.
+
 ## Visibility inspection
 
 VISL conditions link to scene nodes through SGVL. The reader supports direct

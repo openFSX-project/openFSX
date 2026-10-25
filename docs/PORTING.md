@@ -5,6 +5,28 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 26 October 2026
 
+After `9fab65a`, Simulation.step_with_legacy_electrical commits a known-input
+electrical frame and physics interval together. It accepts the checked Response
+provider, explicit load and TailEnvironment, using stored switch/source state.
+Electrical execution occurs once at the caller's frame cadence, not once per
+internal ground-contact RK4 subdivision. The independent Coulomb path is skipped
+for this selected mode. A staged simulation commits only after electrical and
+all physical calculations succeed; errors preserve incoming state/time/buses.
+
+A regression compares 120 airborne and 120 on-ground calls against standalone
+electrical frames exactly, including the carried surrounding bus/current values.
+It checks invalid controls, physical-envelope failure after electrical staging,
+unknown-response invalidation and reset. Ordinary step retains the existing
+independent battery behavior. Paused callers make no step call; zero dt remains
+invalid. The API clones state for atomic staging and is not performance-tuned.
+
+Workspace tests pass in target/legacy-flight-coupling-tests-01.log; native flight
+regression passes in target/legacy-flight-coupling-native-regression-01.log.
+Formatting/architecture/generated docs checks pass. This is explicit provider
+coupling, not automatic viewer discovery: live RPM, load activity, mode, failures
+and context ownership still need implementation. The full Goal remains active.
+
+### Previous category-context stage — 26 October 2026
 After `50db17c`, category-context query coverage includes the base, general
 aircraft, airplane and helicopter vtables. The original category factory selects
 airplane/helicopter branches and their constructors install the respective final
