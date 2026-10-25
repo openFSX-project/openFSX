@@ -43,6 +43,18 @@ fn main() -> Result<(), String> {
     for case in cases {
         let general = case["general"].as_f64().ok_or("Missing General")?;
         let settings = Realism::parse(&format!("[REALISM]\nGeneral={general}"))?;
+        if case["constructor_self_link"] == true {
+            let raw = u32::try_from(
+                case["context_flag_raw"]
+                    .as_u64()
+                    .ok_or("Missing constructor flag")?,
+            )
+            .map_err(|e| e.to_string())?;
+            let constructed = Response::constructed_self_context(settings, Some(raw))?;
+            if constructed.factor().map(f64::from) != case["prior_response_factor"].as_f64() {
+                return Err("Original self-context constructor differs".into());
+            }
+        }
         let mut response = Response::observed(Some(
             case["prior_response_factor"]
                 .as_f64()

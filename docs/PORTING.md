@@ -3,7 +3,28 @@
 The target remains FSX 1:1 across interface, flight behavior, content and APIs.
 This is a long-term acceptance target; no subsystem claims complete parity.
 
-## Current stage — 25 October 2026
+## Current stage — 26 October 2026
+
+After `7112c78`, the original base-context constructor resolves initial ownership:
+it writes self into +0x34 unconditionally, then queries its own +0xB4 through
+both virtual calls before copying General from the actual main.dll getter.
+The preceding constructor stores zero into response +0x38. A nonzero flag copies
+General with float32 rounding; zero leaves the initial zero. This establishes
+fresh construction, not later pointer changes or the flag's flight-mode meaning.
+
+The guarded response reference now executes the original zeroing/self-link/copy
+fragments and resolves the identified main import to its original pinned export.
+20 constructor cases extend the prior 80 independent-context traces to 100.
+Response.constructed_self_context models the fresh initialization, with unknown
+flag/settings remaining unknown when required. All factors and provider-driven
+filter/voltage results match with zero observed error in
+target/legacy-electrical-self-context-comparison-01/report.json, using
+target/legacy-electrical-self-context-reference-01/report.json. Workspace tests
+pass in target/legacy-self-context-tests-01.log. Formatting, architecture and
+generated docs checks pass. Full Goal remains active; automatic flight context
+selection, live RPM/load activity and later ownership transitions remain open.
+
+### Previous context-query stage — 25 October 2026
 
 After `c2e1477`, the primary realism-update query is resolved through the
 original concrete context vtable: slot 0x50 returns raw context+0xB4. This is the

@@ -5,6 +5,17 @@ pub struct Response {
     factor: Option<f32>,
 }
 impl Response {
+    /// Checked fresh base-context construction: +0x34 initially points to self,
+    /// response starts zero, and nonzero +0xB4 admits the General settings copy.
+    /// Applies before later ownership changes, not to an existing flight.
+    pub fn constructed_self_context(
+        settings: fsx_vehicle::realism::Realism,
+        context_flag: Option<u32>,
+    ) -> Result<Self, String> {
+        let mut response = Self::observed(Some(0.))?;
+        response.copy_concrete_context_settings(settings, context_flag, context_flag)?;
+        Ok(response)
+    }
     /// Concrete sim1 context vtable query returns its raw +0xB4 field. Both
     /// receivers must be verified instances of this context type; the linked
     /// receiver's live type/ownership is not inferred. Any nonzero word is true.

@@ -1393,3 +1393,14 @@ Response.copy_concrete_context_settings accepts optional raw words only when
 both receiver types are established by the caller. It converts nonzero to true
 and preserves unknown inputs. This removes the injected query-result stub from
 the reference without claiming automatic context discovery or flight-mode mapping.
+
+The fresh base-context constructor is now checked separately: its zeroing prefix
+sets response +0x38 to zero, its ownership fragment unconditionally assigns
++0x34 to self, then both original virtual queries read the same +0xB4 field.
+The pinned main getter supplies General; nonzero flags copy it, zero flags retain
+the constructor zero. 20 such cases extend the reference/comparison to 100 total.
+Response.constructed_self_context implements this explicit fresh path. Unknown
+flags or admitted missing settings do not imply a nominal value. This proves
+initial self ownership only; later pointer changes and the flag's semantic
+flight-mode identity remain unverified. The reference runs bounded constructor
+fragments, not every unrelated constructor allocation/service.
