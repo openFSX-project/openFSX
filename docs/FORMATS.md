@@ -1373,3 +1373,11 @@ Unresolved gates or admitted missing settings invalidate knowledge; invalid
 numeric input is atomic. factor() is suitable for the explicit voltage-core
 input. This does not implement automatic settings discovery, gate semantics or
 flight timing.
+
+The response checker additionally passes each copied factor into Core.advance
+with the same 22 V/zero-filter/zero-prior-current, 12 A load and 1/120 s inputs
+as the original fragment. Both voltage and filtered current are compared at
+1e-12 tolerance and the maximum error is recorded. Admitted missing settings
+must invalidate evolving core knowledge; invalid provider updates are checked
+for atomic retention of the preceding factor. These are explicit-input checks,
+not evidence of automatic flight context selection.

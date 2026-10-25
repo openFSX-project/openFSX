@@ -5,6 +5,18 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 25 October 2026
 
+After `a37fb0b`, the response comparison now feeds the parsed/copied factor into
+the Rust voltage core and compares both filtered current and battery voltage
+against all 20 original filter/voltage traces. Tolerance is 1e-12; observed
+maximum error is recorded in target/legacy-electrical-response-comparison-02/report.json.
+It also checks that an admitted missing setting invalidates evolving voltage
+knowledge and that invalid settings updates leave the preceding factor intact,
+including when copying would otherwise be skipped. This closes the explicit
+provider-to-core comparison; live context-gate semantics and automatic flight
+ownership remain unfinished. Formatting and diff checks pass.
+
+### Previous response-provider stage — 25 October 2026
+
 After `4eb07f2`, explicit General realism inputs are available through
 fsx_vehicle::realism::Realism and fsx_sim::legacy_response::Response. The parser
 reads [REALISM] General without a missing-key default. Supported electrical
