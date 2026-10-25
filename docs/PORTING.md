@@ -5,6 +5,23 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 26 October 2026
 
+After `50db17c`, category-context query coverage includes the base, general
+aircraft, airplane and helicopter vtables. The original category factory selects
+airplane/helicopter branches and their constructors install the respective final
+vtables; slot 0x50 in all four points at the same raw +0xB4 getter. The bounded
+reference now executes settings copy and voltage response with all four actual
+vtables. 340 cases (including the 20 fresh self-context constructor cases) match
+the Rust provider/core without observed error in
+target/legacy-category-context-comparison-01/report.json, using
+target/legacy-category-context-reference-01/report.json. The comparator rejects
+other context vtables and retains a bounded 400-case budget.
+
+This resolves query inheritance for these category types, not third-argument
+semantics or a helicopter electrical model. No full factory, allocation service,
+live object registration or original process is executed. Existing single-piston
+model restrictions remain. Automatic flight ownership/providers remain open.
+
+### Previous constructor-argument stage — 26 October 2026
 After `4bf628f`, the constructor reference no longer supplies its context flag
 directly for fresh cases. It poisons +0xB4, executes the original argument-copy
 fragment and confirms the third constructor word is stored unchanged there.

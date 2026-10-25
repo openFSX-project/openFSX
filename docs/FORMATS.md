@@ -1411,3 +1411,12 @@ at +0xB4 before the self-link/query/copy/voltage phases. The first pointer argum
 is independently checked at +0x64 to guard stack layout. This proves argument
 provenance and nonzero truth handling; it does not identify the argument as a
 player/AI flag or any named flight mode.
+
+The response reference additionally exercises base/general-aircraft/airplane/
+helicopter context vtables, whose original query slot resolves to the same
++0xB4 getter. This guards against a category-specific query override being missed
+by the general-context fixture. 340 bounded cases include the 20 fresh constructor
+cases and all factor/filter/voltage outputs match the port. This is query
+inheritance evidence only: helicopter electrical dynamics and full category
+factory execution remain outside the supported single-piston model. The response
+comparator accepts only those four pinned vtable identities, at most 400 cases.

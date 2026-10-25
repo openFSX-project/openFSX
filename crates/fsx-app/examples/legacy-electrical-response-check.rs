@@ -31,7 +31,7 @@ fn main() -> Result<(), String> {
     }
     let cases = report["cases"]
         .as_array()
-        .filter(|v| !v.is_empty() && v.len() <= 100)
+        .filter(|v| !v.is_empty() && v.len() <= 400)
         .ok_or("Invalid case budget")?;
     let mut voltage_max_error: f64 = 0.;
     let cfg = Electrical {
@@ -41,6 +41,11 @@ fn main() -> Result<(), String> {
         ..Default::default()
     };
     for case in cases {
+        if let Some(vtable) = case["context_vtable"].as_u64() {
+            if !matches!(vtable, 0x20AE24EC | 0x20AE364C | 0x20AE3790 | 0x20AE38D8) {
+                return Err("Unsupported original context type".into());
+            }
+        }
         let general = case["general"].as_f64().ok_or("Missing General")?;
         let settings = Realism::parse(&format!("[REALISM]\nGeneral={general}"))?;
         if case["constructor_self_link"] == true {
