@@ -1334,3 +1334,24 @@ The installed checker proves C172 fresh 24 V buses, followed by Lesson 1 switche
 and RPM plus explicit load/response/context/failure/NAVCOM inputs reaching 28 V
 main/avionics. Existing construction/reset still leaves observations unknown;
 ordinary physics has no automatic new initialization or legacy frame invocation.
+
+### Electrical response-factor provenance
+
+```powershell
+python scripts/check-electrical-response.py FSX target/electrical-response-reference
+```
+
+The bounded trace pins sim1 10.0.62615.0 and main.dll SHA256
+7b01a1b3a53e0779309aaf0144519cabb6b339a82c8490449dabd129c5e5883f.
+main ordinal 57 returns a global settings record; its original descriptor names
+[REALISM] General at double offset 0x20. The original sim1 settings-copy method
+converts that double into the float32 context field consumed by the electrical
+voltage calculation. Two context queries are injected active for this copy;
+with the first query inactive, the previous context factor is retained. Ten
+cases cover 0/0.1/0.5/1/1.25 and active/inactive queries, then execute the actual
+filter/voltage fragment with the copied value. Instruction/write guards and a
+4096-instruction budget constrain each phase. No original code bytes are emitted.
+This establishes named settings provenance, not battery temperature/capacity.
+File parsing, defaults, the live query meaning, other writers and automatic
+viewer ownership remain unverified. Callers still supply response_factor
+explicitly; absence does not become 1.

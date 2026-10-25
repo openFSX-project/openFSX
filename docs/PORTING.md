@@ -5,6 +5,27 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 25 October 2026
 
+After `0cb9669`, response-factor provenance is narrowed by an original
+cross-module trace. main.dll ordinal 57 returns the global settings record whose
+descriptor names [REALISM] General at double offset 0x20. The sim1 settings-copy
+method converts that double to float32 at context+0x38 when its two injected
+context queries are active. The electrical filter/voltage fragment reads that
+same context field via its settings owner. When the first query is inactive,
+the preceding context factor is retained. This is a general-realism setting,
+not an inferred battery capacity or temperature factor.
+
+scripts/check-electrical-response.py pins both original binaries and executes
+the getter, complete settings-copy method and electrical filter/voltage fragment
+under instruction/write guards. Ten cases include General 0/0.1/0.5/1/1.25 and
+active/inactive queries with prior factor 0.75. All copied factors and voltage
+updates match the checked arithmetic. Evidence:
+target/legacy-electrical-response-reference-01/report.json. No process was
+launched or original bytes exported. Settings-file parsing, defaults, query
+meaning, other writers and automatic viewer ownership are still unverified;
+there is no implicit factor 1 or new automatic physics binding.
+
+### Previous fresh-initialization stage — 25 October 2026
+
 After `0ed7c4b`, fresh electrical allocation and complete initialization are
 checked against the pinned original. The original constructor runs on poisoned
 memory and clears bus/current/filter/load/master/count scalars and consumer
