@@ -10,5 +10,6 @@ pub mod electrical_sources;
 pub mod flight;
 pub mod ground;
 pub mod legacy_power;
+pub mod legacy_response;
 pub mod legacy_voltage;
 pub use flight::AircraftDynamics;

@@ -1355,3 +1355,21 @@ This establishes named settings provenance, not battery temperature/capacity.
 File parsing, defaults, the live query meaning, other writers and automatic
 viewer ownership remain unverified. Callers still supply response_factor
 explicitly; absence does not become 1.
+
+The reference also supports independent update/copy gates (20 cases). Compare
+the ported provider with:
+
+```powershell
+cargo run -p fsx-app --example legacy-electrical-response-check --locked -- target/electrical-response-reference/report.json target/electrical-response-comparison
+```
+
+fsx_vehicle::realism::Realism::parse/from_config reads authored General; missing
+stays None. The supported electrical domain is finite nonnegative f64 that
+converts to finite f32, retaining values above 1. This domain is not evidence of
+the original settings parser's rejection behavior. legacy_response::Response
+starts unknown or with an observed factor. copy_settings retains history when
+update is false or update=true/copy=false; both true copies with float32 rounding.
+Unresolved gates or admitted missing settings invalidate knowledge; invalid
+numeric input is atomic. factor() is suitable for the explicit voltage-core
+input. This does not implement automatic settings discovery, gate semantics or
+flight timing.

@@ -13,7 +13,7 @@ from unicorn.x86_const import UC_X86_REG_EAX,UC_X86_REG_ECX,UC_X86_REG_EDI,UC_X8
 SIM='4bb9ef1b9669bb48676ef16ede667a2c590af27943eb34f03f09332a5417ae0e'
 MAIN='7b01a1b3a53e0779309aaf0144519cabb6b339a82c8490449dabd129c5e5883f'
 
-def run(sim,main,value,active):
+def run(sim,main,value,active,copy_active):
     v=Uc(UC_ARCH_X86,UC_MODE_32)
     for pe in (sim,main):
         image=pe.get_memory_mapped_image();base=pe.OPTIONAL_HEADER.ImageBase
@@ -40,7 +40,7 @@ def run(sim,main,value,active):
     def code(vm,address,_size,_data):
         if not any(a<=address<b for a,b in ranges):raise ValueError('Response trace left instruction whitelist')
         if address in (0x20B1C32B,0x20B1C33E):
-            vm.reg_write(UC_X86_REG_EAX,int(active));vm.reg_write(UC_X86_REG_EIP,address+3)
+            vm.reg_write(UC_X86_REG_EAX,int(active if address==0x20B1C32B else copy_active));vm.reg_write(UC_X86_REG_EIP,address+3)
     def writes(_vm,_access,a,size,_value,_data):
         if not any(lo<=a and a+size<=hi for lo,hi in [(obj,obj+0x10000),(stack,stack+0x10000)]):raise ValueError('Response trace wrote outside guards')
     v.hook_add(UC_HOOK_CODE,code);v.hook_add(UC_HOOK_MEM_WRITE,writes)
@@ -52,7 +52,7 @@ def run(sim,main,value,active):
     word(sp,sentinel);word(sp+4,settings);v.reg_write(UC_X86_REG_ESP,sp);v.reg_write(UC_X86_REG_ECX,obj)
     v.emu_start(0x20B1C310,sentinel,count=4096)
     if v.reg_read(UC_X86_REG_EIP)!=sentinel or v.reg_read(UC_X86_REG_ESP)!=sp+8:raise ValueError('Settings copy did not return')
-    expected=struct.unpack('<f',struct.pack('<f',value))[0] if active else 0.75
+    expected=struct.unpack('<f',struct.pack('<f',value))[0] if active and copy_active else 0.75
     if f32(ctx+0x38)!=expected:raise ValueError('General did not copy to battery response context')
     # Execute actual core filter/voltage fragment with the copied context.
     real(state+0x94,22.);real(state+0x9C,0.);real(state+12,0.);real(state+0xA4,12.)
@@ -63,7 +63,7 @@ def run(sim,main,value,active):
     if v.reg_read(UC_X86_REG_EIP)!=0x20B24CE8:raise ValueError('Core fragment did not reach endpoint')
     filtered=-12.*4./120.;voltage=max(0.,22.+filtered*0.000555*expected/120.)
     if abs(f64(state+0x94)-voltage)>1e-12 or abs(f64(state+0x9C)-filtered)>1e-12:raise ValueError('Copied General did not drive voltage update')
-    return {'general':value,'context_queries_active':active,'prior_response_factor':0.75,'response_factor':expected,'filtered_net_amps':f64(state+0x9C),'battery_voltage':f64(state+0x94)}
+    return {'general':value,'context_queries_active':active,'general_copy_active':copy_active,'prior_response_factor':0.75,'response_factor':expected,'filtered_net_amps':f64(state+0x9C),'battery_voltage':f64(state+0x94)}
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('root',type=Path);p.add_argument('output',type=Path);a=p.parse_args()
@@ -73,7 +73,7 @@ def main():
         data=(a.root/name).read_bytes()
         if hashlib.sha256(data).hexdigest()!=digest:raise ValueError('Unsupported '+name+' fingerprint')
         binaries.append(pefile.PE(data=data))
-    cases=[run(*binaries,x,active) for x in (0.,0.1,0.5,1.,1.25) for active in (False,True)]
+    cases=[run(*binaries,x,active,copy_active) for x in (0.,0.1,0.5,1.,1.25) for active in (False,True) for copy_active in (False,True)]
     a.output.mkdir();(a.output/'report.json').write_text(json.dumps({'schema':1,'source':'bounded-original-realism-electrical-response','sim1_sha256':SIM,'main_sha256':MAIN,'cases':cases,'scope':'named descriptor/getter, guarded context copy and core fragment with injected active queries and settings values; no settings-file parsing/default or automatic viewer provider claim'},indent=2)+'\n',encoding='utf-8')
     print(f'PASS: {len(cases)} General settings -> float32 context -> original electrical voltage traces')
 

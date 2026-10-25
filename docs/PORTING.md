@@ -5,6 +5,29 @@ This is a long-term acceptance target; no subsystem claims complete parity.
 
 ## Current stage — 25 October 2026
 
+After `4eb07f2`, explicit General realism inputs are available through
+fsx_vehicle::realism::Realism and fsx_sim::legacy_response::Response. The parser
+reads [REALISM] General without a missing-key default. Supported electrical
+inputs are finite nonnegative doubles representable as finite float32; values
+above 1 are retained, not clamped. This is a supported input domain, not a claim
+about the original UI/parser rejection policy.
+
+Response retains its observed factor when the update gate is false or when the
+update gate is true and the copy gate is false. Both true copies General with
+float32 rounding. Missing admitted values or unresolved gates lose knowledge;
+invalid values fail atomically. Gate meanings and automatic ownership remain
+unresolved. factor() supplies the existing explicit voltage-core response input;
+ordinary flight does not select settings or gates automatically.
+
+The original reference now varies both gates independently: 20 original traces
+match the Rust provider exactly in
+target/legacy-electrical-response-comparison-01/report.json, using
+target/legacy-electrical-response-reference-02/report.json. Missing/invalid
+settings checks pass. Workspace tests pass in target/legacy-response-provider-tests-01.log.
+Formatting, architecture and generated documentation checks pass.
+
+### Previous response-provenance stage — 25 October 2026
+
 After `0cb9669`, response-factor provenance is narrowed by an original
 cross-module trace. main.dll ordinal 57 returns the global settings record whose
 descriptor names [REALISM] General at double offset 0x20. The sim1 settings-copy
