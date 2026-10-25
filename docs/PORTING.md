@@ -3,8 +3,41 @@
 The target remains FSX 1:1 across interface, flight behavior, content and APIs.
 This is a long-term acceptance target; no subsystem claims complete parity.
 
+User workflow requirement: commit and push every completed change to Git
+(`origin/main`), then verify the remote contains the resulting HEAD. This applies
+to every subsequent porting stage, including documentation and verification
+changes. Keep the full FSX 1:1 objective active until its original scope is met.
+
 ## Current stage — 26 October 2026
 
+After `710c654`, the pinned circuit initializer's missing-key defaults are
+ported. The guarded triple reference now captures initialized lookup values and
+runs missing-key lookups without writing their destinations. Five effective
+battery ratings (0/12/24/28/1000 V) yield 165 original triples; all compare exactly
+with with_legacy_circuit_defaults. Minimum voltage is effective maximum * 0.7;
+only avionics and marker_beacon default to the avionics bus. The remaining 31
+default to main, with per-record maxima 2/3/5/10/15 A. Explicit authored triples,
+including zeros, are retained. The raw CFG reader/source-only resolver is unchanged.
+
+CircuitNetwork.new_fresh_legacy now selects this verified circuit profile along
+with source defaults. Generic construction remains unresolved. Resolved metadata
+can feed legacy_consumers::authored, but activity is still required and no current
+is inferred from presence alone. Installed C172 checks confirm all 33 records
+exist while retaining its 17 authored triples. Omitted NAVCOM-named keys are not
+invented or remapped. Other aircraft/model eligibility is still caller-provided.
+
+Exact comparison exposed JSON's former one-ULP parse rounding at a 19.6 V-like
+threshold. Workspace serde_json now enables float_roundtrip so original f64
+observations are recovered exactly; the threshold model itself was not loosened.
+Evidence: target/legacy-circuit-defaults-reference-01/report.json and
+target/legacy-circuit-defaults-comparison-02/report.json. Installed checks pass in
+target/legacy-circuit-defaults-installed-01.log. Workspace tests pass in
+target/legacy-circuit-defaults-tests-01.log; tail/initialization regressions pass
+in target/legacy-circuit-defaults-*-regression-01.log. Formatting, architecture and
+generated docs checks pass. Live activity/RPM/mode/failure providers and automatic
+viewer hookup remain open; the full Goal is active.
+
+### Previous named-slot stage — 26 October 2026
 After `f0b1143`, original CFG triple storage confirms all 33 consumer slot names.
 This corrects an earlier semantic error: slot 1 is additional_system, not NAVCOM1.
 Slot 5 is avionics_bus. Existing arithmetic tests had used explicit synthetic

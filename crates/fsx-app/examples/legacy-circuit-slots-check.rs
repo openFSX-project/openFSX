@@ -1,6 +1,6 @@
 //! Validate pinned original CFG names and authored consumer binding.
 use fsx_sim::legacy_consumers;
-use fsx_vehicle::electrical::{Bus, Circuit, Electrical, LEGACY_CONSUMER_KEYS};
+use fsx_vehicle::electrical::{Bus, Circuit, Electrical, SourceDefaults, LEGACY_CONSUMER_KEYS};
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
 fn main() -> Result<(), String> {
@@ -21,7 +21,7 @@ fn main() -> Result<(), String> {
         return Err("Reference exceeds byte budget".into());
     }
     let report: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    if report["schema"] != 1
+    if !matches!(report["schema"].as_u64(), Some(1..=2))
         || report["source"] != "bounded-original-electrical-circuit-slots"
         || report["sha256"] != "4bb9ef1b9669bb48676ef16ede667a2c590af27943eb34f03f09332a5417ae0e"
     {
@@ -74,8 +74,60 @@ fn main() -> Result<(), String> {
     if legacy_consumers::sum(&legacy_consumers::authored(&config, activity))?.is_some() {
         return Err("Missing additional_system was replaced by NAVCOM or zero".into());
     }
+    let mut defaults_checked = 0;
+    if report["schema"] == 2 {
+        let cases = report["default_cases"]
+            .as_array()
+            .filter(|v| !v.is_empty() && v.len() <= 20)
+            .ok_or("Invalid defaults case budget")?;
+        for case in cases {
+            let authored = Electrical {
+                max_battery_voltage: Some(
+                    case["max_battery_voltage"]
+                        .as_f64()
+                        .ok_or("Missing maximum")?,
+                ),
+                ..Default::default()
+            };
+            let effective =
+                authored.with_legacy_circuit_defaults(SourceDefaults::FsxSteam62615SinglePiston)?;
+            if !authored.circuits.is_empty() {
+                return Err("Mutated authored circuits".into());
+            }
+            let records = case["circuits"]
+                .as_array()
+                .filter(|v| v.len() == 33)
+                .ok_or("Wrong defaults slot count")?;
+            for (key, record) in LEGACY_CONSUMER_KEYS.iter().zip(records) {
+                let c = &effective.circuits[*key];
+                if Some(c.bus.index()? as u64) != record["injected_bus"].as_u64()
+                    || Some(c.max_amps) != record["injected_max_amps"].as_f64()
+                    || Some(c.min_voltage) != record["injected_min_voltage"].as_f64()
+                {
+                    return Err(format!(
+                        "Original circuit default differs for {key}: {:?} vs {record}",
+                        c
+                    ));
+                }
+                defaults_checked += 1;
+            }
+        }
+        let preserved =
+            config.with_legacy_circuit_defaults(SourceDefaults::FsxSteam62615SinglePiston)?;
+        if legacy_consumers::sum(&legacy_consumers::authored(&preserved, activity))? != Some(5.) {
+            return Err("Resolved additional_system did not use original 5 A default".into());
+        }
+        for (key, c) in &config.circuits {
+            let got = &preserved.circuits[key];
+            if got.bus != c.bus || got.max_amps != c.max_amps || got.min_voltage != c.min_voltage {
+                return Err("Circuit default replaced authored value".into());
+            }
+        }
+    }
     fs::create_dir(&out).map_err(|e| e.to_string())?;
-    fs::write(out.join("report.json"),serde_json::to_vec_pretty(&json!({"schema":1,"slots_checked":33,"all_names_and_loads_equal":true,"missing_metadata_stays_unknown":true,"slot1":"additional_system","slot5":"avionics_bus"})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
-    println!("PASS: 33 original names/slots and authored maxima; additional_system is slot 1, not NAVCOM");
+    fs::write(out.join("report.json"),serde_json::to_vec_pretty(&json!({"schema":2,"slots_checked":33,"defaults_checked":defaults_checked,"all_names_and_loads_equal":true,"authored_values_preserved":true,"raw_missing_metadata_stays_unknown":true,"slot1":"additional_system","slot5":"avionics_bus"})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    println!(
+        "PASS: 33 original names/slots and {defaults_checked} defaults; authored triples preserved"
+    );
     Ok(())
 }

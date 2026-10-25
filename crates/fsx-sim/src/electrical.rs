@@ -40,6 +40,8 @@ impl CircuitNetwork {
     /// admission/failure/avionics: even offline generator buses contain the
     /// battery maximum until the first frame. No Coulomb charge is inferred.
     pub fn new_fresh_legacy(configuration: Electrical) -> Result<Self, String> {
+        let configuration = configuration
+            .with_legacy_circuit_defaults(SourceDefaults::FsxSteam62615SinglePiston)?;
         let mut network = Self::new_with_source_defaults(
             configuration,
             SourceDefaults::FsxSteam62615SinglePiston,

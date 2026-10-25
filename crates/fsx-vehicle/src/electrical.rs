@@ -146,6 +146,36 @@ fn number(value: &str, maximum: f64) -> Result<f64, String> {
     Ok(number)
 }
 impl Electrical {
+    /// Explicit pinned circuit initialization, separate from authored data.
+    /// Original records do not establish equipment activity or actual current.
+    pub fn with_legacy_circuit_defaults(&self, profile: SourceDefaults) -> Result<Self, String> {
+        if profile != SourceDefaults::FsxSteam62615SinglePiston {
+            return Err("Circuit defaults require the pinned single-piston profile".into());
+        }
+        let mut effective = self.with_source_defaults(profile);
+        let maximum = effective
+            .max_battery_voltage
+            .ok_or("Missing battery rating")?;
+        if !maximum.is_finite() || !(0. ..=1000.).contains(&maximum) {
+            return Err("Invalid battery rating for circuit defaults".into());
+        }
+        let amps = [
+            5., 10., 15., 15., 15., 15., 5., 15., 15., 15., 15., 2., 2., 2., 5., 5., 5., 5., 5.,
+            5., 5., 5., 5., 5., 5., 5., 5., 5., 5., 5., 5., 3., 3.,
+        ];
+        for (i, key) in LEGACY_CONSUMER_KEYS.iter().enumerate() {
+            effective.circuits.entry((*key).into()).or_insert(Circuit {
+                bus: if i == 5 || i == 11 {
+                    Bus::Avionics
+                } else {
+                    Bus::Main
+                },
+                max_amps: amps[i],
+                min_voltage: maximum * 0.7,
+            });
+        }
+        Ok(effective)
+    }
     /// Apply only source defaults verified for the specified engine/version
     /// profile. Does not expand omitted circuit defaults or battery capacity.
     /// The caller must establish single-piston engine eligibility separately.

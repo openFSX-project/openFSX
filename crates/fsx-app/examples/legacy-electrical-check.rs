@@ -505,6 +505,22 @@ fn main() -> Result<(), String> {
         }),
     };
     let mut fresh = fsx_sim::electrical::CircuitNetwork::new_fresh_legacy(configuration.clone())?;
+    let resolved = fresh.source_configuration();
+    for key in fsx_vehicle::electrical::LEGACY_CONSUMER_KEYS {
+        ensure(
+            resolved.circuits.contains_key(key),
+            "Fresh profile omitted original circuit record",
+        )?;
+    }
+    for (key, authored) in &configuration.circuits {
+        let actual = &resolved.circuits[key];
+        ensure(
+            actual.bus == authored.bus
+                && actual.max_amps == authored.max_amps
+                && actual.min_voltage == authored.min_voltage,
+            "Fresh defaults replaced authored C172 triple",
+        )?;
+    }
     let initial_voltage = effective_sources
         .max_battery_voltage
         .ok_or("Missing fresh rating")?;

@@ -1487,3 +1487,25 @@ and verifies their actual record destinations. It does not emulate the external
 CFG parser or establish omitted defaults. legacy_consumers::authored maps only
 present authored maxima and supplied activity to these verified slots. Missing
 metadata stays unknown; a navcom1 key does not populate additional_system.
+
+Schema 2 of the circuit-slot reference also captures the three pre-lookup values
+and executes missing-key lookups without writing outputs. Five effective maximum
+battery ratings 0/12/24/28/1000 V check all 165 default triples. The original
+minimum is maximum * 0.7. Slots 6 (avionics) and 12 (marker_beacon) use avionics
+bus; other defaults use main. Maxima vary by slot (2/3/5/10/15 A), preserved in
+the pinned resolver. with_legacy_circuit_defaults requires the versioned profile,
+resolves source ratings first and fills missing triples only. Authored zeros and
+overrides survive. Raw parsing and source-only default resolution stay separate.
+
+new_fresh_legacy now uses these verified circuit defaults, producing all 33
+records for the explicit fresh profile. Activity remains a required provider;
+neither default metadata nor a known voltage establishes active load. Generic
+construction still leaves omitted keys unresolved. Installed C172 checks verify
+all original records and preservation of its authored values. This does not
+establish the original external CFG parser's partial-triple behavior or live
+activity/defaults for unselected profiles.
+
+JSON reference parsing enables serde_json float_roundtrip to recover original
+f64 values exactly, including 19.599999999999998 V. A one-ULP rounding in the
+former parser caused exact default comparison to fail; the strict voltage
+predicate and reference tolerance were not relaxed.
