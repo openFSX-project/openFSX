@@ -14,6 +14,9 @@ const RECORD_AIRPORT: u16 = 0x3C;
 const RECORD_AIRPORT_HEADER: usize = 0x38;
 const RECORD_RUNWAY: u16 = 0x04;
 const RECORD_NAME: u16 = 0x19;
+const RECORD_TAXI_POINTS: u16 = 0x1A;
+const RECORD_TAXI_PATHS: u16 = 0x1C;
+const RECORD_APRON: u16 = 0x37;
 
 fn u8_at(d: &[u8], i: usize) -> Result<u8> {
     d.get(i).copied().ok_or_else(|| "Truncated BGL".into())
@@ -103,6 +106,22 @@ impl Runway {
         matches!(self.surface, 0 | 4 | 15 | 16 | 17 | 18 | 19 | 20 | 23)
     }
 }
+/// Taxiway path between two taxi points.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TaxiPath {
+    pub start: usize,
+    pub end: usize,
+    /// 1 taxi, 2 runway, 3 parking, 4 path, 5 closed, 6 vehicle.
+    pub kind: u8,
+    /// Metres.
+    pub width: f64,
+}
+/// Apron outline (latitude, longitude) with a runway-style surface code.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Apron {
+    pub surface: u8,
+    pub outline: Vec<(f64, f64)>,
+}
 #[derive(Debug, Clone, PartialEq)]
 pub struct Airport {
     pub icao: String,
@@ -111,6 +130,10 @@ pub struct Airport {
     pub longitude: f64,
     pub altitude: f64,
     pub runways: Vec<Runway>,
+    /// Taxi points (latitude, longitude) referenced by `taxi_paths`.
+    pub taxi_points: Vec<(f64, f64)>,
+    pub taxi_paths: Vec<TaxiPath>,
+    pub aprons: Vec<Apron>,
 }
 fn runway(d: &[u8], p: usize) -> Result<Runway> {
     Ok(Runway {
@@ -133,6 +156,9 @@ fn airport(d: &[u8], p: usize, size: usize) -> Result<Airport> {
         icao: ident(u32_at(d, p + 0x28)?),
         name: None,
         runways: Vec::new(),
+        taxi_points: Vec::new(),
+        taxi_paths: Vec::new(),
+        aprons: Vec::new(),
     };
     let end = p + size;
     let mut q = p + RECORD_AIRPORT_HEADER;
@@ -143,6 +169,44 @@ fn airport(d: &[u8], p: usize, size: usize) -> Result<Airport> {
         }
         match id {
             RECORD_RUNWAY if len >= 44 => a.runways.push(runway(d, q)?),
+            RECORD_TAXI_POINTS if len >= 8 => {
+                let count = usize::from(u16_at(d, q + 6)?);
+                for k in 0..count.min((len - 8) / 12) {
+                    let e = q + 8 + k * 12;
+                    a.taxi_points
+                        .push((latitude(u32_at(d, e + 8)?), longitude(u32_at(d, e + 4)?)));
+                }
+            }
+            RECORD_TAXI_PATHS if len >= 8 => {
+                let count = usize::from(u16_at(d, q + 6)?);
+                for k in 0..count.min((len - 8) / 20) {
+                    let e = q + 8 + k * 20;
+                    let width = f32_at(d, e + 8)?;
+                    a.taxi_paths.push(TaxiPath {
+                        start: usize::from(u16_at(d, e)?),
+                        end: usize::from(u16_at(d, e + 2)? & 0x0FFF),
+                        kind: u8_at(d, e + 4)? & 0x0F,
+                        width: if width.is_finite() && width > 0. {
+                            width
+                        } else {
+                            0.
+                        },
+                    });
+                }
+            }
+            RECORD_APRON if len >= 9 => {
+                let count = usize::from(u16_at(d, q + 7)?);
+                let outline = (0..count.min((len - 9) / 8))
+                    .map(|k| {
+                        let e = q + 9 + k * 8;
+                        Ok((latitude(u32_at(d, e + 4)?), longitude(u32_at(d, e)?)))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                a.aprons.push(Apron {
+                    surface: u8_at(d, q + 6)?,
+                    outline,
+                });
+            }
             RECORD_NAME => {
                 let raw = &d[q + 6..q + len];
                 let text = raw.split(|&b| b == 0).next().unwrap_or(&[]);

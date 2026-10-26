@@ -22,6 +22,7 @@ mod flight_pose;
 mod flight_view;
 mod gamepad;
 mod native_gauges;
+mod pavement;
 #[allow(dead_code)] // Shared with the bounded offline reference-gauge replay example.
 mod reference_pose;
 mod scenery_objects;
@@ -565,13 +566,15 @@ impl World {
     fn ground(&self, center: (f64, f64)) -> fsx_render::Ground {
         use fsx_scenery::catalog::local;
         let mut runways = Vec::new();
+        let (mut paved, mut taxi_lines) = (Vec::new(), Vec::new());
         let mut fields = Vec::new();
         for a in &self.catalog.airports {
             let (n, e) = local(self.origin, (a.latitude, a.longitude));
             let d = (n - center.0).hypot(e - center.1);
             if d < 60_000. {
                 // Every airport in range is flattened to its own field elevation.
-                fields.push((n, e, a.altitude - self.base));
+                // The flattened field sits 0.2 m below the pavement stack.
+                fields.push((n, e, a.altitude - self.base - 0.2));
             }
             if d > 25_000. {
                 continue;
@@ -597,6 +600,34 @@ impl World {
                     surface: runway_surface(r.surface),
                     ends,
                 });
+            }
+            // Aprons below taxiways below runways, all on the flattened field.
+            let field = (a.altitude - self.base) as f32;
+            let to_local = |&(lat, lon): &(f64, f64)| {
+                let (n, e) = local(self.origin, (lat, lon));
+                [e as f32, n as f32]
+            };
+            for apron in a.aprons.iter().filter(|ap| ap.surface != 2) {
+                let outline: Vec<[f32; 2]> = apron.outline.iter().map(to_local).collect();
+                for t in pavement::triangulate(&outline) {
+                    for i in t {
+                        paved.push([outline[i][0], field - 0.14, outline[i][1]]);
+                    }
+                }
+            }
+            let points: Vec<[f32; 2]> = a.taxi_points.iter().map(to_local).collect();
+            for path in a.taxi_paths.iter().filter(|p| matches!(p.kind, 1 | 3 | 4)) {
+                let (Some(&from), Some(&to)) = (points.get(path.start), points.get(path.end))
+                else {
+                    continue;
+                };
+                let width = path.width.clamp(6., 60.) as f32;
+                pavement::strip(&mut paved, from, to, width, field - 0.1);
+                pavement::disc(&mut paved, from, width / 2., field - 0.1);
+                pavement::disc(&mut paved, to, width / 2., field - 0.1);
+                if path.kind != 3 {
+                    pavement::strip(&mut taxi_lines, from, to, 0.3, field - 0.08);
+                }
             }
         }
         let (terrain, classes) = match self.terrain(center, &fields) {
@@ -632,6 +663,8 @@ impl World {
             trees,
             surfaces,
             objects,
+            pavement: paved,
+            taxi_lines,
         }
     }
     /// Library objects within 6 km of a local centre, standing on the terrain

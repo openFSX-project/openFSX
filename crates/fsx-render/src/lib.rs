@@ -296,6 +296,10 @@ pub struct Ground {
     pub surfaces: Vec<Image>,
     /// Placed scenery models already transformed to world space.
     pub objects: Option<StaticScene>,
+    /// Apron and taxiway triangles in world space (east, up, north).
+    pub pavement: Vec<[f32; 3]>,
+    /// Yellow taxiway centreline triangles in world space.
+    pub taxi_lines: Vec<[f32; 3]>,
 }
 /// World-space static geometry: (position, normal, uv) vertices, batches of
 /// vertex ranges per material, and materials whose textures index `images`.
@@ -370,6 +374,15 @@ impl Terrain {
         let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * fx;
         Some(top + (bottom - top) * fy)
     }
+}
+/// Remap clip depth z to w - z (column-major), so depth runs 1 at the near
+/// plane to 0 at the far plane; with a float depth buffer this keeps distant
+/// coplanar layers (runways, taxiways, aprons) apart.
+fn reverse_depth(mut m: Mat4) -> Mat4 {
+    for column in 0..4 {
+        m[column * 4 + 2] = m[column * 4 + 3] - m[column * 4 + 2];
+    }
+    m
 }
 /// Full mip chain by 2 x 2 box filtering (edge texels repeat on odd sizes).
 fn mip_chain(image: &Image) -> Vec<Image> {
@@ -638,7 +651,8 @@ impl Gpu {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: !blended,
-                depth_compare: wgpu::CompareFunction::Less,
+                // Reversed-Z: near maps to 1 and far to 0 for float precision.
+                depth_compare: wgpu::CompareFunction::Greater,
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -904,6 +918,14 @@ impl Gpu {
                 alpha_threshold: 0.5,
                 clamp_texture: true,
             });
+            materials.push(Material {
+                diffuse: [0.82, 0.66, 0.12, 1.],
+                diffuse_texture: None,
+                alpha_blend: false,
+                alpha_function: 0,
+                alpha_threshold: 0.,
+                clamp_texture: false,
+            });
             for &texture in &surface_textures {
                 materials.push(Material {
                     diffuse: [1.; 4],
@@ -1080,6 +1102,50 @@ impl Gpu {
                     world_space: false,
                 });
             }
+            if let Some(g) = ground.filter(|g| !g.pavement.is_empty()) {
+                // Pavement uses the asphalt surface texture with planar UVs.
+                let up = [0f32, 1., 0.];
+                let first = vertices.len() as u32;
+                vertices.extend(g.pavement.iter().map(|p| {
+                    [
+                        p[0],
+                        p[1],
+                        p[2],
+                        up[0],
+                        up[1],
+                        up[2],
+                        p[0] / 40.,
+                        p[2] / 40.,
+                        0.,
+                    ]
+                }));
+                draws.push(GpuDraw {
+                    visible: true,
+                    range: first..vertices.len() as u32,
+                    material: if surface_textures.len() > 1 {
+                        ground_material + 10 + 1
+                    } else {
+                        ground_material + 1
+                    },
+                    center: [0.; 3],
+                    blended: false,
+                    world_space: true,
+                });
+                let first = vertices.len() as u32;
+                vertices.extend(
+                    g.taxi_lines
+                        .iter()
+                        .map(|p| [p[0], p[1], p[2], up[0], up[1], up[2], 0., 0., 0.]),
+                );
+                draws.push(GpuDraw {
+                    visible: true,
+                    range: first..vertices.len() as u32,
+                    material: ground_material + 9,
+                    center: [0.; 3],
+                    blended: false,
+                    world_space: true,
+                });
+            }
             if let Some(o) = objects {
                 let base = vertices.len() as u32;
                 vertices.extend(
@@ -1096,7 +1162,7 @@ impl Gpu {
                     draws.push(GpuDraw {
                         visible: true,
                         range: base + range.start..base + range.end,
-                        material: ground_material + 9 + surface_textures.len() + material,
+                        material: ground_material + 10 + surface_textures.len() + material,
                         center: [first[0], first[1], first[2]],
                         blended: o.materials.get(*material).is_some_and(|m| m.alpha_blend),
                         world_space: true,
@@ -1278,17 +1344,17 @@ impl Gpu {
                             .filter(|r| r.hard == hard && r.surface.is_none())
                         {
                             let (l, w) = (r.length / 2., r.width / 2.);
-                            rect(v, r, -l, l, -w, w, 0.02);
+                            rect(v, r, -l, l, -w, w, -0.05);
                         }
                     });
                 }
                 // Textured surfaces: u spans the width, v repeats every 1.5 widths.
                 for k in 0..surface_textures.len() {
-                    draw(&mut vertices, ground_material + 9 + k, &mut |v| {
+                    draw(&mut vertices, ground_material + 10 + k, &mut |v| {
                         for r in ground.runways.iter().filter(|r| r.surface == Some(k as u8)) {
                             let (l, w) = (r.length / 2., r.width / 2.);
                             let first = v.len();
-                            rect(v, r, -l, l, -w, w, 0.02);
+                            rect(v, r, -l, l, -w, w, -0.05);
                             let h = r.heading.to_radians();
                             for vertex in &mut v[first..] {
                                 let (de, dn) = (vertex[0] - r.east, vertex[2] - r.north);
@@ -1306,7 +1372,7 @@ impl Gpu {
                         // Centreline dashes between the designators.
                         let mut a = -l + 120.;
                         while a + 30. < l - 120. {
-                            rect(v, r, a, a + 30., -0.45, 0.45, 0.04);
+                            rect(v, r, a, a + 30., -0.45, 0.45, 0.);
                             a += 50.;
                         }
                         for end in [-1f32, 1.] {
@@ -1322,14 +1388,14 @@ impl Gpu {
                             let bars = ((w * 2. - 6.) / 4.).floor().clamp(2., 16.) as i32;
                             for b in 0..bars {
                                 let c = -w + 3. + (b as f32 + 0.25) * (w * 2. - 6.) / bars as f32;
-                                rect(v, r, a0, a1, c, c + 1.8, 0.04);
+                                rect(v, r, a0, a1, c, c + 1.8, 0.);
                             }
                             // Aiming point blocks 300 m in, on runways long enough.
                             if r.length > 1200. {
                                 let (a0, a1) = span(300., 345.);
                                 let (c0, c1) = (w * 0.25, w * 0.25 + (w * 0.4).min(9.));
-                                rect(v, r, a0, a1, c0, c1, 0.04);
-                                rect(v, r, a0, a1, -c1, -c0, 0.04);
+                                rect(v, r, a0, a1, c0, c1, 0.);
+                                rect(v, r, a0, a1, -c1, -c0, 0.);
                             }
                             // Designator read by the landing pilot: letter nearer the
                             // threshold, number beyond it; glyph rows run away from
@@ -1361,7 +1427,7 @@ impl Gpu {
                                             // The secondary end faces the opposite way.
                                             let (c0, c1) =
                                                 if end < 0. { (x, x + px) } else { (-x - px, -x) };
-                                            rect(v, r, a0, a1, c0, c1, 0.05);
+                                            rect(v, r, a0, a1, c0, c1, 0.01);
                                         }
                                     }
                                 }
@@ -1373,8 +1439,8 @@ impl Gpu {
                             }
                             line(&digits, at);
                         }
-                        rect(v, r, -l, l, -w, -w + 0.9, 0.04);
-                        rect(v, r, -l, l, w - 0.9, w, 0.04);
+                        rect(v, r, -l, l, -w, -w + 0.9, 0.);
+                        rect(v, r, -l, l, w - 0.9, w, 0.);
                     }
                 });
             } else {
@@ -1602,8 +1668,7 @@ impl Gpu {
             &self.uniform,
             0,
             &bytes(
-                orbit
-                    .matrix(self.config.width as f32 / self.config.height as f32)
+                reverse_depth(orbit.matrix(self.config.width as f32 / self.config.height as f32))
                     .into_iter()
                     .chain(self.model_matrix)
                     .chain(orbit.eye())
@@ -1640,7 +1705,7 @@ impl Gpu {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.),
+                        load: wgpu::LoadOp::Clear(0.),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,

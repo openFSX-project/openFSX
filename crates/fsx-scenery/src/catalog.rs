@@ -142,3 +142,24 @@ mod tests {
         assert!(s.length > 3000. && (s.heading - 180.).abs() < 1.);
     }
 }
+#[cfg(test)]
+mod ground_tests {
+    use super::*;
+    #[test]
+    fn installed_ksea_taxiways_and_aprons_when_present() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../FSX");
+        if !root.join("Scenery").is_dir() {
+            return;
+        }
+        let (c, _) = Catalog::load(&root).unwrap();
+        let a = c.find("KSEA").unwrap();
+        assert!(a.taxi_points.len() > 300 && a.taxi_paths.len() > 500 && a.aprons.len() >= 10);
+        // Every path endpoint is a valid point within a few km of the field.
+        for p in &a.taxi_paths {
+            assert!(p.start < a.taxi_points.len() && p.end < a.taxi_points.len());
+        }
+        let (n, e) = local((a.latitude, a.longitude), a.taxi_points[0]);
+        assert!(n.hypot(e) < 5000.);
+        assert!(a.aprons.iter().all(|ap| ap.outline.len() >= 3));
+    }
+}

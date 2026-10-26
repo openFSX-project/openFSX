@@ -89,8 +89,17 @@ Runways use installed surface textures by FSX surface code (concrete
 sand and gravel variants), tiled every 1.5 runway widths. openFSX paints
 threshold bars, edge lines, centreline dashes, aiming-point blocks 300 m in
 (runways over 1200 m) and both designators (e.g. 16L / 34R) from a 5 x 7 pixel
-font, oriented for the landing pilot. FSX's own marking geometry, lights,
-taxiways and aprons are not reproduced yet; water runways are not drawn.
+font, oriented for the landing pilot. FSX's own marking geometry, lights, edge
+and aprons are not reproduced yet; water runways are not drawn.
+
+Aprons (airport subrecord 0x37 outlines, ear-clipped) and taxiways (0x1A points,
+0x1C taxi/parking/path segments as strips of the authored width with round
+joints) use the asphalt surface texture with planar UVs; taxi and path segments
+get a yellow centreline. The pavement stack sits below the wheel contact plane:
+flattened field -0.2 m, aprons -0.14, taxiways -0.10, centrelines -0.08,
+runway -0.05, runway paint 0. Depth uses reversed-Z on a 32-bit float buffer so
+these thin layers stay separate at distance. Taxiway edge lines, hold-short
+markings, signs and lights are not drawn yet.
 
 Placed scenery objects within 6 km (BGL section 0x25 LibraryObject records)
 are resolved through a GUID index of every installed model library (section
