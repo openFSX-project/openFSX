@@ -1638,7 +1638,12 @@ count, subsection-table offset, table size). Each 16-byte subsection header give
 record count, data offset and size. Section 0x03 holds airport records (id 0x3C,
 0x38-byte header: runway/COM/start counts, packed longitude/latitude, altitude in
 millimetres, tower position, magnetic variation, base-38 ICAO at 0x28) followed by
-subrecords; 0x19 is the name and 0x04 a runway (surface, end numbers and
+subrecords; 0x19 is the name, 0x1A taxi points (u16 count at 6, 12-byte
+entries with longitude/latitude at 4/8), 0x1C taxi paths (u16 count at 6,
+20-byte entries: start u16, end in the low 12 bits of the next u16, type in the
+low nibble of byte 4 (1 taxi, 2 runway, 3 parking, 4 path), float width at 8),
+0x37 aprons (surface byte at 6, u16 vertex count at 7, longitude/latitude pairs
+from 9) and 0x04 a runway (surface, end numbers and
 designators, centre position/altitude, float length/width/true heading in metres
 and degrees). Longitude = raw*360/(3*2^28)-180, latitude = 90-raw*180/2^29.
 fsx-scenery decodes these from every Scenery/*/scenery/APX*.bgl (24,490 stock
