@@ -590,7 +590,67 @@ impl World {
                 None
             }
         };
-        fsx_render::Ground { runways, terrain }
+        let top = terrain
+            .as_ref()
+            .map_or(0., |t| t.heights.iter().fold(0f32, |a, &h| a.max(h)));
+        let sky = self.sky(center, top);
+        fsx_render::Ground {
+            runways,
+            terrain,
+            sky,
+        }
+    }
+    /// FSX noon sky gradient and a fair-weather cumulus layer 500 m above the
+    /// highest terrain in the area (at least 1500 m above the origin plane).
+    /// The layout is deterministic per area; weather themes are not read yet.
+    fn sky(&self, center: (f64, f64), terrain_top: f32) -> Option<fsx_render::Sky> {
+        let texture = self.root.join("Texture");
+        let load = |name: &str| fsx_render::TextureImage::load(&texture.join(name)).ok();
+        // 32-bit BI_RGB sky strips use the explicit BGRA path; the sky is opaque.
+        let mut gradient = std::fs::read(texture.join("sky_noon_5.bmp"))
+            .ok()
+            .and_then(|b| fsx_render::TextureImage::bmp_alpha(&b).ok())?;
+        gradient.rgba.chunks_mut(4).for_each(|p| p[3] = 255);
+        let sprites = load("cumulus01.bmp")?;
+        let base = (terrain_top + 500.).max(1500.);
+        let mut seed = (center.0 / 1000.).round() as i64 as u64 * 31
+            + (center.1 / 1000.).round() as i64 as u64;
+        let mut random = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) as f32) / (1u64 << 31) as f32
+        };
+        let cells = [0u8, 1, 2, 3, 6, 7, 12, 13];
+        let mut clouds = Vec::new();
+        for _ in 0..45 {
+            let (east, north) = (
+                center.1 as f32 + (random() - 0.5) * 70_000.,
+                center.0 as f32 + (random() - 0.5) * 70_000.,
+            );
+            let puffs = (0..6 + (random() * 9.) as usize)
+                .map(|_| {
+                    let p = [
+                        east + (random() - 0.5) * 1600.,
+                        base + random() * 450.,
+                        north + (random() - 0.5) * 1600.,
+                    ];
+                    let cell = cells[(random() * cells.len() as f32) as usize % cells.len()];
+                    (p, 250. + random() * 300., cell)
+                })
+                .collect();
+            clouds.push(fsx_render::Cloud {
+                center: [east, base + 200., north],
+                puffs,
+            });
+        }
+        Some(fsx_render::Sky {
+            gradient,
+            center: [center.1 as f32, center.0 as f32],
+            radius: 85_000.,
+            sprites,
+            clouds,
+        })
     }
 }
 fn airport_scenery(

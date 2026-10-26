@@ -21,7 +21,7 @@ sound.cfg engine/event audio (FLIGHT.md). Stage 3 adds fsx-scenery: BGL airport/
 runway decoding, --airport and menu location starts (FORMATS.md, FLIGHT.md).
 Stage 4 adds terrain elevation (FORMATS.md) and terrain impact. Stage 5 adds
 land-class textures. Mipmaps and anisotropic filtering follow, then terrain-height wheel contact and
-per-airport flattening, and background terrain streaming. Next: lclookup regions/seasons,
+per-airport flattening, and background terrain streaming; FSX sky gradient and cumulus clouds. Next: lclookup regions/seasons,
 terrain streaming, water, autogen.
 
 After `954710c`, the original pitot thermal prefix is ported up to temperature

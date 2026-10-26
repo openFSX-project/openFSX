@@ -66,6 +66,14 @@ the loaded area, a background thread decodes a new +-40 km area (runways,
 flattening, elevation, land class) around it and swaps it in; the local origin
 stays at the start, so very long flights accumulate flat-earth error. The swap
 re-uploads scene textures and may cause a short hitch.
+
+The sky is a dome textured with the installed `Texture/sky_noon_5.bmp` gradient
+(32-bit BGRA strip, zenith at the top). Fair-weather cumulus are built from the
+installed `cumulus01.bmp` 4 x 4 puff sheet (DXT5 alpha): 45 clusters of 6-14
+puffs per area, each puff three crossed translucent quads, sorted back to front
+per cloud. Cloud base is 500 m above the highest terrain in the area (at least
+1500 m). Time of day, weather themes, cloud lighting and flying through cloud
+are not simulated yet.
 The ground uses the stock summer land-class textures: worldlc.bgl classes are
 sampled per mesh quad and the matching `NNN?2su1.bmp` textures (DXT1 inside a
 BMP header) are packed into a 2048-pixel atlas, one texture per 4 x 4 quads

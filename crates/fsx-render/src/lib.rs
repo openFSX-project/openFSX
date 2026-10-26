@@ -287,6 +287,26 @@ pub struct Gpu {
 pub struct Ground {
     pub runways: Vec<GroundRunway>,
     pub terrain: Option<Terrain>,
+    pub sky: Option<Sky>,
+}
+/// Sky dome gradient and cumulus clouds built from translucent puffs.
+#[derive(Debug, Clone)]
+pub struct Sky {
+    /// Vertical gradient, top row at the zenith (FSX sky_*.bmp).
+    pub gradient: Image,
+    /// Dome centre (east, north) and radius in world metres.
+    pub center: [f32; 2],
+    pub radius: f32,
+    /// 4 x 4 puff sprite sheet with alpha (FSX cumulus01.bmp).
+    pub sprites: Image,
+    pub clouds: Vec<Cloud>,
+}
+#[derive(Debug, Clone, Default)]
+pub struct Cloud {
+    /// World position (east, up, north) used for back-to-front sorting.
+    pub center: [f32; 3],
+    /// Puffs: world position, half size and sprite cell 0..16.
+    pub puffs: Vec<([f32; 3], f32, u8)>,
 }
 /// Regular elevation grid in world metres around the flight origin.
 #[derive(Debug, Clone, Default)]
@@ -414,6 +434,8 @@ struct GpuDraw {
     material: usize,
     pub center: [f32; 3],
     blended: bool,
+    /// Centre is in world space rather than aircraft model space.
+    world_space: bool,
 }
 impl Gpu {
     pub async fn new(
@@ -748,6 +770,12 @@ impl Gpu {
                 textures.push(Some(upload(image)));
                 textures.len() - 1
             });
+        let sky = ground.and_then(|g| g.sky.as_ref());
+        let sky_textures = sky.map(|sky| {
+            textures.push(Some(upload(&sky.gradient)));
+            textures.push(Some(upload(&sky.sprites)));
+            (textures.len() - 2, textures.len() - 1)
+        });
         let views = textures
             .iter()
             .map(|texture| texture.as_ref().map(|t| t.create_view(&Default::default())))
@@ -770,6 +798,19 @@ impl Gpu {
                     alpha_function: 0,
                     alpha_threshold: 0.,
                     clamp_texture: false,
+                });
+            }
+            for (texture, blend) in [
+                (sky_textures.map(|t| t.0), false),
+                (sky_textures.map(|t| t.1), true),
+            ] {
+                materials.push(Material {
+                    diffuse: if blend { [1., 1., 1., 0.9] } else { [1.; 4] },
+                    diffuse_texture: Some(texture.unwrap_or(gradient)),
+                    alpha_blend: blend,
+                    alpha_function: 0,
+                    alpha_threshold: 0.,
+                    clamp_texture: true,
                 });
             }
             materials.push(Material {
@@ -844,6 +885,7 @@ impl Gpu {
                 material: batch.material,
                 center: batch.center,
                 blended: appearance.materials[batch.material].alpha_blend,
+                world_space: false,
             })
             .collect();
         let mut vertices = geometry
@@ -871,6 +913,7 @@ impl Gpu {
                 material: ground_material,
                 center: [0.; 3],
                 blended: false,
+                world_space: false,
             });
             if let Some(t) = ground.and_then(|g| g.terrain.as_ref()) {
                 let first = vertices.len() as u32;
@@ -923,10 +966,100 @@ impl Gpu {
                 draws.push(GpuDraw {
                     visible: true,
                     range: first..vertices.len() as u32,
+                    material: ground_material + 7,
+                    center: [0.; 3],
+                    blended: false,
+                    world_space: false,
+                });
+            }
+            if let Some(sky) = sky {
+                // Normals face the shader's light so sky and clouds are unshaded.
+                let lit = {
+                    let l = [0.3f32, 0.8, 0.5];
+                    let n = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt();
+                    [l[0] / n, l[1] / n, l[2] / n]
+                };
+                let first = vertices.len() as u32;
+                let (rings, segments) = (16usize, 48usize);
+                let point = |ring: usize, segment: usize| {
+                    // Ring 0 is the zenith; the last ring dips below the horizon.
+                    let elevation = (90. - ring as f32 * 95. / rings as f32).to_radians();
+                    let azimuth = (segment as f32 / segments as f32) * std::f32::consts::TAU;
+                    let v = (ring as f32 / rings as f32).min(1.) * 0.97 + 0.015;
+                    [
+                        sky.center[0] + sky.radius * elevation.cos() * azimuth.sin(),
+                        sky.radius * 0.35 * elevation.sin(),
+                        sky.center[1] + sky.radius * elevation.cos() * azimuth.cos(),
+                        lit[0],
+                        lit[1],
+                        lit[2],
+                        0.5,
+                        v,
+                        0.,
+                    ]
+                };
+                for ring in 0..rings {
+                    for segment in 0..segments {
+                        for (dr, ds) in [(0, 0), (1, 0), (1, 1), (0, 0), (1, 1), (0, 1)] {
+                            vertices.push(point(ring + dr, segment + ds));
+                        }
+                    }
+                }
+                draws.push(GpuDraw {
+                    visible: true,
+                    range: first..vertices.len() as u32,
                     material: ground_material + 5,
                     center: [0.; 3],
                     blended: false,
+                    world_space: true,
                 });
+                for cloud in &sky.clouds {
+                    let first = vertices.len() as u32;
+                    for &(p, size, cell) in &cloud.puffs {
+                        let (u0, v0) = (f32::from(cell % 4) * 0.25, f32::from(cell / 4) * 0.25);
+                        let uv = |a: f32, b: f32| [u0 + 0.005 + a * 0.24, v0 + 0.005 + b * 0.24];
+                        // Two crossed vertical quads and one horizontal quad.
+                        let axes: [([f32; 3], [f32; 3]); 3] = [
+                            ([1., 0., 0.], [0., 1., 0.]),
+                            ([0., 0., 1.], [0., 1., 0.]),
+                            ([1., 0., 0.], [0., 0., 1.]),
+                        ];
+                        for (a, b) in axes {
+                            let corner = |sa: f32, sb: f32| {
+                                let t = uv((sa + 1.) / 2., (1. - sb) / 2.);
+                                [
+                                    p[0] + (a[0] * sa + b[0] * sb) * size,
+                                    p[1] + (a[1] * sa + b[1] * sb) * size * 0.7,
+                                    p[2] + (a[2] * sa + b[2] * sb) * size,
+                                    lit[0],
+                                    lit[1],
+                                    lit[2],
+                                    t[0],
+                                    t[1],
+                                    0.,
+                                ]
+                            };
+                            for (sa, sb) in [
+                                (-1., -1.),
+                                (1., -1.),
+                                (1., 1.),
+                                (-1., -1.),
+                                (1., 1.),
+                                (-1., 1.),
+                            ] {
+                                vertices.push(corner(sa, sb));
+                            }
+                        }
+                    }
+                    draws.push(GpuDraw {
+                        visible: true,
+                        range: first..vertices.len() as u32,
+                        material: ground_material + 6,
+                        center: cloud.center,
+                        blended: true,
+                        world_space: true,
+                    });
+                }
             }
             if let Some(ground) = ground {
                 let mut draw =
@@ -941,6 +1074,7 @@ impl Gpu {
                             material,
                             center: [0.; 3],
                             blended: false,
+                            world_space: false,
                         });
                     };
                 // Oriented rectangle: offsets along/across the runway axis.
@@ -1006,6 +1140,7 @@ impl Gpu {
                     material: ground_material + 1,
                     center: [0.; 3],
                     blended: false,
+                    world_space: false,
                 });
                 count += 6;
                 for i in 0..40 {
@@ -1018,6 +1153,7 @@ impl Gpu {
                     material: ground_material + 2,
                     center: [0.; 3],
                     blended: false,
+                    world_space: false,
                 });
             }
             if ground.and_then(|g| g.terrain.as_ref()).is_none() {
@@ -1033,6 +1169,7 @@ impl Gpu {
                     material: ground_material + 3,
                     center: [0.; 3],
                     blended: false,
+                    world_space: false,
                 });
             }
         }
@@ -1264,7 +1401,12 @@ impl Gpu {
                 .collect::<Vec<_>>();
             let eye = orbit.eye();
             let distance = |draw: &GpuDraw| {
-                let d = math::sub(math::transform(self.model_matrix, draw.center), eye);
+                let center = if draw.world_space {
+                    draw.center
+                } else {
+                    math::transform(self.model_matrix, draw.center)
+                };
+                let d = math::sub(center, eye);
                 math::dot(d, d)
             };
             blended.sort_by(|a, b| distance(b).total_cmp(&distance(a)));
