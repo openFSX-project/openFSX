@@ -10,6 +10,15 @@ changes. Keep the full FSX 1:1 objective active until its original scope is met.
 
 ## Current stage — 26 October 2026
 
+Priority shift (user request): reach a playable state first. Bit-exact legacy
+ports pause after the pitot thermal stage; the decoded but unported icing tail is
+sim1 0x20B45A0A..0x20B45B3E (ice fraction at owner+0x4E8, filtered output at
++0x16C). Playable stage 1 adds a no-argument menu start, menu launch into the
+virtual cockpit with live native gauges when the helper exists, graceful
+exterior/static-panel fallback, CFG-driven flaps (F5–F8) and game-controller
+input. See FLIGHT.md for the flap approximation. Next: engine sound, stall
+behaviour and landing feel, then FSX terrain/scenery loading.
+
 After `954710c`, the original pitot thermal prefix is ported up to temperature
 storage, before icing. scripts/check-pitot-thermal.py executes the pinned original
 instructions with an explicit weather environment scalar, seeded float32 probe

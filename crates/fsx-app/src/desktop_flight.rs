@@ -24,10 +24,27 @@ pub fn flight_key(physical: PhysicalKey, logical: &Key) -> Option<KeyCode> {
     })
 }
 
+/// Normalized analog inputs: pitch positive pull, roll right, yaw right.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Analog {
+    pub pitch: f64,
+    pub roll: f64,
+    pub yaw: f64,
+    /// Absolute lever position when the device has one.
+    pub throttle: Option<f64>,
+    /// Throttle change per second for devices without a lever, -1..1.
+    pub throttle_rate: f64,
+    pub brake: f64,
+}
+
 pub struct FlightSession {
     pub simulation: Simulation,
     pub paused: bool,
     pub parking_brake: bool,
+    /// Selected flap detent; the surface follows at the authored extension rate.
+    pub flap_handle: usize,
+    /// Latest analog stick/pedal/lever positions; None keeps keyboard control.
+    pub analog: Option<Analog>,
     keys: HashSet<KeyCode>,
     // A complete tap can arrive between two fixed steps. Sample it once rather
     // than dropping the press when its release precedes the next redraw.
@@ -52,6 +69,8 @@ impl FlightSession {
             },
             paused: false,
             parking_brake: ground,
+            flap_handle: 0,
+            analog: None,
             keys: HashSet::new(),
             pending_presses: HashSet::new(),
             accumulator: 0.,
@@ -71,6 +90,15 @@ impl FlightSession {
                     KeyCode::F1 => self.simulation.controls.throttle = 0.,
                     KeyCode::F4 => self.simulation.controls.throttle = 1.,
                     KeyCode::KeyB => self.parking_brake = !self.parking_brake,
+                    KeyCode::F5 => self.flap_handle = 0,
+                    KeyCode::F6 => self.flap_handle = self.flap_handle.saturating_sub(1),
+                    KeyCode::F7 => {
+                        self.flap_handle = (self.flap_handle + 1)
+                            .min(self.simulation.parameters.flaps.detents() - 1)
+                    }
+                    KeyCode::F8 => {
+                        self.flap_handle = self.simulation.parameters.flaps.detents() - 1
+                    }
                     _ => {}
                 }
             }
@@ -101,6 +129,18 @@ impl FlightSession {
             c.pitch = axis(KeyCode::ArrowDown, KeyCode::ArrowUp) * 0.5;
             c.roll = axis(KeyCode::ArrowRight, KeyCode::ArrowLeft) * 0.5;
             c.yaw = axis(KeyCode::KeyE, KeyCode::KeyQ) * 0.5;
+            if let Some(analog) = self.analog {
+                // Keys still win while held so either device can be used.
+                for (value, stick) in [
+                    (&mut c.pitch, analog.pitch),
+                    (&mut c.roll, analog.roll),
+                    (&mut c.yaw, analog.yaw),
+                ] {
+                    if *value == 0. {
+                        *value = stick;
+                    }
+                }
+            }
             c.brake = if self.parking_brake
                 || self.keys.contains(&KeyCode::Space)
                 || self.pending_presses.contains(&KeyCode::Space)
@@ -111,6 +151,22 @@ impl FlightSession {
             };
             c.throttle =
                 (c.throttle + axis(KeyCode::PageUp, KeyCode::PageDown) * STEP * 0.25).clamp(0., 1.);
+            if let Some(analog) = self.analog {
+                c.brake = c.brake.max(analog.brake);
+                c.throttle = match analog.throttle {
+                    Some(lever) => lever,
+                    None => c.throttle + analog.throttle_rate * STEP * 0.5,
+                }
+                .clamp(0., 1.);
+            }
+            let flaps = &self.simulation.parameters.flaps;
+            let target = flaps.detent_fraction(self.flap_handle);
+            let travel = STEP / flaps.extending_time;
+            c.flaps = if target > c.flaps {
+                (c.flaps + travel).min(target)
+            } else {
+                (c.flaps - travel).max(target)
+            };
             c.trim = (c.trim + axis(KeyCode::Home, KeyCode::End) * STEP * 0.15).clamp(-1., 1.);
             self.simulation.step(c, STEP)?;
             self.pending_presses.clear();
@@ -156,7 +212,7 @@ impl FlightSession {
         } else {
             "AIRBORNE"
         };
-        Ok(format!("openFSX Flight | {:.1} kt | {:.0} ft | {:+.0} fpm | bank {:+.1}° | pitch {:+.1}° | throttle {:.0}% | {status}",t.speed/KNOT,t.altitude/FOOT,t.climb/FOOT*60.,t.attitude[0].to_degrees(),t.attitude[1].to_degrees(),self.simulation.controls.throttle*100.))
+        Ok(format!("openFSX Flight | {:.1} kt | {:.0} ft | {:+.0} fpm | bank {:+.1}° | pitch {:+.1}° | throttle {:.0}% | flaps {:.0}° | {status}",t.speed/KNOT,t.altitude/FOOT,t.climb/FOOT*60.,t.attitude[0].to_degrees(),t.attitude[1].to_degrees(),self.simulation.controls.throttle*100.,self.simulation.controls.flaps*self.simulation.parameters.flaps.max_deflection()))
     }
 }
 #[cfg(test)]
@@ -239,6 +295,43 @@ mod tests {
         session.reset().unwrap();
         assert!(session.parking_brake && session.simulation.ground_contact);
         assert_eq!(session.simulation.time, 0.);
+    }
+    #[test]
+    fn flap_detents_follow_extension_rate_and_analog_inputs_apply() {
+        let mut p = fsx_vehicle::aircraft::own_parameters();
+        p.flaps = fsx_vehicle::flaps::Flaps {
+            positions: vec![0., 10., 20.],
+            extending_time: 2.,
+            lift: 0.5,
+            drag: 0.05,
+            pitch: -0.05,
+        };
+        let mut session = FlightSession::new(p).unwrap();
+        session.key(KeyCode::F7, true);
+        session.key(KeyCode::F7, false);
+        session.key(KeyCode::F7, true);
+        session.key(KeyCode::F7, false);
+        session.key(KeyCode::F7, true);
+        assert_eq!(session.flap_handle, 2);
+        for _ in 0..4 {
+            session.advance(0.25).unwrap();
+        }
+        assert!((session.simulation.controls.flaps - 0.5).abs() < 1e-6);
+        for _ in 0..5 {
+            session.advance(0.25).unwrap();
+        }
+        assert_eq!(session.simulation.controls.flaps, 1.);
+        session.key(KeyCode::F5, true);
+        assert_eq!(session.flap_handle, 0);
+        session.analog = Some(Analog {
+            roll: 0.3,
+            throttle: Some(0.2),
+            ..Default::default()
+        });
+        session.advance(STEP).unwrap();
+        assert_eq!(session.simulation.controls.roll, 0.3);
+        assert_eq!(session.simulation.controls.throttle, 0.2);
+        assert!(session.simulation.controls.flaps < 1.);
     }
     #[test]
     fn navigation_uses_logical_key_with_numlock_off() {

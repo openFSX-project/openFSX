@@ -19,6 +19,7 @@ mod desktop_flight;
 mod flight_gauges;
 mod flight_pose;
 mod flight_view;
+mod gamepad;
 mod native_gauges;
 #[allow(dead_code)] // Shared with the bounded offline reference-gauge replay example.
 mod reference_pose;
@@ -44,6 +45,7 @@ struct App {
     reference_label: Option<String>,
     visibility_nodes: Option<Vec<bool>>,
     gauges: Option<flight_gauges::FlightGauges>,
+    gamepad: Option<gamepad::Gamepad>,
 }
 impl App {
     fn click_gauge(&mut self) -> Result<bool, String> {
@@ -149,6 +151,18 @@ impl App {
         let elapsed = now.duration_since(self.last_frame).as_secs_f64();
         self.last_frame = now;
         if let Some(flight) = &mut self.flight {
+            if let Some(pad) = &mut self.gamepad {
+                let (keys, analog) = pad.poll();
+                for (key, pressed) in keys {
+                    match key {
+                        KeyCode::KeyP if pressed => flight.paused = !flight.paused,
+                        KeyCode::KeyR if pressed => flight.reset()?,
+                        KeyCode::KeyP | KeyCode::KeyR => {}
+                        _ => flight.key(key, pressed),
+                    }
+                }
+                flight.analog = analog;
+            }
             flight.advance(elapsed)?;
             if let Some(alternate) = &mut self.alternate {
                 alternate.update(flight)?;
@@ -437,14 +451,44 @@ impl ApplicationHandler for App {
     }
 }
 
+fn run_menu(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        fsx_ui::run(path)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        Err("The FSX menu host currently requires Windows".into())
+    }
+}
+/// FSX folders beside or above the executable, then the working directory.
+fn find_installation() -> Option<PathBuf> {
+    let is_root = |p: &Path| p.join("fsx.exe").is_file() && p.join("SimObjects").is_dir();
+    let exe = std::env::current_exe().ok()?;
+    let cwd = std::env::current_dir().ok();
+    exe.ancestors()
+        .skip(1)
+        .chain(cwd.as_deref().into_iter())
+        .flat_map(|d| [d.to_path_buf(), d.join("FSX")])
+        .find(|p| is_root(p))
+}
 fn run() -> Result<(), String> {
-    let mut args = std::env::args_os().skip(1);
+    let mut args = std::env::args_os().skip(1).peekable();
+    if args.peek().is_none() {
+        // Double-click start: open the menu for the nearest FSX installation.
+        return run_menu(&find_installation().ok_or(
+            "No FSX installation found. Place openFSX next to an FSX folder or pass its path with --menu",
+        )?);
+    }
     let path = PathBuf::from(
         args.next()
             .ok_or("Usage: openfsx-viewer <model.mdl> [options]\nFlight: openfsx-viewer <aircraft folder> --fly [--variant N] [--windows-1252]\nOptions: --lod N --texture-dir folder --no-textures --snapshot output.ppm --seconds N")?,
     );
     if path == Path::new("--help") || path == Path::new("-h") {
-        println!("openfsx-viewer <model.mdl> [--lod N] [--texture-dir folder | --no-textures]\nopenfsx-viewer <aircraft folder> --fly [--ground] [--variant N] [--windows-1252] [--lod N]\nWindows menu: openfsx-viewer <FSX installation> --menu\nAnimation inspector: --animation N [--frame N] (use inspect-model for IDs; [ / ] scrub)\nRecorded pose: --reference-pose sample.ndjson [--reference-sample N] (inspection only)\nOrbit camera: --view front|rear --zoom N (0.1..10)\nOptional: --debug-hud (experimental telemetry); --snapshot output.ppm [--seconds N, flight only, 0..300]\nFlight keys: Down/Up pull/push; Left/Right bank; Q/E rudder; PageUp/PageDown throttle; F1 idle; F4 full power; B parking brake; Space wheel brakes; Home/End trim; P pause; R reset; Esc close.");
+        println!("openfsx-viewer <model.mdl> [--lod N] [--texture-dir folder | --no-textures]\nopenfsx-viewer <aircraft folder> --fly [--ground] [--variant N] [--windows-1252] [--lod N]\nWindows menu: openfsx-viewer <FSX installation> --menu\nAnimation inspector: --animation N [--frame N] (use inspect-model for IDs; [ / ] scrub)\nRecorded pose: --reference-pose sample.ndjson [--reference-sample N] (inspection only)\nOrbit camera: --view front|rear --zoom N (0.1..10)\nOptional: --debug-hud (experimental telemetry); --snapshot output.ppm [--seconds N, flight only, 0..300]\nFlight keys: Down/Up pull/push; Left/Right bank; Q/E rudder; PageUp/PageDown throttle; F1 idle; F4 full power; B parking brake; Space wheel brakes; Home/End trim; F5-F8 flaps up/raise/lower/full; P pause; R reset; Esc close.
+Game controller: left stick pitch/roll, right stick rudder, triggers throttle, D-pad flaps, A brakes, X parking brake, Start pause, Back reset.
+With no arguments, the menu opens for an FSX folder beside or above openfsx-viewer.");
         println!("Visibility inspector: repeat --visibility-var NAME#units#value (explicit values; no flight override)");
         println!("Pose inspector: repeat --pose-var NAME#units#value (XAPS/read-only XAPC; no flight override)");
         println!("Flight views: --cockpit starts inside; F9 virtual cockpit / recenter, F11 exterior; cockpit drag looks around, wheel changes FOV.");
@@ -680,14 +724,7 @@ fn run() -> Result<(), String> {
         {
             return Err("--menu takes an FSX installation path and cannot be combined with renderer options".into());
         }
-        #[cfg(target_os = "windows")]
-        {
-            return fsx_ui::run(&path);
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            return Err("The FSX menu host currently requires Windows".into());
-        }
+        return run_menu(&path);
     }
     if (native_gauges_enabled && (!fly || !cfg!(windows) || no_textures))
         || (gauge_host.is_some() && !native_gauges_enabled)
@@ -711,7 +748,9 @@ fn run() -> Result<(), String> {
     }
     let eye_point = aircraft.as_ref().and_then(|a| a.eye_point);
     if cockpit && eye_point.is_none() {
-        return Err("--cockpit requires a configured [views] eyepoint".into());
+        // Aircraft without an authored eyepoint start in the exterior view.
+        eprintln!("No configured [views] eyepoint; starting in exterior view");
+        cockpit = false;
     }
     if ground && !fly {
         return Err("--ground requires --fly".into());
@@ -911,47 +950,58 @@ fn run() -> Result<(), String> {
         None
     };
     let mut gauges = if native_gauges_enabled {
-        let aircraft = aircraft
-            .as_ref()
-            .ok_or("Native gauges require an aircraft")?;
-        let canonical = path.canonicalize().map_err(|e| e.to_string())?;
-        let root = canonical
-            .ancestors()
-            .find(|p| p.join("fsx.exe").is_file() && p.join("Gauges").is_dir())
-            .ok_or("Native gauges require an aircraft inside the explicit FSX installation")?;
-        let helper = if let Some(helper) = gauge_host {
-            helper
-        } else {
-            let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-            let folder = executable.parent().ok_or("No executable directory")?;
-            let sibling = folder.join("fsx-gauge-host.exe");
-            if sibling.is_file() {
-                sibling
+        'gauges: {
+            let aircraft = aircraft
+                .as_ref()
+                .ok_or("Native gauges require an aircraft")?;
+            let canonical = path.canonicalize().map_err(|e| e.to_string())?;
+            let root = canonical
+                .ancestors()
+                .find(|p| p.join("fsx.exe").is_file() && p.join("Gauges").is_dir())
+                .ok_or("Native gauges require an aircraft inside the explicit FSX installation")?;
+            let helper = if let Some(helper) = gauge_host {
+                helper
             } else {
-                folder
-                    .parent()
-                    .ok_or("No build directory")?
-                    .join("fsx-gauge-host.exe")
-            }
-        };
-        let gauges = flight_gauges::FlightGauges::new(root, &aircraft.panel, &helper)?;
-        let gauges = if let Some(clock) = native_clock {
-            gauges.with_day_native_clock(root, clock)?
-        } else {
-            gauges
-        };
-        Some(if let Some(font) = &xml_gauge_font {
-            gauges.with_day_xml_plaque(
-                root,
-                font,
-                aircraft
-                    .registration
-                    .as_deref()
-                    .ok_or("XML plaque requires authored aircraft atc_id")?,
-            )?
-        } else {
-            gauges
-        })
+                let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+                let folder = executable.parent().ok_or("No executable directory")?;
+                let sibling = folder.join("fsx-gauge-host.exe");
+                if sibling.is_file() {
+                    sibling
+                } else {
+                    folder
+                        .parent()
+                        .ok_or("No build directory")?
+                        .join("fsx-gauge-host.exe")
+                }
+            };
+            let gauges = match flight_gauges::FlightGauges::new(root, &aircraft.panel, &helper) {
+                Ok(gauges) => gauges,
+                // Plain --native-gauges degrades to the static panel for aircraft
+                // whose instruments are not supported yet.
+                Err(error) if native_clock.is_none() && xml_gauge_font.is_none() => {
+                    eprintln!("Native gauges unavailable: {error}");
+                    break 'gauges None;
+                }
+                Err(error) => return Err(error),
+            };
+            let gauges = if let Some(clock) = native_clock {
+                gauges.with_day_native_clock(root, clock)?
+            } else {
+                gauges
+            };
+            Some(if let Some(font) = &xml_gauge_font {
+                gauges.with_day_xml_plaque(
+                    root,
+                    font,
+                    aircraft
+                        .registration
+                        .as_deref()
+                        .ok_or("XML plaque requires authored aircraft atc_id")?,
+                )?
+            } else {
+                gauges
+            })
+        }
     } else {
         None
     };
@@ -1040,6 +1090,7 @@ fn run() -> Result<(), String> {
         }
         return Ok(());
     }
+    let gamepad = flight.is_some().then(gamepad::Gamepad::new);
     let mut app = App {
         visual: flight_view::Visual {
             model,
@@ -1067,6 +1118,7 @@ fn run() -> Result<(), String> {
         reference_label,
         visibility_nodes,
         gauges,
+        gamepad,
     };
     EventLoop::new()
         .map_err(|e| e.to_string())?

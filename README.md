@@ -24,6 +24,12 @@ The compatibility target is FSX 1:1, including interface, flight behavior, conte
 Install stable Rust and the Windows MSVC C++ build tools. Run from the repository root:
 
 ```powershell
+# Easiest start: with no arguments the menu opens for an FSX folder beside or
+# above the executable (for example this repository's ./FSX). FLY NOW starts on
+# the runway in the virtual cockpit, with live C172 instruments when
+# target/fsx-gauge-host.exe has been built (scripts/build-gauge-host.ps1).
+cargo run -p fsx-app --features viewer --bin openfsx-viewer
+
 # Open the experimental FSX-style Free Flight menu (Windows / WebView2).
 cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX" --menu
 
@@ -56,7 +62,7 @@ Drag to orbit, scroll to zoom, use arrow keys to rotate, press **R** to reset an
 
 The CFG inspector reads `title` values from `[fltsim.N]` under `SimObjects/Airplanes`. `--windows-1252` explicitly selects that code page for every file; omit it for ASCII/UTF-8 installations. Encodings are not guessed. The presence of `fsx.exe` checks directory structure, not license ownership. Neither tool launches FSX or modifies its installation.
 
-Flight mode starts at 90 kt and 300 m with solved initial trim. Add **--cockpit** to start inside the configured native interior; **F9/F11** select cockpit/exterior without resetting physics. The eye point follows CFG datum and aircraft attitude; default gauges remain blank. Use **Down/Up** to pull/push, **Left/Right** to bank, **Q/E** for rudder, **Page Up/Down** for throttle, **Home/End** for trim, **P** to pause and **R** to reset. Add **--debug-hud** for the optional experimental on-screen panel. It reports true airspeed, height, vertical speed, local heading, throttle, trim, attitude and status. The ground is original test geometry. Read the [flight guide](docs/FLIGHT.md) for the actual data subset, approximation choices, controls and observed results. Flight behavior has not been validated against recorded FSX trajectories.
+Flight mode starts at 90 kt and 300 m with solved initial trim. Add **--cockpit** to start inside the configured native interior; **F9/F11** select cockpit/exterior without resetting physics. The eye point follows CFG datum and aircraft attitude; default gauges remain blank. Use **Down/Up** to pull/push, **Left/Right** to bank, **Q/E** for rudder, **Page Up/Down** for throttle, **Home/End** for trim, **F5–F8** for flaps, **P** to pause and **R** to reset. A game controller also works (left stick, right-stick rudder, triggers for throttle, D-pad flaps). Add **--debug-hud** for the optional experimental on-screen panel. It reports true airspeed, height, vertical speed, local heading, throttle, trim, attitude and status. The ground is original test geometry. Read the [flight guide](docs/FLIGHT.md) for the actual data subset, approximation choices, controls and observed results. Flight behavior has not been validated against recorded FSX trajectories.
 
 On Windows, build `scripts/build-gauge-host.ps1` and add **--native-gauges**
 to opt into five live C172 needles: airspeed, vertical speed and three altimeter

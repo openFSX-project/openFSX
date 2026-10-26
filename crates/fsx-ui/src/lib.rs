@@ -340,6 +340,7 @@ impl ApplicationHandler<Action> for Shell {
                             "--variant",
                         ])
                         .arg(entry.variant.to_string())
+                        .args(native_gauge_arguments())
                         .stdout(Stdio::null())
                         .stderr(Stdio::piped())
                         .creation_flags(0x08000000)
@@ -495,5 +496,20 @@ mod tests {
         )
         .unwrap();
         assert!(entries(&f.0).unwrap_err().contains("limit"));
+    }
+}
+/// Start in the virtual cockpit with live native instruments when the x86
+/// gauge helper is available beside the executable or its build directory.
+fn native_gauge_arguments() -> &'static [&'static str] {
+    let found = std::env::current_exe().ok().is_some_and(|exe| {
+        exe.ancestors()
+            .skip(1)
+            .take(2)
+            .any(|d| d.join("fsx-gauge-host.exe").is_file())
+    });
+    if found {
+        &["--cockpit", "--native-gauges"]
+    } else {
+        &["--cockpit"]
     }
 }

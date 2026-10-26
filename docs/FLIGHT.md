@@ -60,6 +60,7 @@ takeoff-trim specification. R resets to the selected ground or airborne start.
 | B | Toggle parking brake |
 | Space | Hold wheel brakes |
 | Home / End | Nose-up / nose-down elevator trim |
+| F5 / F6 / F7 / F8 | Flaps fully up / one detent up / one detent down / fully down |
 | P | Pause / resume |
 | R | Reset the selected ground or airborne start |
 | Left drag in cockpit | Look around relative to the aircraft |
@@ -72,6 +73,19 @@ A tap completed between physics steps is sampled for one 1/120-second step,
 then released. Dedicated navigation keys and NumLock-off numpad navigation
 events share the same controls. Number input with NumLock on is not treated
 as a directional command. Letter bindings use physical key positions.
+
+A connected game controller (XInput or any device gilrs recognizes) flies
+alongside the keyboard: left stick pitch/roll, right stick X rudder, right/left
+triggers increase/decrease throttle, D-pad up/down move flaps one detent, A holds
+brakes, X toggles the parking brake, Start pauses and Back resets. Sticks use a
+dead zone and a mild response curve; a held key overrides the matching axis.
+
+Flap detents come from `[flaps.0] flaps-position.N`; the surface moves at
+`extending-time`. The full-flap lift increment is derived from the authored
+`flaps_up_stall_speed`/`full_flaps_stall_speed` ratio and the clean AIR lift
+peak. Drag (0.06 at full, quadratic in deflection) and nose-down pitch (-0.08,
+linear) are generic estimates scaled by `drag_scalar`/`pitch_scalar`. AIR flap
+tables are not decoded yet, so this is a playable approximation, not FSX parity.
 
 The window title reports live flight state. Add **--debug-hud** for the optional original telemetry overlay; it is hidden by default.
 The camera follows the aircraft. The runway and grid are original test geometry,

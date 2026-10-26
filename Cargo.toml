@@ -33,5 +33,6 @@ fsx-ui = { path = "crates/fsx-ui" }
 fsx-app = { path = "crates/fsx-app" }
 wgpu = { version = "24.0.5", default-features = false, features = ["dx12", "wgsl"] }
 winit = "0.30.13"
+gilrs = { version = "0.11.0", default-features = false, features = ["xinput"] }
 wry = "0.57.0"
 serde_json = { version = "1.0", features = ["float_roundtrip"] }

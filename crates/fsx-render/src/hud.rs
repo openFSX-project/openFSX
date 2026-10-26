@@ -21,6 +21,7 @@ pub struct Readout {
     pub throttle: f64,
     pub trim: f64,
     pub brake: f64,
+    pub flaps: f64,
     pub status: Status,
 }
 impl Readout {
@@ -35,6 +36,7 @@ impl Readout {
             throttle: c.throttle * 100.,
             trim: c.trim * 100.,
             brake: c.brake * 100.,
+            flaps: c.flaps * 100.,
             status: if paused {
                 Status::Paused
             } else if t.ground_contact {
@@ -55,6 +57,7 @@ impl Readout {
             result.throttle,
             result.trim,
             result.brake,
+            result.flaps,
         ]
         .iter()
         .any(|v| !v.is_finite())
@@ -71,7 +74,7 @@ impl Readout {
             format!("HDG {:03.0} TRUE", self.heading.round().rem_euclid(360.)),
             format!("THR  {:5.0} %", self.throttle),
             format!("TRIM {:+5.0} %", self.trim),
-            format!("BRK  {:5.0} %", self.brake),
+            format!("FLP{:4.0} BRK{:4.0}", self.flaps, self.brake),
             match self.status {
                 Status::Airborne => "AIRBORNE",
                 Status::Paused => "PAUSED - P RESUME",
@@ -293,7 +296,7 @@ pub fn vertices(readout: &Readout, width: u32, height: u32) -> Vec<Vertex> {
     c.text(
         30.,
         c.height - 37.,
-        "HOME/END: TRIM   P: PAUSE   R: RESET   ESC: EXIT",
+        "HOME/END: TRIM   F5-F8: FLAPS   P: PAUSE   R: RESET",
         WHITE,
     );
     c.vertices

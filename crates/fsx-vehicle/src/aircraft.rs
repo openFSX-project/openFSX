@@ -44,6 +44,7 @@ pub struct Parameters {
     pub gear: Gear,
     pub engine_position: [f64; 3],
     pub aero: Aerodynamics,
+    pub flaps: crate::flaps::Flaps,
 }
 #[derive(Debug)]
 pub struct Aircraft {
@@ -287,6 +288,10 @@ impl Parameters {
             electrical: crate::electrical::Electrical::from_config(c)?,
             pitot_static: crate::pitot_static::PitotStatic::from_config(c)?,
             legacy_pitot_heat: crate::pitot_static::LegacyPitotHeat::Unknown,
+            flaps: crate::flaps::Flaps::from_config(
+                c,
+                aero.lift.peak()?.1 * effectiveness("cruise_lift_scalar")?,
+            )?,
             aero,
         };
         if p.power <= 0.
@@ -377,6 +382,7 @@ pub fn own_parameters() -> Parameters {
             .unwrap()
             .dynamics()
             .unwrap(),
+        flaps: crate::flaps::Flaps::default(),
     }
 }
 #[cfg(test)]

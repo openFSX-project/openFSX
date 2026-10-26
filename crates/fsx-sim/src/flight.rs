@@ -45,6 +45,8 @@ pub struct Controls {
     pub trim: f64,
     pub throttle: f64,
     pub brake: f64,
+    /// Actual flap deflection, normalized 0 (retracted) .. 1 (last detent).
+    pub flaps: f64,
 }
 impl Controls {
     fn validated(self) -> Result<Self> {
@@ -55,6 +57,7 @@ impl Controls {
             self.trim,
             self.throttle,
             self.brake,
+            self.flaps,
         ]
         .iter()
         .any(|x| !x.is_finite())
@@ -68,6 +71,7 @@ impl Controls {
             trim: self.trim.clamp(-1., 1.),
             throttle: self.throttle.clamp(0., 1.),
             brake: self.brake.clamp(0., 1.),
+            flaps: self.flaps.clamp(0., 1.),
         })
     }
 }
@@ -189,6 +193,8 @@ impl AircraftDynamics for Parameters {
         let dr = c.yaw * self.rudder_limit * self.controls[2];
         let trim = c.trim * self.trim_limit * self.controls[3];
         let (cl, cd) = self.lift_drag(alpha, de, qhat)?;
+        let (flap_lift, flap_drag, flap_pitch) = self.flaps.increments(c.flaps);
+        let (cl, cd) = (cl + flap_lift, cd + flap_drag);
         let a = &self.aero;
         // Legacy AIR pitch/yaw are nose-down/left positive; body q/r are up/right.
         // Legacy aileron and rudder deflections have opposite signs to pilot input.
@@ -205,7 +211,8 @@ impl AircraftDynamics for Parameters {
             + a.cm_elevator * de
             + a.cm_trim * trim
             + a.cm_gear)
-            + a.cm_pitch_rate * qhat * self.damping[1];
+            + a.cm_pitch_rate * qhat * self.damping[1]
+            + flap_pitch;
         let yaw = a.yaw_beta * beta - a.yaw_roll_rate * phat
             + a.yaw_rate * rhat * self.damping[2]
             + a.yaw_aileron * da
@@ -534,6 +541,37 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::aircraft::own_parameters;
+    #[test]
+    fn flaps_add_lift_drag_and_nose_down_moment() {
+        let mut p = fsx_vehicle::aircraft::own_parameters();
+        p.flaps = fsx_vehicle::flaps::Flaps {
+            positions: vec![0., 40.],
+            extending_time: 5.,
+            lift: 0.6,
+            drag: 0.06,
+            pitch: -0.08,
+        };
+        let s = State {
+            position: [0., 0., -300.],
+            velocity: [40., 0., 0.],
+            orientation: Quaternion::IDENTITY,
+            rates: [0.; 3],
+        };
+        let clean = p.derivative(s, Controls::default()).unwrap();
+        let full = p
+            .derivative(
+                s,
+                Controls {
+                    flaps: 1.,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // More upward (negative down) and backward acceleration, less pitch-up.
+        assert!(full.velocity[2] < clean.velocity[2]);
+        assert!(full.velocity[0] < clean.velocity[0]);
+        assert!(full.rates[1] < clean.rates[1]);
+    }
     #[test]
     fn consumer_history_commits_tail_flags_after_load_and_preserves_other_equipment() {
         use crate::legacy_consumers::{self, ConsumerState};
