@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 pub mod catalog;
+pub mod objects;
 pub mod terrain;
 
 type Result<T> = std::result::Result<T, String>;

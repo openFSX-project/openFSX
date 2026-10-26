@@ -92,6 +92,15 @@ threshold bars, edge lines, centreline dashes, aiming-point blocks 300 m in
 font, oriented for the landing pilot. FSX's own marking geometry, lights,
 taxiways and aprons are not reproduced yet; water runways are not drawn.
 
+Placed scenery objects within 6 km (BGL section 0x25 LibraryObject records)
+are resolved through a GUID index of every installed model library (section
+0x2B) and parsed with the same MDLX reader as aircraft. Each model is baked
+into world space with its heading and scale, standing on the terrain when
+placed above ground level; textures come from the stock texture folders,
+downscaled to 512 px. Nearest placements first, up to 4000 objects / 3 M
+vertices. Pitch/bank, animation, LOD switching, night textures, generic
+procedural buildings (0x0A) and autogen are not applied yet.
+
 `--airborne` with `--airport` starts trimmed at 90 kt and 300 m over the runway
 threshold, along the runway heading; R returns there.
 The ground uses the stock summer land-class textures: worldlc.bgl classes are

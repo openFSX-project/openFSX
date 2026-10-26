@@ -1681,3 +1681,14 @@ BITMAPINFOHEADER files whose compression field is a DXT FourCC with block data
 bottom-up, so decoded rows are flipped. Texture 001 is snow, not city. lclookup.bgl
 (section 0x6F) maps classes to texture sets per region/season and is not decoded.
 
+### Scenery objects and model libraries
+
+Section 0x25 subsections hold variable-length object records (u16 id, u16
+size). LibraryObject (id 0x0B, 64 bytes): packed longitude/latitude at 4/8,
+altitude in millimetres at 12, flags at 16 (bit 0: altitude above ground),
+pitch/bank/heading at 18/20/22 as raw * 360 / 65536 degrees, instance GUID at
+28, model GUID at 44 and float scale at 60. Section 0x2B subsections hold a
+table of 24-byte entries (GUID, offset from the subsection start, size)
+followed by the embedded RIFF MDLX models. 799 stock libraries hold about
+16,000 models; airports such as KSEA place 168 objects within 6 km.
+

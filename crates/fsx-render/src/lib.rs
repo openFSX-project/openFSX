@@ -1,5 +1,6 @@
 //! wgpu aircraft rendering and reproducible offscreen capture.
 use fsx_geometry::{self as math, Mat4};
+pub use fsx_model::Material as ModelMaterial;
 use fsx_model::{Geometry, Material, Model};
 pub use fsx_texture::Image as TextureImage;
 use fsx_texture::{self as texture, Image};
@@ -293,6 +294,17 @@ pub struct Ground {
     pub trees: Option<Trees>,
     /// Runway surface textures (FSX Texture/runway*), tiled along each runway.
     pub surfaces: Vec<Image>,
+    /// Placed scenery models already transformed to world space.
+    pub objects: Option<StaticScene>,
+}
+/// World-space static geometry: (position, normal, uv) vertices, batches of
+/// vertex ranges per material, and materials whose textures index `images`.
+#[derive(Debug, Clone, Default)]
+pub struct StaticScene {
+    pub vertices: Vec<[f32; 8]>,
+    pub batches: Vec<(std::ops::Range<u32>, usize)>,
+    pub materials: Vec<Material>,
+    pub images: Vec<Option<Image>>,
 }
 /// Vegetation drawn as crossed alpha-tested quads.
 #[derive(Debug, Clone)]
@@ -821,6 +833,18 @@ impl Gpu {
                 textures.len() - 1
             })
             .collect();
+        let objects = ground.and_then(|g| g.objects.as_ref());
+        let object_textures: Vec<Option<usize>> = objects
+            .map(|o| o.images.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .map(|image| {
+                image.as_ref().map(|image| {
+                    textures.push(Some(upload(image)));
+                    textures.len() - 1
+                })
+            })
+            .collect();
         let sky_textures = sky.map(|sky| {
             textures.push(Some(upload(&sky.gradient)));
             textures.push(Some(upload(&sky.sprites)));
@@ -888,6 +912,14 @@ impl Gpu {
                     alpha_function: 0,
                     alpha_threshold: 0.,
                     clamp_texture: false,
+                });
+            }
+            for m in objects.map(|o| o.materials.as_slice()).unwrap_or_default() {
+                materials.push(Material {
+                    diffuse_texture: m
+                        .diffuse_texture
+                        .and_then(|t| object_textures.get(t).copied().flatten()),
+                    ..m.clone()
                 });
             }
         }
@@ -1047,6 +1079,29 @@ impl Gpu {
                     blended: false,
                     world_space: false,
                 });
+            }
+            if let Some(o) = objects {
+                let base = vertices.len() as u32;
+                vertices.extend(
+                    o.vertices
+                        .iter()
+                        .map(|v| [v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], 0.]),
+                );
+                for (range, material) in &o.batches {
+                    let first = o
+                        .vertices
+                        .get(range.start as usize)
+                        .copied()
+                        .unwrap_or_default();
+                    draws.push(GpuDraw {
+                        visible: true,
+                        range: base + range.start..base + range.end,
+                        material: ground_material + 9 + surface_textures.len() + material,
+                        center: [first[0], first[1], first[2]],
+                        blended: o.materials.get(*material).is_some_and(|m| m.alpha_blend),
+                        world_space: true,
+                    });
+                }
             }
             if let Some(trees) = ground.and_then(|g| g.trees.as_ref()) {
                 let first = vertices.len() as u32;
