@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 const SECTION_OBJECTS: u32 = 0x25;
 const SECTION_MODELS: u32 = 0x2B;
 const RECORD_LIBRARY_OBJECT: u16 = 0x0B;
+const RECORD_GENERIC_BUILDING: u16 = 0x0A;
 
 pub type Guid = [u8; 16];
 
@@ -24,6 +25,18 @@ pub struct Placement {
     pub model: Guid,
     pub scale: f64,
 }
+/// Generic building (record 0x0A): a box of `size` metres (x across, y up,
+/// z along the heading), optionally with a pitched roof.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenericBuilding {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub altitude: f64,
+    pub agl: bool,
+    pub heading: f64,
+    pub size: [f64; 3],
+    pub pitched_roof: bool,
+}
 fn u16_at(d: &[u8], i: usize) -> Option<u16> {
     d.get(i..i + 2).map(|b| u16::from_le_bytes([b[0], b[1]]))
 }
@@ -36,9 +49,14 @@ fn angle(raw: u16) -> f64 {
 }
 /// Library object placements in one BGL file.
 pub fn placements(d: &[u8]) -> Vec<Placement> {
+    objects(d).0
+}
+/// Library object placements and generic buildings in one BGL file.
+pub fn objects(d: &[u8]) -> (Vec<Placement>, Vec<GenericBuilding>) {
     let mut out = Vec::new();
+    let mut out_buildings = Vec::new();
     if u32_at(d, 0) != Some(0x1992_0201) {
-        return out;
+        return (out, out_buildings);
     }
     let sections = u32_at(d, 0x14).unwrap_or(0).min(4096) as usize;
     for s in 0..sections {
@@ -64,6 +82,30 @@ pub fn placements(d: &[u8]) -> Vec<Placement> {
                 if len < 4 || p + len > end {
                     break;
                 }
+                if id == RECORD_GENERIC_BUILDING && len >= 52 + 28 {
+                    let r = &d[p..p + len];
+                    // Building section at 48: u16 code, u16 size, then the
+                    // type, footprint and the base/window/top band heights.
+                    let w = |i: usize| f64::from(u16_at(r, 52 + 2 * i).unwrap_or(0));
+                    let scale = f64::from(f32::from_bits(u32_at(r, 44).unwrap_or(0)));
+                    let scale = if scale.is_finite() && scale > 0. {
+                        scale
+                    } else {
+                        1.
+                    };
+                    let height = w(4) + w(8) + w(13);
+                    if w(1) > 0. && w(2) > 0. && height > 0. && height < 500. {
+                        out_buildings.push(GenericBuilding {
+                            longitude: crate::longitude(u32_at(r, 4).unwrap_or(0)),
+                            latitude: crate::latitude(u32_at(r, 8).unwrap_or(0)),
+                            altitude: f64::from(u32_at(r, 12).unwrap_or(0) as i32) / 1000.,
+                            agl: u16_at(r, 16).unwrap_or(0) & 1 != 0,
+                            heading: angle(u16_at(r, 22).unwrap_or(0)),
+                            size: [w(1) * scale, height * scale, w(2) * scale],
+                            pitched_roof: w(0) != 4.,
+                        });
+                    }
+                }
                 if id == RECORD_LIBRARY_OBJECT && len >= 64 {
                     let r = &d[p..p + len];
                     let scale = f64::from(f32::from_bits(u32_at(r, 60).unwrap_or(0)));
@@ -87,7 +129,7 @@ pub fn placements(d: &[u8]) -> Vec<Placement> {
             }
         }
     }
-    out
+    (out, out_buildings)
 }
 #[derive(Debug, Clone)]
 pub struct ModelEntry {
@@ -182,6 +224,16 @@ pub fn placements_near(
     longitude: f64,
     radius: f64,
 ) -> Vec<Placement> {
+    objects_near(installation, latitude, longitude, radius).0
+}
+/// Library placements and generic buildings around a point.
+pub fn objects_near(
+    installation: &Path,
+    latitude: f64,
+    longitude: f64,
+    radius: f64,
+) -> (Vec<Placement>, Vec<GenericBuilding>) {
+    let mut buildings = Vec::new();
     let dlat = (radius / 6_371_000.).to_degrees();
     let dlon = dlat / latitude.to_radians().cos().max(0.05);
     let mut out = Vec::new();
@@ -208,12 +260,23 @@ pub fn placements_near(
             let Ok(data) = std::fs::read(&path) else {
                 continue;
             };
-            out.extend(placements(&data).into_iter().filter(|p| {
-                (p.latitude - latitude).abs() < dlat && (p.longitude - longitude).abs() < dlon
-            }));
+            let near = |lat: f64, lon: f64| {
+                (lat - latitude).abs() < dlat && (lon - longitude).abs() < dlon
+            };
+            let (library, generic) = objects(&data);
+            out.extend(
+                library
+                    .into_iter()
+                    .filter(|p| near(p.latitude, p.longitude)),
+            );
+            buildings.extend(
+                generic
+                    .into_iter()
+                    .filter(|b| near(b.latitude, b.longitude)),
+            );
         }
     }
-    out
+    (out, buildings)
 }
 #[cfg(test)]
 mod tests {

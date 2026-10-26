@@ -643,25 +643,34 @@ impl World {
     ) -> Option<fsx_render::StaticScene> {
         use fsx_scenery::catalog::{local, offset};
         let (lat, lon) = offset(self.origin.0, self.origin.1, center.0, center.1);
-        let mut placements = fsx_scenery::objects::placements_near(&self.root, lat, lon, 6000.);
+        let (mut placements, buildings) =
+            fsx_scenery::objects::objects_near(&self.root, lat, lon, 6000.);
         // Nearest first, so the placement budget favours what the pilot sees.
         let distance = |p: &fsx_scenery::objects::Placement| {
             let (n, e) = local((lat, lon), (p.latitude, p.longitude));
             n.hypot(e)
         };
         placements.sort_by(|a, b| distance(a).total_cmp(&distance(b)));
-        scenery_objects::build(&placements, &self.models, &self.textures, |p| {
-            let (north, east) = local(self.origin, (p.latitude, p.longitude));
+        let position = |latitude: f64, longitude: f64, altitude: f64, agl: bool| {
+            let (north, east) = local(self.origin, (latitude, longitude));
             let ground = terrain
                 .and_then(|t| t.height_at(east as f32, north as f32))
                 .unwrap_or(0.);
-            let up = if p.agl {
-                ground + p.altitude as f32
+            let up = if agl {
+                ground + altitude as f32
             } else {
-                (p.altitude - self.base) as f32
+                (altitude - self.base) as f32
             };
             Some([east as f32, up, north as f32])
+        };
+        let mut scene = scenery_objects::build(&placements, &self.models, &self.textures, |p| {
+            position(p.latitude, p.longitude, p.altitude, p.agl)
         })
+        .unwrap_or_default();
+        scenery_objects::add_generic_buildings(&mut scene, &buildings, |b| {
+            position(b.latitude, b.longitude, b.altitude, b.agl)
+        });
+        (!scene.batches.is_empty()).then_some(scene)
     }
     /// Trees from the installed sheet within 8 km of the area centre, chosen
     /// and spaced by land class and kept clear of airports. Placement is an

@@ -1689,6 +1689,9 @@ altitude in millimetres at 12, flags at 16 (bit 0: altitude above ground),
 pitch/bank/heading at 18/20/22 as raw * 360 / 65536 degrees, instance GUID at
 28, model GUID at 44 and float scale at 60. Section 0x2B subsections hold a
 table of 24-byte entries (GUID, offset from the subsection start, size)
-followed by the embedded RIFF MDLX models. 799 stock libraries hold about
+followed by the embedded RIFF MDLX models. Generic buildings (id 0x0A) share
+the header to the scale at 44; a building section at 48 follows, whose u16
+fields from 52 are type (4 flat roof), width, depth, then texture/size groups
+with band heights at fields 4, 8 and 13. 799 stock libraries hold about
 16,000 models; airports such as KSEA place 168 objects within 6 km.
 

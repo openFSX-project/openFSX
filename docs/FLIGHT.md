@@ -98,8 +98,10 @@ are resolved through a GUID index of every installed model library (section
 into world space with its heading and scale, standing on the terrain when
 placed above ground level; textures come from the stock texture folders,
 downscaled to 512 px. Nearest placements first, up to 4000 objects / 3 M
-vertices. Pitch/bank, animation, LOD switching, night textures, generic
-procedural buildings (0x0A) and autogen are not applied yet.
+vertices. Pitch/bank, animation, LOD switching, night textures and autogen are not applied yet.
+Generic buildings (record 0x0A) are drawn as solid-colour boxes of the authored
+footprint and band heights, pitched for non-flat roof types; their FSX texture
+bands are not decoded.
 
 `--airborne` with `--airport` starts trimmed at 90 kt and 300 m over the runway
 threshold, along the runway heading; R returns there.
