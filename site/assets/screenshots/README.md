@@ -286,6 +286,7 @@ The mesh is decoded from the user's installed DEM BGL files by their installed
 terrain.dll in the x86 helper; the ground uses the user's stock land-class textures
 (refreshed after land-class texturing, mipmapped anisotropic filtering and sky).
 `ksea-sky.png` uses the same command with `--airport KSEA --lod 150`.
+`lowi-air.png` and `ksea-air.png` add `--airborne --lod 150 --seconds 20`.
 
 ```powershell
 .\scriptsuild-terrain-host.ps1

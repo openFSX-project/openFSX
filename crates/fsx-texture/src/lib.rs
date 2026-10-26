@@ -118,7 +118,14 @@ impl Image {
         }
         dds[84..88].copy_from_slice(&format);
         dds.extend_from_slice(&b[offset..]);
-        Self::dds(&dds)
+        let mut image = Self::dds(&dds)?;
+        // A positive BMP height means the blocks are stored bottom-up.
+        if word(b, 22)? as i32 > 0 {
+            let row = image.width as usize * 4;
+            let rows: Vec<&[u8]> = image.rgba.chunks(row).rev().collect();
+            image.rgba = rows.concat();
+        }
+        Ok(image)
     }
     pub fn dds(b: &[u8]) -> Result<Self> {
         if b.len() < 128 || &b[..4] != b"DDS " || word(b, 4)? != 124 || word(b, 76)? != 32 {

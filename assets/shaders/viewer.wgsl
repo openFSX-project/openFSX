@@ -1,4 +1,5 @@
-struct Scene { camera: mat4x4<f32>, model: mat4x4<f32> }
+// fog: rgb colour and density per metre (0 disables); eye is the world camera.
+struct Scene { camera: mat4x4<f32>, model: mat4x4<f32>, eye: vec4<f32>, fog: vec4<f32> }
 @group(0) @binding(0) var<uniform> scene: Scene;
 @group(1) @binding(0) var diffuse_texture: texture_2d<f32>;
 @group(1) @binding(1) var diffuse_sampler: sampler;
@@ -8,12 +9,18 @@ struct VertexOut {
     @builtin(position) position: vec4<f32>,
     @location(0) normal: vec3<f32>,
     @location(1) uv: vec2<f32>,
+    @location(2) world: vec3<f32>,
+    @location(3) fogged: f32,
 }
 @vertex fn vs_main(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) uv: vec2<f32>, @location(3) model_space: f32) -> VertexOut {
     var output: VertexOut;
-    let world = select(vec4<f32>(p, 1.0), scene.model * vec4<f32>(p, 1.0), model_space > 0.5);
+    // model_space: 0 world, 1 aircraft model, 2 world without haze (sky dome).
+    let in_model = model_space > 0.5 && model_space < 1.5;
+    let world = select(vec4<f32>(p, 1.0), scene.model * vec4<f32>(p, 1.0), in_model);
+    output.world = world.xyz;
+    output.fogged = select(1.0, 0.0, model_space > 1.5);
     output.position = scene.camera * world;
-    output.normal = select(n, (scene.model * vec4<f32>(n, 0.0)).xyz, model_space > 0.5);
+    output.normal = select(n, (scene.model * vec4<f32>(n, 0.0)).xyz, in_model);
     // Preserve Direct3D-style MDLX coordinates when uploading DDS rows unchanged.
     output.uv = uv;
     return output;
@@ -34,5 +41,7 @@ struct VertexOut {
        (function == 5u && !(test_alpha > reference)) ||
        (function == 6u && !(abs(test_alpha-reference) >= 0.001)) ||
        (function == 7u && !(test_alpha >= reference)) { discard; }
-    return vec4<f32>(color * shade, alpha);
+    let d = distance(input.world, scene.eye.xyz) * scene.fog.w;
+    let haze = (1.0 - exp(-d * d)) * input.fogged;
+    return vec4<f32>(mix(color * shade, scene.fog.rgb, haze), alpha);
 }

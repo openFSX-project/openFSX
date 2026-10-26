@@ -583,13 +583,16 @@ impl World {
                 });
             }
         }
-        let terrain = match self.terrain(center, &fields) {
-            Ok(t) => Some(t),
+        let (terrain, classes) = match self.terrain(center, &fields) {
+            Ok((t, c)) => (Some(t), c),
             Err(e) => {
                 eprintln!("Terrain elevation unavailable, using a flat field: {e}");
-                None
+                (None, Vec::new())
             }
         };
+        let trees = terrain
+            .as_ref()
+            .and_then(|t| self.trees(t, &classes, center, &fields));
         let top = terrain
             .as_ref()
             .map_or(0., |t| t.heights.iter().fold(0f32, |a, &h| a.max(h)));
@@ -598,7 +601,75 @@ impl World {
             runways,
             terrain,
             sky,
+            trees,
         }
+    }
+    /// Trees from the installed sheet within 8 km of the area centre, chosen
+    /// and spaced by land class and kept clear of airports. Placement is an
+    /// openFSX density model, not FSX autogen annotation.
+    fn trees(
+        &self,
+        terrain: &fsx_render::Terrain,
+        classes: &[u8],
+        center: (f64, f64),
+        fields: &[(f64, f64, f64)],
+    ) -> Option<fsx_render::Trees> {
+        let quads = terrain.columns - 1;
+        if classes.len() != quads * (terrain.rows - 1) {
+            return None;
+        }
+        let sprites =
+            fsx_render::TextureImage::load(&self.root.join("Texture/treesSU.bmp")).ok()?;
+        // (trees per quad, candidate sheet cells): row 0 deciduous, rows 1-2
+        // conifers, row 3 palms.
+        let kind = |class: u8| -> (u32, &'static [u8]) {
+            match class {
+                3 | 4 | 20 | 21 | 22 | 27 | 61 | 62 | 63 => (36, &[4, 5, 6, 7, 8, 9, 10, 11]),
+                5 | 23 | 24 | 25 | 26 | 54 | 60 | 78 | 89 => (36, &[0, 1, 2, 3, 4, 5]),
+                6 | 28 | 29 | 32 | 33 | 34 | 72 | 90 => (30, &[0, 1, 14, 15]),
+                13 | 43 | 48 | 91 => (14, &[0, 1, 2, 3]),
+                19 | 55 | 56 | 57 | 58 | 144 | 145 => (10, &[0, 1, 2, 4, 5]),
+                30 | 31 | 35 | 38 | 92 | 93 | 109..=120 | 134 => (3, &[0, 1, 2, 3]),
+                _ => (0, &[]),
+            }
+        };
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64
+            ^ (center.0 as i64 as u64).rotate_left(17)
+            ^ center.1 as i64 as u64;
+        let mut random = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) as f32) / (1u64 << 31) as f32
+        };
+        let mut instances = Vec::new();
+        for r in 0..terrain.rows - 1 {
+            for c in 0..quads {
+                let (count, cells) = kind(classes[r * quads + c]);
+                let (qe, qn) = (
+                    terrain.west + (c as f32 + 0.5) * terrain.spacing,
+                    terrain.north - (r as f32 + 0.5) * terrain.spacing,
+                );
+                if count == 0
+                    || (f64::from(qn) - center.0).hypot(f64::from(qe) - center.1) > 8_000.
+                    || fields
+                        .iter()
+                        .any(|&(n, e, _)| (f64::from(qn) - n).hypot(f64::from(qe) - e) < 1_800.)
+                {
+                    continue;
+                }
+                for _ in 0..count {
+                    let east = qe + (random() - 0.5) * terrain.spacing;
+                    let north = qn + (random() - 0.5) * terrain.spacing;
+                    let Some(y) = terrain.height_at(east, north) else {
+                        continue;
+                    };
+                    let cell = cells[(random() * cells.len() as f32) as usize % cells.len()];
+                    instances.push(([east, y - 0.5, north], 11. + random() * 12., cell));
+                }
+            }
+        }
+        Some(fsx_render::Trees { sprites, instances })
     }
     /// FSX noon sky gradient and a fair-weather cumulus layer 500 m above the
     /// highest terrain in the area (at least 1500 m above the origin plane).
@@ -621,7 +692,7 @@ impl World {
                 .wrapping_add(1442695040888963407);
             ((seed >> 33) as f32) / (1u64 << 31) as f32
         };
-        let cells = [0u8, 1, 2, 3, 6, 7, 12, 13];
+        let cells = [0u8, 1, 10, 11, 12, 13, 14, 15];
         let mut clouds = Vec::new();
         for _ in 0..45 {
             let (east, north) = (
@@ -647,7 +718,8 @@ impl World {
         Some(fsx_render::Sky {
             gradient,
             center: [center.1 as f32, center.0 as f32],
-            radius: 85_000.,
+            // Inside the 90 km far plane even after 20 km of travel before re-centring.
+            radius: 60_000.,
             sprites,
             clouds,
         })
@@ -707,7 +779,7 @@ impl World {
         &self,
         center: (f64, f64),
         fields: &[(f64, f64, f64)],
-    ) -> Result<fsx_render::Terrain, String> {
+    ) -> Result<(fsx_render::Terrain, Vec<u8>), String> {
         use fsx_scenery::{catalog, terrain};
         const SIZE: usize = TERRAIN_SIZE;
         const HALF: f64 = TERRAIN_HALF;
@@ -748,6 +820,16 @@ impl World {
         if found < SIZE * SIZE / 2 {
             return Err("No elevation records cover this area".into());
         }
+        // Taper to the origin plane over the outer 6 km so mountains crossing
+        // the grid edge slope away instead of ending in a vertical cut.
+        for r in 0..SIZE {
+            for c in 0..SIZE {
+                let edge = r.min(c).min(SIZE - 1 - r).min(SIZE - 1 - c) as f64 * spacing;
+                let k = (edge / 6000.).clamp(0., 1.);
+                heights[r * SIZE + c] *= (k * k * (3. - 2. * k)) as f32;
+            }
+        }
+        let mut quad_classes = Vec::new();
         let (atlas, quad_slots) = match terrain::land_class_index(root) {
             Ok(index) => {
                 let mut classes = terrain::LandClass::new(index);
@@ -760,26 +842,31 @@ impl World {
                         quads.push(classes.class(elevation.decoder(), lat, lon).unwrap_or(0));
                     }
                 }
-                land_atlas(root, &quads)
+                let packed = land_atlas(root, &quads);
+                quad_classes = quads;
+                packed
             }
             Err(e) => {
                 eprintln!("Land class unavailable: {e}");
                 (None, Vec::new())
             }
         };
-        Ok(fsx_render::Terrain {
-            atlas,
-            atlas_slots: ATLAS_SLOTS,
-            quad_slots,
-            texture_quads: 4,
-            columns: SIZE,
-            rows: SIZE,
-            west: left as f32,
-            north: top as f32,
-            spacing: spacing as f32,
-            heights,
-            base: self.base as f32,
-        })
+        Ok((
+            fsx_render::Terrain {
+                atlas,
+                atlas_slots: ATLAS_SLOTS,
+                quad_slots,
+                texture_quads: 4,
+                columns: SIZE,
+                rows: SIZE,
+                west: left as f32,
+                north: top as f32,
+                spacing: spacing as f32,
+                heights,
+                base: self.base as f32,
+            },
+            quad_classes,
+        ))
     }
 }
 const ATLAS_SLOTS: u32 = 8;
@@ -929,6 +1016,7 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
     let (mut fly, mut variant, mut windows_1252, mut seconds) = (false, 0u32, false, 0f64);
     let mut ground = false;
     let mut airport = None;
+    let mut airborne = false;
     let mut cockpit = false;
     let mut native_gauges_enabled = false;
     let mut gauge_host = None;
@@ -1084,6 +1172,7 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
             Some("--no-textures") => no_textures = true,
             Some("--fly") => fly = true,
             Some("--ground") => ground = true,
+            Some("--airborne") => airborne = true,
             Some("--airport") => {
                 airport = Some(
                     args.next()
@@ -1447,7 +1536,12 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
     };
     let mut flight = aircraft
         .map(|a| {
-            if let Some((start, _, _)) = &scenery {
+            if let Some((start, _, _)) = scenery.as_ref().filter(|_| airborne) {
+                FlightSession::airborne(a.parameters, start.heading.to_radians()).map(|mut f| {
+                    f.set_field_elevation(start.altitude);
+                    f
+                })
+            } else if let Some((start, _, _)) = &scenery {
                 FlightSession::on_runway(a.parameters, [0., 0.], start.heading.to_radians()).map(
                     |mut f| {
                         f.set_field_elevation(start.altitude);

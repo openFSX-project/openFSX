@@ -54,6 +54,7 @@ pub struct FlightSession {
     accumulator: f64,
     initial: Parameters,
     initial_ground: Option<([f64; 2], f64)>,
+    initial_heading: f64,
 }
 impl FlightSession {
     pub fn new(parameters: Parameters) -> Result<Self, String> {
@@ -69,6 +70,13 @@ impl FlightSession {
         heading: f64,
     ) -> Result<Self, String> {
         Self::with_start(parameters, Some((position, heading)))
+    }
+    /// Trimmed at 90 kt and 300 m over the origin, facing a true heading.
+    pub fn airborne(parameters: Parameters, heading: f64) -> Result<Self, String> {
+        let mut s = Self::with_start(parameters, None)?;
+        s.initial_heading = heading;
+        s.simulation = Simulation::trimmed_heading(s.initial.clone(), 90. * KNOT, 300., heading)?;
+        Ok(s)
     }
     fn with_start(parameters: Parameters, ground: Option<([f64; 2], f64)>) -> Result<Self, String> {
         Ok(Self {
@@ -87,11 +95,16 @@ impl FlightSession {
             accumulator: 0.,
             initial: parameters,
             initial_ground: ground,
+            initial_heading: 0.,
         })
     }
     pub fn reset(&mut self) -> Result<(), String> {
         let elevation = self.simulation.field_elevation;
-        *self = Self::with_start(self.initial.clone(), self.initial_ground)?;
+        *self = if self.initial_ground.is_none() && self.initial_heading != 0. {
+            Self::airborne(self.initial.clone(), self.initial_heading)?
+        } else {
+            Self::with_start(self.initial.clone(), self.initial_ground)?
+        };
         self.simulation.field_elevation = elevation;
         Ok(())
     }

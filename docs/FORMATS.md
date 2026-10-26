@@ -1677,6 +1677,7 @@ same terrain.dll dispatcher with descriptor format 1 (8 bits, one channel).
 Terrain textures in `Scenery/World/texture` are named `NNNR2SSV.bmp` (texture
 number, region A-X, constant 2, season SU/SP/FA/WI/HW/LM/AN, variation) and are
 BITMAPINFOHEADER files whose compression field is a DXT FourCC with block data
-(top mip first) at bfOffBits. Texture 001 is snow, not city. lclookup.bgl
+(top mip first) at bfOffBits; a positive BMP height stores block rows
+bottom-up, so decoded rows are flipped. Texture 001 is snow, not city. lclookup.bgl
 (section 0x6F) maps classes to texture sets per region/season and is not decoded.
 

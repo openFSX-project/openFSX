@@ -73,7 +73,19 @@ installed `cumulus01.bmp` 4 x 4 puff sheet (DXT5 alpha): 45 clusters of 6-14
 puffs per area, each puff three crossed translucent quads, sorted back to front
 per cloud. Cloud base is 500 m above the highest terrain in the area (at least
 1500 m). Time of day, weather themes, cloud lighting and flying through cloud
-are not simulated yet.
+are not simulated yet. Distance haze uses the sky gradient's horizon colour
+(1 - exp(-(d/24 km)^2)); the dome itself is unhazed. Terrain tapers to the origin
+plane over its outer 6 km so mountains crossing the grid edge do not end in a
+vertical cut.
+
+Trees use the installed `Texture/treesSU.bmp` 4 x 4 sheet (DXT1 alpha, rows:
+deciduous, two conifer rows, bushes/palms) as crossed alpha-tested quads 11-23 m
+tall, within 8 km of the area centre and at least 1.8 km from airports. Species
+and density come from the land class (e.g. 36 per 310 m quad in forest, 3 in
+suburbs); this is an openFSX density model, not FSX autogen annotation.
+
+`--airborne` with `--airport` starts trimmed at 90 kt and 300 m over the runway
+threshold, along the runway heading; R returns there.
 The ground uses the stock summer land-class textures: worldlc.bgl classes are
 sampled per mesh quad and the matching `NNN?2su1.bmp` textures (DXT1 inside a
 BMP header) are packed into a 2048-pixel atlas, one texture per 4 x 4 quads

@@ -373,6 +373,19 @@ impl Simulation {
         s.electrical.reset();
         Ok(s)
     }
+    /// Trimmed level flight turned to a true heading (radians) about the vertical.
+    pub fn trimmed_heading(
+        parameters: Parameters,
+        speed: f64,
+        altitude: f64,
+        heading: f64,
+    ) -> Result<Self> {
+        let mut s = Self::trimmed(parameters, speed, altitude)?;
+        let yaw = Quaternion([(heading * 0.5).cos(), 0., 0., (heading * 0.5).sin()]);
+        s.state.orientation = yaw.product(s.state.orientation);
+        s.state.velocity = yaw.rotate(s.state.velocity);
+        Ok(s)
+    }
     pub fn trimmed(parameters: Parameters, speed: f64, altitude: f64) -> Result<Self> {
         if !speed.is_finite()
             || speed <= 0.

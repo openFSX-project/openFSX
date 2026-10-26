@@ -275,6 +275,8 @@ pub struct Gpu {
     pub model_matrix: Mat4,
     flight: bool,
     ground: Option<Ground>,
+    /// Haze colour and density per metre; zero density disables it.
+    fog: [f32; 4],
     pub hud: Option<crate::hud::Readout>,
     hud_pipeline: wgpu::RenderPipeline,
     hud_vertex: wgpu::Buffer,
@@ -288,6 +290,15 @@ pub struct Ground {
     pub runways: Vec<GroundRunway>,
     pub terrain: Option<Terrain>,
     pub sky: Option<Sky>,
+    pub trees: Option<Trees>,
+}
+/// Vegetation drawn as crossed alpha-tested quads.
+#[derive(Debug, Clone)]
+pub struct Trees {
+    /// 4 x 4 tree sheet (FSX Texture/trees*.bmp), row 0 at the top.
+    pub sprites: Image,
+    /// Base position (east, up, north), height in metres and sheet cell.
+    pub instances: Vec<([f32; 3], f32, u8)>,
 }
 /// Sky dome gradient and cumulus clouds built from translucent puffs.
 #[derive(Debug, Clone)]
@@ -500,7 +511,7 @@ impl Gpu {
         }
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Camera matrix"),
-            size: 128,
+            size: 160,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -514,7 +525,7 @@ impl Gpu {
             label: Some("Camera layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -684,6 +695,7 @@ impl Gpu {
             model_matrix: math::IDENTITY,
             flight,
             ground: None,
+            fog: [0.; 4],
             hud: None,
             hud_pipeline,
             hud_vertex,
@@ -771,6 +783,10 @@ impl Gpu {
                 textures.len() - 1
             });
         let sky = ground.and_then(|g| g.sky.as_ref());
+        let tree_texture = ground.and_then(|g| g.trees.as_ref()).map(|trees| {
+            textures.push(Some(upload(&trees.sprites)));
+            textures.len() - 1
+        });
         let sky_textures = sky.map(|sky| {
             textures.push(Some(upload(&sky.gradient)));
             textures.push(Some(upload(&sky.sprites)));
@@ -819,6 +835,15 @@ impl Gpu {
                 alpha_blend: false,
                 alpha_function: 0,
                 alpha_threshold: 0.,
+                clamp_texture: true,
+            });
+            // Alpha test: keep texels whose alpha exceeds one half.
+            materials.push(Material {
+                diffuse: [0.9, 0.9, 0.9, 1.],
+                diffuse_texture: Some(tree_texture.unwrap_or(gradient)),
+                alpha_blend: false,
+                alpha_function: 5,
+                alpha_threshold: 0.5,
                 clamp_texture: true,
             });
         }
@@ -905,7 +930,14 @@ impl Gpu {
             let plane = ground
                 .and_then(|g| g.terrain.as_ref())
                 .map_or(0., |t| -t.base - 1.);
-            quad(&mut vertices, -30000., -30000., 30000., 30000., plane);
+            quad(
+                &mut vertices,
+                -100_000.,
+                -100_000.,
+                100_000.,
+                100_000.,
+                plane,
+            );
             let mut count = 6;
             draws.push(GpuDraw {
                 visible: true,
@@ -972,6 +1004,46 @@ impl Gpu {
                     world_space: false,
                 });
             }
+            if let Some(trees) = ground.and_then(|g| g.trees.as_ref()) {
+                let first = vertices.len() as u32;
+                for &(p, height, cell) in &trees.instances {
+                    let (u0, v0) = (f32::from(cell % 4) * 0.25, f32::from(cell / 4) * 0.25);
+                    let half = height * 0.5;
+                    for (dx, dz) in [(1f32, 0f32), (0., 1.)] {
+                        let corner = |side: f32, top: f32| {
+                            [
+                                p[0] + dx * side * half,
+                                p[1] + top * height,
+                                p[2] + dz * side * half,
+                                0.,
+                                1.,
+                                0.,
+                                u0 + 0.003 + (side + 1.) / 2. * 0.244,
+                                v0 + 0.003 + (1. - top) * 0.244,
+                                0.,
+                            ]
+                        };
+                        for (side, top) in [
+                            (-1., 0.),
+                            (1., 0.),
+                            (1., 1.),
+                            (-1., 0.),
+                            (1., 1.),
+                            (-1., 1.),
+                        ] {
+                            vertices.push(corner(side, top));
+                        }
+                    }
+                }
+                draws.push(GpuDraw {
+                    visible: true,
+                    range: first..vertices.len() as u32,
+                    material: ground_material + 8,
+                    center: [0.; 3],
+                    blended: false,
+                    world_space: true,
+                });
+            }
             if let Some(sky) = sky {
                 // Normals face the shader's light so sky and clouds are unshaded.
                 let lit = {
@@ -995,7 +1067,7 @@ impl Gpu {
                         lit[2],
                         0.5,
                         v,
-                        0.,
+                        2.,
                     ]
                 };
                 for ring in 0..rings {
@@ -1193,6 +1265,23 @@ impl Gpu {
         geometry: &Geometry,
         appearance: &Appearance,
     ) -> Result<(), String> {
+        // Haze in the sky gradient's horizon colour hides the terrain edge.
+        self.fog = ground
+            .as_ref()
+            .and_then(|g| g.sky.as_ref())
+            .map_or([0.; 4], |sky| {
+                let g = &sky.gradient;
+                let row = (g.height as usize - 1) * g.width as usize * 4;
+                let mut c = [0f32; 3];
+                for x in 0..g.width as usize {
+                    for k in 0..3 {
+                        c[k] += f32::from(g.rgba[row + x * 4 + k]) / 255. / g.width as f32;
+                    }
+                }
+                // sRGB texels to the linear colour the render target expects.
+                let c = c.map(|v| v.powf(2.2));
+                [c[0], c[1], c[2], 1. / 24_000.]
+            });
         self.ground = ground;
         self.replace_scene(geometry, appearance)
     }
@@ -1343,7 +1432,10 @@ impl Gpu {
                 orbit
                     .matrix(self.config.width as f32 / self.config.height as f32)
                     .into_iter()
-                    .chain(self.model_matrix),
+                    .chain(self.model_matrix)
+                    .chain(orbit.eye())
+                    .chain([0.])
+                    .chain(self.fog),
             ),
         );
         let mut encoder = self.device.create_command_encoder(&Default::default());
