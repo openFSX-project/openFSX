@@ -1700,3 +1700,13 @@ fields from 52 are type (4 flat roof), width, depth, then texture/size groups
 with band heights at fields 4, 8 and 13. 799 stock libraries hold about
 16,000 models; airports such as KSEA place 168 objects within 6 km.
 
+### Autogen annotations (.agn)
+
+`Scenery/World/texture/NNNR2anV.agn` files are RIFF "AGNX" with chunks VERS,
+GBDD, AGN2, PREG, ROWH, GBLD and VGRG. GBLD contains GBLR: 16 bytes followed by
+24-byte rectangular buildings (centre x, z; unit direction of the building x
+axis; half width, half depth; fractions of the tile in -0.5..0.5). VGRG contains
+VGRE: a 16-byte GUID followed by vegetation polygon vertices (x, z float pairs).
+809 stock annotations hold about 93,000 buildings and 936 vegetation polygons;
+a few region-X files use an older non-RIFF layout.
+

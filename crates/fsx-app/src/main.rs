@@ -638,9 +638,13 @@ impl World {
                 (None, Vec::new())
             }
         };
+        let autogen = terrain
+            .as_ref()
+            .map(|t| self.autogen(t, &classes, center, &fields))
+            .unwrap_or_default();
         let trees = terrain
             .as_ref()
-            .and_then(|t| self.trees(t, &classes, center, &fields));
+            .and_then(|t| self.trees(t, &classes, center, &fields, &autogen));
         let top = terrain
             .as_ref()
             .map_or(0., |t| t.heights.iter().fold(0f32, |a, &h| a.max(h)));
@@ -656,7 +660,7 @@ impl World {
         if surfaces.is_empty() {
             runways.iter_mut().for_each(|r| r.surface = None);
         }
-        let objects = self.objects(center, terrain.as_ref());
+        let objects = self.objects(center, terrain.as_ref(), autogen.houses);
         fsx_render::Ground {
             runways,
             terrain,
@@ -674,6 +678,7 @@ impl World {
         &self,
         center: (f64, f64),
         terrain: Option<&fsx_render::Terrain>,
+        houses: Vec<fsx_scenery::objects::GenericBuilding>,
     ) -> Option<fsx_render::StaticScene> {
         use fsx_scenery::catalog::{local, offset};
         let (lat, lon) = offset(self.origin.0, self.origin.1, center.0, center.1);
@@ -704,6 +709,9 @@ impl World {
         scenery_objects::add_generic_buildings(&mut scene, &buildings, |b| {
             position(b.latitude, b.longitude, b.altitude, b.agl)
         });
+        scenery_objects::add_generic_buildings(&mut scene, &houses, |b| {
+            position(b.latitude, b.longitude, b.altitude, b.agl)
+        });
         (!scene.batches.is_empty()).then_some(scene)
     }
     /// Trees from the installed sheet within 8 km of the area centre, chosen
@@ -715,6 +723,7 @@ impl World {
         classes: &[u8],
         center: (f64, f64),
         fields: &[(f64, f64, f64)],
+        autogen: &Autogen,
     ) -> Option<fsx_render::Trees> {
         let quads = terrain.columns - 1;
         if classes.len() != quads * (terrain.rows - 1) {
@@ -753,6 +762,7 @@ impl World {
                     terrain.north - (r as f32 + 0.5) * terrain.spacing,
                 );
                 if count == 0
+                    || autogen.covered.contains(&(r / 4, c / 4))
                     || (f64::from(qn) - center.0).hypot(f64::from(qe) - center.1) > 8_000.
                     || fields
                         .iter()
@@ -771,6 +781,7 @@ impl World {
                 }
             }
         }
+        instances.extend(autogen.trees.iter().copied());
         Some(fsx_render::Trees { sprites, instances })
     }
     /// FSX noon sky gradient and a fair-weather cumulus layer 500 m above the
@@ -873,6 +884,135 @@ fn airport_scenery(
         }
     );
     Ok((start, ground, world))
+}
+/// Autogen houses and trees from the stock annotations of the land textures.
+#[derive(Default)]
+struct Autogen {
+    houses: Vec<fsx_scenery::objects::GenericBuilding>,
+    trees: Vec<([f32; 3], f32, u8)>,
+    /// Texture tiles (row, column in 4 x 4 quads) whose vegetation came from
+    /// annotations, so the random density model leaves them alone.
+    covered: std::collections::HashSet<(usize, usize)>,
+}
+impl World {
+    /// Annotated houses and vegetation within 5 km of a local centre. Each
+    /// annotation spans one land texture repetition (4 x 4 terrain quads),
+    /// with x east and z north in -0.5..0.5. Heights are an openFSX estimate
+    /// from footprint; annotation building classes are not decoded.
+    fn autogen(
+        &self,
+        terrain: &fsx_render::Terrain,
+        classes: &[u8],
+        center: (f64, f64),
+        fields: &[(f64, f64, f64)],
+    ) -> Autogen {
+        use fsx_scenery::{autogen, catalog::offset};
+        let mut out = Autogen::default();
+        let quads = terrain.columns - 1;
+        if classes.len() != quads * (terrain.rows - 1) {
+            return out;
+        }
+        let mut cache: std::collections::HashMap<u16, Option<autogen::Annotation>> =
+            std::collections::HashMap::new();
+        let size = 4. * terrain.spacing;
+        let mut seed = 0x2545_F491_4F6C_DD1Du64
+            ^ (center.0 as i64 as u64).rotate_left(23)
+            ^ center.1 as i64 as u64;
+        let mut random = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) as f32) / (1u64 << 31) as f32
+        };
+        for tr in 0..(terrain.rows - 1) / 4 {
+            for tc in 0..quads / 4 {
+                let (ce, cn) = (
+                    terrain.west + (tc as f32 * 4. + 2.) * terrain.spacing,
+                    terrain.north - (tr as f32 * 4. + 2.) * terrain.spacing,
+                );
+                let (dn, de) = (f64::from(cn) - center.0, f64::from(ce) - center.1);
+                if dn.hypot(de) > 5_000.
+                    || fields
+                        .iter()
+                        .any(|&(n, e, _)| (f64::from(cn) - n).hypot(f64::from(ce) - e) < 2_000.)
+                {
+                    continue;
+                }
+                let class = classes[(tr * 4 + 2) * quads + tc * 4 + 2];
+                let texture = land_texture(class);
+                let annotation = cache.entry(texture).or_insert_with(|| {
+                    let path = "bacdefg".chars().find_map(|region| {
+                        self.textures.get(&format!("{texture:03}{region}2an1.agn"))
+                    })?;
+                    autogen::parse(&std::fs::read(path).ok()?).ok()
+                });
+                let Some(annotation) = annotation else {
+                    continue;
+                };
+                let local = |p: [f32; 2]| (ce + p[0] * size, cn + p[1] * size);
+                for b in &annotation.buildings {
+                    let (e, n) = local(b.center);
+                    let (lat, lon) =
+                        offset(self.origin.0, self.origin.1, f64::from(n), f64::from(e));
+                    let (w, d) = (b.half_size[0] * 2. * size, b.half_size[1] * 2. * size);
+                    let footprint = (w * d).sqrt();
+                    let height = (3.5 + footprint * 0.18).clamp(4., 30.) * (0.8 + 0.4 * random());
+                    out.houses.push(fsx_scenery::objects::GenericBuilding {
+                        latitude: lat,
+                        longitude: lon,
+                        altitude: 0.,
+                        agl: true,
+                        // The building x axis points along `direction`.
+                        heading: f64::from((-b.direction[1]).atan2(b.direction[0])).to_degrees(),
+                        size: [f64::from(w), f64::from(height), f64::from(d)],
+                        pitched_roof: footprint < 22.,
+                    });
+                }
+                if !annotation.vegetation.is_empty() {
+                    out.covered.insert((tr, tc));
+                }
+                let cells: &[u8] = match class {
+                    3 | 4 | 20 | 21 | 22 | 27 | 61 | 62 | 63 => &[4, 5, 6, 7, 8, 9, 10, 11],
+                    6 | 28 | 29 | 32 | 33 | 34 | 72 | 90 => &[0, 1, 14, 15],
+                    _ => &[0, 1, 2, 3, 4, 5],
+                };
+                for polygon in &annotation.vegetation {
+                    // About one tree per 30 x 30 m, at most 120 per polygon.
+                    let (min, max) = polygon.iter().fold(([1f32; 2], [-1f32; 2]), |(lo, hi), p| {
+                        (
+                            [lo[0].min(p[0]), lo[1].min(p[1])],
+                            [hi[0].max(p[0]), hi[1].max(p[1])],
+                        )
+                    });
+                    let area = (max[0] - min[0]) * (max[1] - min[1]) * size * size;
+                    let wanted = ((area / 900.) as usize).min(120);
+                    for _ in 0..wanted * 2 {
+                        let p = [
+                            min[0] + random() * (max[0] - min[0]),
+                            min[1] + random() * (max[1] - min[1]),
+                        ];
+                        if !autogen::contains(polygon, p) {
+                            continue;
+                        }
+                        let (e, n) = local(p);
+                        if let Some(y) = terrain.height_at(e, n) {
+                            let cell =
+                                cells[(random() * cells.len() as f32) as usize % cells.len()];
+                            out.trees
+                                .push(([e, y - 0.5, n], 10. + random() * 12., cell));
+                        }
+                    }
+                }
+            }
+        }
+        println!(
+            "Autogen: {} houses, {} trees from {} annotations",
+            out.houses.len(),
+            out.trees.len(),
+            cache.values().filter(|a| a.is_some()).count()
+        );
+        out
+    }
 }
 /// Installed runway surface textures, indexed by runway_surface().
 const RUNWAY_TEXTURES: [&str; 6] = [

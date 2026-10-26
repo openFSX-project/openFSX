@@ -119,6 +119,15 @@ cruise speed, followed with a 0.6 s lag. It drives the engine sound layers and
 the native C172 tachometer needle (GENERAL ENG RPM, token 390, helper input 7).
 Thrust still uses the momentum-disk model; FSX propeller tables are not used.
 
+Autogen uses the stock annotations: each land texture `NNN?2su1.bmp` has an
+`NNN?2an1.agn` covering the same tile (4 x 4 terrain quads here). Rectangular
+buildings become boxes with the annotated footprint and orientation, coloured
+from varied wall/roof palettes, with heights estimated from footprint (4-30 m,
+pitched roofs on small houses); vegetation polygons are filled with trees from
+the stock sheet (about one per 30 m square). Within 5 km of the area centre and
+2 km clear of airports. Building classes, heights, textures, rows of houses and
+the older region-X annotation layout are not decoded.
+
 `--airborne` with `--airport` starts trimmed at 90 kt and 300 m over the runway
 threshold, along the runway heading; R returns there.
 The ground uses the stock summer land-class textures: worldlc.bgl classes are

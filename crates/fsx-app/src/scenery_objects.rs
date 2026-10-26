@@ -182,12 +182,33 @@ pub fn add_generic_buildings(
         alpha_threshold: 0.,
         clamp_texture: false,
     };
-    let (wall, roof) = (scene.materials.len(), scene.materials.len() + 1);
-    scene.materials.push(solid([0.78, 0.76, 0.70, 1.]));
-    scene.materials.push(solid([0.36, 0.37, 0.39, 1.]));
-    let (mut walls, mut roofs) = (Vec::new(), Vec::new());
+    // Varied plaster/brick walls and tile/slate roofs, chosen per building.
+    const WALLS: [[f32; 4]; 5] = [
+        [0.86, 0.85, 0.80, 1.],
+        [0.80, 0.74, 0.62, 1.],
+        [0.84, 0.80, 0.62, 1.],
+        [0.66, 0.66, 0.66, 1.],
+        [0.62, 0.40, 0.32, 1.],
+    ];
+    const ROOFS: [[f32; 4]; 4] = [
+        [0.55, 0.24, 0.17, 1.],
+        [0.40, 0.28, 0.22, 1.],
+        [0.30, 0.32, 0.36, 1.],
+        [0.22, 0.22, 0.24, 1.],
+    ];
+    let base = scene.materials.len();
+    for c in WALLS.iter().chain(ROOFS.iter()) {
+        scene.materials.push(solid(*c));
+    }
+    let mut walls = vec![Vec::new(); WALLS.len()];
+    let mut roofs = vec![Vec::new(); ROOFS.len()];
     for b in buildings {
         let Some(p) = place(b) else { continue };
+        let hash = (p[0] * 7.13 + p[2] * 3.71).abs() as usize;
+        let (walls, roofs) = (
+            &mut walls[hash % WALLS.len()],
+            &mut roofs[(hash / 7) % ROOFS.len()],
+        );
         let (sin, cos) = (b.heading.to_radians() as f32).sin_cos();
         let [sx, sy, sz] = b.size.map(|v| v as f32 / 2.);
         let height = sy * 2.;
@@ -204,22 +225,22 @@ pub fn add_generic_buildings(
         };
         let h = height;
         face(
-            &mut walls,
+            walls,
             [[-sx, 0., sz], [sx, 0., sz], [sx, h, sz], [-sx, h, sz]],
             [0., 0., 1.],
         );
         face(
-            &mut walls,
+            walls,
             [[sx, 0., -sz], [-sx, 0., -sz], [-sx, h, -sz], [sx, h, -sz]],
             [0., 0., -1.],
         );
         face(
-            &mut walls,
+            walls,
             [[sx, 0., sz], [sx, 0., -sz], [sx, h, -sz], [sx, h, sz]],
             [1., 0., 0.],
         );
         face(
-            &mut walls,
+            walls,
             [[-sx, 0., -sz], [-sx, 0., sz], [-sx, h, sz], [-sx, h, -sz]],
             [-1., 0., 0.],
         );
@@ -228,7 +249,7 @@ pub fn add_generic_buildings(
             let ridge = h + 0.5 * sx.min(sz);
             if sz >= sx {
                 face(
-                    &mut roofs,
+                    roofs,
                     [
                         [-sx, h, -sz],
                         [-sx, h, sz],
@@ -238,17 +259,17 @@ pub fn add_generic_buildings(
                     [-0.5, 1., 0.],
                 );
                 face(
-                    &mut roofs,
+                    roofs,
                     [[sx, h, sz], [sx, h, -sz], [0., ridge, -sz], [0., ridge, sz]],
                     [0.5, 1., 0.],
                 );
                 face(
-                    &mut walls,
+                    walls,
                     [[-sx, h, sz], [sx, h, sz], [0., ridge, sz], [0., ridge, sz]],
                     [0., 0., 1.],
                 );
                 face(
-                    &mut walls,
+                    walls,
                     [
                         [sx, h, -sz],
                         [-sx, h, -sz],
@@ -259,7 +280,7 @@ pub fn add_generic_buildings(
                 );
             } else {
                 face(
-                    &mut roofs,
+                    roofs,
                     [
                         [sx, h, -sz],
                         [-sx, h, -sz],
@@ -269,17 +290,17 @@ pub fn add_generic_buildings(
                     [0., 1., -0.5],
                 );
                 face(
-                    &mut roofs,
+                    roofs,
                     [[-sx, h, sz], [sx, h, sz], [sx, ridge, 0.], [-sx, ridge, 0.]],
                     [0., 1., 0.5],
                 );
                 face(
-                    &mut walls,
+                    walls,
                     [[sx, h, sz], [sx, h, -sz], [sx, ridge, 0.], [sx, ridge, 0.]],
                     [1., 0., 0.],
                 );
                 face(
-                    &mut walls,
+                    walls,
                     [
                         [-sx, h, -sz],
                         [-sx, h, sz],
@@ -291,13 +312,15 @@ pub fn add_generic_buildings(
             }
         } else {
             face(
-                &mut roofs,
+                roofs,
                 [[-sx, h, -sz], [sx, h, -sz], [sx, h, sz], [-sx, h, sz]],
                 [0., 1., 0.],
             );
         }
     }
-    for (vertices, material) in [(walls, wall), (roofs, roof)] {
+    let groups = walls.into_iter().chain(roofs).enumerate();
+    for (k, vertices) in groups {
+        let material = base + k;
         if vertices.is_empty() {
             continue;
         }

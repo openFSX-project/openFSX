@@ -3,6 +3,7 @@
 //! elevation, land class and object placement remain future work.
 use std::path::{Path, PathBuf};
 
+pub mod autogen;
 pub mod catalog;
 pub mod objects;
 pub mod terrain;
