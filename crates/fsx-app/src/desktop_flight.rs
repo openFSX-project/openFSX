@@ -40,6 +40,8 @@ pub struct Analog {
 pub struct FlightSession {
     pub simulation: Simulation,
     pub paused: bool,
+    /// Terrain impact; the flight stays stopped until reset.
+    pub crashed: bool,
     pub parking_brake: bool,
     /// Selected flap detent; the surface follows at the authored extension rate.
     pub flap_handle: usize,
@@ -76,6 +78,7 @@ impl FlightSession {
                 Simulation::trimmed(parameters.clone(), 90. * KNOT, 300.)?
             },
             paused: false,
+            crashed: false,
             parking_brake: ground.is_some(),
             flap_handle: 0,
             analog: None,
@@ -128,7 +131,7 @@ impl FlightSession {
         if !elapsed.is_finite() || elapsed < 0. {
             return Err("Invalid frame time".into());
         }
-        if self.paused {
+        if self.paused || self.crashed {
             self.accumulator = 0.;
             return Ok(());
         }
@@ -212,7 +215,9 @@ impl FlightSession {
     }
     pub fn title(&self) -> Result<String, String> {
         let t = self.simulation.telemetry()?;
-        let status = if self.paused {
+        let status = if self.crashed {
+            "CRASHED — R reset"
+        } else if self.paused {
             "PAUSED — P resume"
         } else if t.ground_contact {
             if self.parking_brake {

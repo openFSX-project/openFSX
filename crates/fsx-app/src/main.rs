@@ -170,6 +170,20 @@ impl App {
             }
             let sink = flight.simulation.state.velocity[2];
             flight.advance(elapsed)?;
+            if let Some(terrain) = self.ground.as_ref().and_then(|g| g.terrain.as_ref()) {
+                let [north, east, down] = flight.simulation.state.position;
+                if let Some(h) = terrain.height_at(east as f32, north as f32) {
+                    // Wheels handle the flattened airport; elsewhere the CG
+                    // reaching the surface is an impact.
+                    if h > 1. && -down < f64::from(h) + 1. && !flight.crashed {
+                        flight.crashed = true;
+                        eprintln!(
+                            "Terrain impact at {:.0} m elevation; press R to reset",
+                            f64::from(h + terrain.base)
+                        );
+                    }
+                }
+            }
             if let Some(audio) = &mut self.audio {
                 let t = flight.simulation.telemetry()?;
                 let c = flight.simulation.controls;
@@ -536,16 +550,81 @@ fn airport_scenery(
             });
         }
     }
+    let terrain = match airport_terrain(root, &start, (airport.latitude, airport.longitude)) {
+        Ok(t) => Some(t),
+        Err(e) => {
+            eprintln!("Terrain elevation unavailable, using a flat field: {e}");
+            None
+        }
+    };
     println!(
-        "Airport {} {}: runway {} heading {:.0}°, field elevation {:.0} m; {} runways within 25 km. Terrain is flat at field elevation.",
+        "Airport {} {}: runway {} heading {:.0}°, field elevation {:.0} m; {} runways within 25 km; {}.",
         airport.icao,
         airport.name.as_deref().unwrap_or(""),
         start.runway,
         start.heading,
         start.altitude,
-        runways.len()
+        runways.len(),
+        if terrain.is_some() {
+            "installed FSX elevation mesh"
+        } else {
+            "flat terrain"
+        }
     );
-    Ok((start, fsx_render::Ground { runways }))
+    Ok((start, fsx_render::Ground { runways, terrain }))
+}
+/// Elevation grid of +-40 km around the runway start, decoded by the installed
+/// terrain.dll through the x86 helper. The airport itself is flattened to its
+/// field elevation, as FSX does with airport flattening.
+fn airport_terrain(
+    root: &Path,
+    start: &fsx_scenery::catalog::Start,
+    airport: (f64, f64),
+) -> Result<fsx_render::Terrain, String> {
+    use fsx_scenery::{catalog, terrain};
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    let helper = executable
+        .ancestors()
+        .skip(1)
+        .take(2)
+        .map(|d| d.join("fsx-terrain-host.exe"))
+        .find(|p| p.is_file())
+        .ok_or("target/fsx-terrain-host.exe not built (scripts/build-terrain-host.ps1)")?;
+    const SIZE: usize = 257;
+    const HALF: f64 = 40_000.;
+    let records = terrain::index_near(root, start.latitude, start.longitude, HALF * 1.5)?;
+    let mut elevation =
+        terrain::Elevation::new(records, terrain::Decoder::start(&helper, root)?, 12);
+    let spacing = 2. * HALF / (SIZE - 1) as f64;
+    let origin = (start.latitude, start.longitude);
+    let (airport_north, airport_east) = catalog::local(origin, airport);
+    let mut heights = Vec::with_capacity(SIZE * SIZE);
+    let mut found = 0;
+    for r in 0..SIZE {
+        for c in 0..SIZE {
+            let (north, east) = (HALF - r as f64 * spacing, -HALF + c as f64 * spacing);
+            let (lat, lon) = catalog::offset(origin.0, origin.1, north, east);
+            let absolute = elevation.height(lat, lon).map(f64::from);
+            found += usize::from(absolute.is_some());
+            let relative = absolute.unwrap_or(start.altitude) - start.altitude;
+            // Blend from the flat field (3 km) to raw terrain (6 km).
+            let d = (north - airport_north).hypot(east - airport_east);
+            let k = ((d - 3000.) / 3000.).clamp(0., 1.);
+            heights.push((relative * k * k * (3. - 2. * k)) as f32);
+        }
+    }
+    if found < SIZE * SIZE / 2 {
+        return Err("No elevation records cover this airport".into());
+    }
+    Ok(fsx_render::Terrain {
+        columns: SIZE,
+        rows: SIZE,
+        west: -HALF as f32,
+        north: HALF as f32,
+        spacing: spacing as f32,
+        heights,
+        base: start.altitude as f32,
+    })
 }
 fn run_menu(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]

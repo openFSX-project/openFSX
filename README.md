@@ -54,7 +54,8 @@ cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects
 # Start an airborne C172 test with keyboard controls.
 cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --variant 0 --windows-1252 --lod 150
 
-# Start on a real airport runway from the installed scenery (flat terrain).
+# Start on a real airport runway from the installed scenery. Build
+# scripts/build-terrain-host.ps1 once to add the installed FSX elevation mesh.
 cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --airport KSEA --cockpit --native-gauges --windows-1252
 
 # Start on the original test runway, with parking brake applied.

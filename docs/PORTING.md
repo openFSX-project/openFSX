@@ -19,7 +19,8 @@ exterior/static-panel fallback, CFG-driven flaps (F5–F8) and game-controller
 input. See FLIGHT.md for the flap approximation. Playable stage 2 adds
 sound.cfg engine/event audio (FLIGHT.md). Stage 3 adds fsx-scenery: BGL airport/
 runway decoding, --airport and menu location starts (FORMATS.md, FLIGHT.md).
-Next: terrain elevation and land-class textures (compressed BGL sections).
+Stage 4 adds terrain elevation (FORMATS.md) and terrain impact. Next: land-class
+textures and water.
 
 After `954710c`, the original pitot thermal prefix is ported up to temperature
 storage, before icing. scripts/check-pitot-thermal.py executes the pinned original

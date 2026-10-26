@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 pub mod catalog;
+pub mod terrain;
 
 type Result<T> = std::result::Result<T, String>;
 const MAGIC: u32 = 0x1992_0201;
@@ -95,9 +96,10 @@ impl Runway {
         };
         format!("{}/{}", end(self.primary), end(self.secondary))
     }
-    /// Hard surfaces: concrete, asphalt, bituminous, tarmac, brick, macadam, planks.
+    /// Hard surfaces: concrete, asphalt, oil-treated, steel mats, bituminous,
+    /// brick, macadam, planks and tarmac (FSX surface codes).
     pub fn hard(&self) -> bool {
-        matches!(self.surface, 0 | 4 | 7 | 10 | 11 | 12 | 13 | 14 | 18)
+        matches!(self.surface, 0 | 4 | 15 | 16 | 17 | 18 | 19 | 20 | 23)
     }
 }
 #[derive(Debug, Clone, PartialEq)]

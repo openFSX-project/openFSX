@@ -285,6 +285,72 @@ pub struct Gpu {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Ground {
     pub runways: Vec<GroundRunway>,
+    pub terrain: Option<Terrain>,
+}
+/// Regular elevation grid in world metres around the flight origin.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Terrain {
+    pub columns: usize,
+    pub rows: usize,
+    /// East coordinate of column 0 and north coordinate of row 0.
+    pub west: f32,
+    pub north: f32,
+    pub spacing: f32,
+    /// Heights above the flight origin plane, row-major from the north edge.
+    pub heights: Vec<f32>,
+    /// Mean-sea-level elevation of the origin plane.
+    pub base: f32,
+}
+impl Terrain {
+    /// Bilinear height above the origin plane; None outside the grid.
+    pub fn height_at(&self, east: f32, north: f32) -> Option<f32> {
+        let x = (east - self.west) / self.spacing;
+        let y = (self.north - north) / self.spacing;
+        if !(x >= 0. && y >= 0. && x <= (self.columns - 1) as f32 && y <= (self.rows - 1) as f32) {
+            return None;
+        }
+        let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+        let (x1, y1) = ((x0 + 1).min(self.columns - 1), (y0 + 1).min(self.rows - 1));
+        let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+        let at = |c: usize, r: usize| self.heights[r * self.columns + c];
+        let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * fx;
+        let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * fx;
+        Some(top + (bottom - top) * fy)
+    }
+}
+/// Elevation colours: sea, lowland green, forest, dry grass, rock, snow.
+fn terrain_gradient() -> Image {
+    let stops: [(f32, [f32; 3]); 6] = [
+        (0., [0.30, 0.42, 0.22]),
+        (300., [0.24, 0.36, 0.18]),
+        (900., [0.30, 0.34, 0.20]),
+        (1700., [0.42, 0.38, 0.30]),
+        (2600., [0.50, 0.48, 0.46]),
+        (3400., [0.93, 0.94, 0.96]),
+    ];
+    let mut rgba = Vec::with_capacity(256 * 4);
+    for i in 0..256 {
+        let c = if i == 0 {
+            [0.13, 0.27, 0.42]
+        } else {
+            let h = (i as f32 - 1.) / 254. * 4500.;
+            let k = stops.iter().rposition(|(s, _)| *s <= h).unwrap_or(0);
+            let (a, b) = (stops[k], stops[(k + 1).min(stops.len() - 1)]);
+            let t = if b.0 > a.0 {
+                ((h - a.0) / (b.0 - a.0)).clamp(0., 1.)
+            } else {
+                0.
+            };
+            std::array::from_fn(|j| a.1[j] + (b.1[j] - a.1[j]) * t)
+        };
+        rgba.extend(c.map(|x| (x * 255.) as u8));
+        rgba.push(255);
+    }
+    Image {
+        width: 256,
+        height: 1,
+        rgba,
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GroundRunway {
@@ -626,11 +692,13 @@ impl Gpu {
             rgba: vec![255; 4],
         });
         let white = white_texture.create_view(&Default::default());
-        let textures = appearance
+        let mut textures = appearance
             .images
             .iter()
             .map(|image| image.as_ref().map(upload))
             .collect::<Vec<_>>();
+        let gradient = textures.len();
+        textures.push(Some(upload(&terrain_gradient())));
         let views = textures
             .iter()
             .map(|texture| texture.as_ref().map(|t| t.create_view(&Default::default())))
@@ -655,6 +723,14 @@ impl Gpu {
                     clamp_texture: false,
                 });
             }
+            materials.push(Material {
+                diffuse: [1.; 4],
+                diffuse_texture: Some(gradient),
+                alpha_blend: false,
+                alpha_function: 0,
+                alpha_threshold: 0.,
+                clamp_texture: true,
+            });
         }
         for material in &materials {
             let view = material
@@ -731,7 +807,11 @@ impl Gpu {
                     }
                 };
             let start = geometry.vertices.len() as u32;
-            quad(&mut vertices, -30000., -30000., 30000., 30000., 0.);
+            // With terrain the surrounding plane sits at sea level as water.
+            let plane = ground
+                .and_then(|g| g.terrain.as_ref())
+                .map_or(0., |t| -t.base - 1.);
+            quad(&mut vertices, -30000., -30000., 30000., 30000., plane);
             let mut count = 6;
             draws.push(GpuDraw {
                 visible: true,
@@ -740,6 +820,42 @@ impl Gpu {
                 center: [0.; 3],
                 blended: false,
             });
+            if let Some(t) = ground.and_then(|g| g.terrain.as_ref()) {
+                let first = vertices.len() as u32;
+                let at = |c: usize, r: usize| t.heights[r * t.columns + c];
+                let vertex = |c: usize, r: usize| {
+                    let (x, z) = (
+                        t.west + c as f32 * t.spacing,
+                        t.north - r as f32 * t.spacing,
+                    );
+                    let h = at(c, r);
+                    let dx = at((c + 1).min(t.columns - 1), r) - at(c.saturating_sub(1), r);
+                    let dz = at(c, r.saturating_sub(1)) - at(c, (r + 1).min(t.rows - 1));
+                    let n = [-dx, 4. * t.spacing, -dz];
+                    let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                    let absolute = h + t.base;
+                    let u = if absolute <= 0.5 {
+                        0.5 / 256.
+                    } else {
+                        (1.5 + absolute / 4500. * 254.) / 256.
+                    };
+                    [x, h, z, n[0] / l, n[1] / l, n[2] / l, u.min(1.), 0.5, 0.]
+                };
+                for r in 0..t.rows - 1 {
+                    for c in 0..t.columns - 1 {
+                        for (dc, dr) in [(0, 0), (1, 1), (1, 0), (0, 0), (0, 1), (1, 1)] {
+                            vertices.push(vertex(c + dc, r + dr));
+                        }
+                    }
+                }
+                draws.push(GpuDraw {
+                    visible: true,
+                    range: first..vertices.len() as u32,
+                    material: ground_material + 5,
+                    center: [0.; 3],
+                    blended: false,
+                });
+            }
             if let Some(ground) = ground {
                 let mut draw =
                     |vertices: &mut Vec<[f32; 9]>,
@@ -832,19 +948,21 @@ impl Gpu {
                     blended: false,
                 });
             }
-            let count = vertices.len() as u32 - start;
-            for i in -40..=40 {
-                let p = i as f32 * 200.;
-                quad(&mut vertices, p, -8000., p + 0.8, 8000., 0.01);
-                quad(&mut vertices, -8000., p, 8000., p + 0.8, 0.01);
+            if ground.and_then(|g| g.terrain.as_ref()).is_none() {
+                let count = vertices.len() as u32 - start;
+                for i in -40..=40 {
+                    let p = i as f32 * 200.;
+                    quad(&mut vertices, p, -8000., p + 0.8, 8000., 0.01);
+                    quad(&mut vertices, -8000., p, 8000., p + 0.8, 0.01);
+                }
+                draws.push(GpuDraw {
+                    visible: true,
+                    range: start + count..vertices.len() as u32,
+                    material: ground_material + 3,
+                    center: [0.; 3],
+                    blended: false,
+                });
             }
-            draws.push(GpuDraw {
-                visible: true,
-                range: start + count..vertices.len() as u32,
-                material: ground_material + 3,
-                center: [0.; 3],
-                blended: false,
-            });
         }
         let vertex = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("MDLX geometry"),

@@ -278,3 +278,15 @@ cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects
 node scripts/ppm-to-png.mjs target/ksea-runway.ppm site/assets/screenshots/ksea-runway.png
 node scripts/ppm-to-png.mjs target/uuee-cockpit.ppm site/assets/screenshots/uuee-cockpit.png
 ```
+
+## Terrain elevation (26 October 2026)
+
+`lowi-cockpit.png` and `lowi-terrain.png` are direct 960 × 720 GPU readbacks.
+The mesh is decoded from the user's installed DEM BGL files by their installed
+terrain.dll in the x86 helper; colours are an openFSX height gradient.
+
+```powershell
+.\scriptsuild-terrain-host.ps1
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --airport LOWI --cockpit --native-gauges --windows-1252 --snapshot target/lowi-cockpit.ppm
+cargo run -p fsx-app --features viewer --bin openfsx-viewer -- "./FSX/SimObjects/Airplanes/C172" --fly --airport LOWI --windows-1252 --lod 150 --snapshot target/lowi-terrain.ppm
+```

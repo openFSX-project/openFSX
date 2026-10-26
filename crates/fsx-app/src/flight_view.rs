@@ -75,7 +75,7 @@ pub fn camera(
         orbit.center = flight.center();
         orbit.yaw = flight.heading() + std::f32::consts::PI + 0.35;
         orbit.pitch = 0.25;
-        orbit.far = 20000.;
+        orbit.far = 90000.;
         return Ok(());
     };
     let eye_model = [

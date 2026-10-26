@@ -1645,3 +1645,25 @@ fsx-scenery decodes these from every Scenery/*/scenery/APX*.bgl (24,490 stock
 airports) with bounded, truncation-checked parsing. Terrain elevation, land class,
 taxiways, aprons, lights and scenery objects are not decoded yet.
 
+### BGL terrain elevation
+
+DEM files (`Scenery/XXYY/scenery/dem*.bgl`) carry section 0x67 subsections of
+`TRQ1` records: a 0x28-byte header (data type u16 = 2 elevation, compression
+u16, QMID low/high, columns/rows, payload size) and a payload that starts with
+`RCS1`, a float scale and float offset (metres = int16 * scale + offset). Grids
+are 257 x 257 with shared edges. QMIDs are quad-tree cells: with the top set bit
+at position m, there are n = (m - 1) / 2 interleaved digit pairs (u in even
+bits, v in odd bits); a cell spans 480/2^n degrees of longitude and 360/2^n of
+latitude from (-180 + u*w, 90 - v*h). n = 4 is the 30 x 22.5 degree scenery tile
+XXYY = (u, v); stock data reaches n = 12 (about 9 km cells, ~36 m spacing).
+
+Compression low byte: 0 raw, 1/4 LZ (util.dll ordinals 194/195), 2 delta,
+3/5 LZ+delta, 6 bit-pack, 7/9 LZ+bit-pack, 10 PTC (wavelet codec object from
+util.dll ordinal 31; about 85% of records). openFSX does not reimplement these:
+`fsx-terrain-host` (x86, scripts/build-terrain-host.ps1) loads the installed
+terrain.dll, constructs its decoder object (RVA 0x79090) and calls its record
+decoder (RVA 0x79240, __thiscall type/data/size/descriptor) with an f32
+elevation descriptor, so all types decode exactly as FSX does. RVAs and
+prologues are pinned to terrain.dll sha256 85fd7221...; another build is
+rejected. Checks: KSEA field 132 m, Mount Rainier above 3500 m.
+
