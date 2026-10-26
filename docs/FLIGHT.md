@@ -54,9 +54,12 @@ centreline, edge and threshold markings. The world is a flat plane at field
 elevation; reported and instrument altitude include that elevation, while air
 density still uses height above the plane. When `target/fsx-terrain-host.exe`
 is built, a 257 x 257 elevation mesh of +-40 km (about 310 m spacing) is decoded
-from the installed DEM files; the airport is flattened to
-field elevation within 3 km, blending to real terrain by 6 km. Descending into
-terrain outside the flattened area is an impact: the flight stops until R.
+from the installed DEM files; every airport within range is flattened to its
+own field elevation within 3 km, blending to real terrain by 6 km, and its
+runways are drawn at that height. Each frame the wheel contact plane is moved to
+the terrain height under the aircraft (locally level), so landings at other
+airports and on open terrain use the same spring/damper gear. A CG penetration
+or numeric blow-up is a crash: the flight stops until R.
 The ground uses the stock summer land-class textures: worldlc.bgl classes are
 sampled per mesh quad and the matching `NNN?2su1.bmp` textures (DXT1 inside a
 BMP header) are packed into a 2048-pixel atlas, one texture per 4 x 4 quads

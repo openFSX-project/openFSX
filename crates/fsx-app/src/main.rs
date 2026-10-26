@@ -169,20 +169,19 @@ impl App {
                 flight.analog = analog;
             }
             let sink = flight.simulation.state.velocity[2];
-            flight.advance(elapsed)?;
             if let Some(terrain) = self.ground.as_ref().and_then(|g| g.terrain.as_ref()) {
-                let [north, east, down] = flight.simulation.state.position;
-                if let Some(h) = terrain.height_at(east as f32, north as f32) {
-                    // Wheels handle the flattened airport; elsewhere the CG
-                    // reaching the surface is an impact.
-                    if h > 1. && -down < f64::from(h) + 1. && !flight.crashed {
-                        flight.crashed = true;
-                        eprintln!(
-                            "Terrain impact at {:.0} m elevation; press R to reset",
-                            f64::from(h + terrain.base)
-                        );
-                    }
+                // Wheels meet the terrain directly under the aircraft, treated
+                // as locally level for this frame.
+                let [north, east, _] = flight.simulation.state.position;
+                flight.simulation.parameters.gear.ground_level =
+                    f64::from(terrain.height_at(east as f32, north as f32).unwrap_or(0.));
+            }
+            match flight.advance(elapsed) {
+                Err(e) if e.contains("penetrated") || e.contains("numeric envelope") => {
+                    flight.crashed = true;
+                    eprintln!("Crash: {e}. Press R to reset");
                 }
+                other => other?,
             }
             if let Some(audio) = &mut self.audio {
                 let t = flight.simulation.telemetry()?;
@@ -547,10 +546,23 @@ fn airport_scenery(
                 length: r.length as f32,
                 width: r.width as f32,
                 hard: r.hard(),
+                height: (r.altitude - start.altitude) as f32,
             });
         }
     }
-    let terrain = match airport_terrain(root, &start, (airport.latitude, airport.longitude)) {
+    // Every airport in range is flattened to its own field elevation.
+    let fields: Vec<(f64, f64, f64)> = catalog
+        .airports
+        .iter()
+        .filter_map(|a| {
+            let (n, e) = fsx_scenery::catalog::local(
+                (start.latitude, start.longitude),
+                (a.latitude, a.longitude),
+            );
+            (n.hypot(e) < 60_000.).then_some((n, e, a.altitude - start.altitude))
+        })
+        .collect();
+    let terrain = match airport_terrain(root, &start, &fields) {
         Ok(t) => Some(t),
         Err(e) => {
             eprintln!("Terrain elevation unavailable, using a flat field: {e}");
@@ -579,7 +591,7 @@ fn airport_scenery(
 fn airport_terrain(
     root: &Path,
     start: &fsx_scenery::catalog::Start,
-    airport: (f64, f64),
+    fields: &[(f64, f64, f64)],
 ) -> Result<fsx_render::Terrain, String> {
     use fsx_scenery::{catalog, terrain};
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -597,7 +609,6 @@ fn airport_terrain(
         terrain::Elevation::new(records, terrain::Decoder::start(&helper, root)?, 12);
     let spacing = 2. * HALF / (SIZE - 1) as f64;
     let origin = (start.latitude, start.longitude);
-    let (airport_north, airport_east) = catalog::local(origin, airport);
     let mut heights = Vec::with_capacity(SIZE * SIZE);
     let mut found = 0;
     for r in 0..SIZE {
@@ -607,10 +618,13 @@ fn airport_terrain(
             let absolute = elevation.height(lat, lon).map(f64::from);
             found += usize::from(absolute.is_some());
             let relative = absolute.unwrap_or(start.altitude) - start.altitude;
-            // Blend from the flat field (3 km) to raw terrain (6 km).
-            let d = (north - airport_north).hypot(east - airport_east);
+            // Blend from the nearest flat field (3 km) to raw terrain (6 km).
+            let (d, field) = fields
+                .iter()
+                .map(|&(n, e, h)| ((north - n).hypot(east - e), h))
+                .fold((f64::INFINITY, 0.), |a, b| if b.0 < a.0 { b } else { a });
             let k = ((d - 3000.) / 3000.).clamp(0., 1.);
-            heights.push((relative * k * k * (3. - 2. * k)) as f32);
+            heights.push((field + (relative - field) * k * k * (3. - 2. * k)) as f32);
         }
     }
     if found < SIZE * SIZE / 2 {

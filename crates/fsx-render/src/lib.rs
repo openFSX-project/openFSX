@@ -398,6 +398,8 @@ pub struct GroundRunway {
     pub length: f32,
     pub width: f32,
     pub hard: bool,
+    /// Surface height above the flight origin plane, metres.
+    pub height: f32,
 }
 struct UploadedScene {
     vertex: wgpu::Buffer,
@@ -959,7 +961,7 @@ impl Gpu {
                     };
                     let (p0, p1, p2, p3) = (at(a0, c0), at(a1, c0), at(a1, c1), at(a0, c1));
                     for [x, z] in [p0, p2, p1, p0, p3, p2] {
-                        v.push([x, y, z, 0., 1., 0., 0., 0., 0.]);
+                        v.push([x, y + r.height, z, 0., 1., 0., 0., 0., 0.]);
                     }
                 };
                 for (hard, material) in [(true, ground_material + 1), (false, ground_material + 4)]

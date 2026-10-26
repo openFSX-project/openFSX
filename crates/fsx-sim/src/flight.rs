@@ -489,7 +489,8 @@ impl Simulation {
         let controls = controls.validated()?;
         // Contact dynamics need smaller steps than the airborne update. RK4
         // still integrates the same state and forces, including during liftoff.
-        if dt > 1. / 480. && (-self.state.position[2] < 10. || self.ground_contact) {
+        let level = self.parameters.gear.ground_level;
+        if dt > 1. / 480. && (-self.state.position[2] - level < 10. || self.ground_contact) {
             let count = (dt / (1. / 480.)).ceil() as usize;
             for _ in 0..count {
                 self.step_physics(controls, dt / count as f64, independent_electrical)?;
@@ -510,8 +511,8 @@ impl Simulation {
         if !next.finite() || length(next.velocity) > 500. || length(next.rates) > 50. {
             return Err("Flight state left the supported numeric envelope".into());
         }
-        if next.position[2] >= 0. {
-            return Err("Aircraft CG penetrated test ground; reset required".into());
+        if next.position[2] + level >= 0. {
+            return Err("Aircraft CG penetrated the ground; reset required".into());
         }
         // No electrical mutation until this physics substep has passed all
         // fallible calculations. Contact subdivision advances each interval once.

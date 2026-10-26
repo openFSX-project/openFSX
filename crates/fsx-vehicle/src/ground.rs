@@ -21,6 +21,9 @@ pub struct Gear {
     pub wheels: Vec<Wheel>,
     pub static_pitch: f64,
     pub omitted_contacts: usize,
+    /// Local ground surface height above the flight origin plane, metres up.
+    /// Updated by the host from terrain under the aircraft; 0 is the test plane.
+    pub ground_level: f64,
 }
 impl Gear {
     pub fn from_config(c: &Config, loading: &Loading) -> Result<Self, String> {
@@ -112,6 +115,7 @@ impl Gear {
             wheels,
             static_pitch,
             omitted_contacts,
+            ground_level: 0.,
         })
     }
 }

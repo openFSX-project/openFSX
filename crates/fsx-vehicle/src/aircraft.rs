@@ -344,6 +344,7 @@ pub fn own_parameters() -> Parameters {
         gear: crate::ground::Gear {
             static_pitch: 0.,
             omitted_contacts: 0,
+            ground_level: 0.,
             wheels: vec![
                 crate::ground::Wheel {
                     position: [2., 0., 1.1],

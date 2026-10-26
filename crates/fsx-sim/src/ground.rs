@@ -43,7 +43,7 @@ impl GroundForces for Gear {
         for wheel in &self.wheels {
             let r = std::array::from_fn(|i| wheel.position[i] - cg[i]);
             let world = q.rotate(r);
-            let compression = s.position[2] + world[2];
+            let compression = s.position[2] + world[2] + self.ground_level;
             if compression <= 0. {
                 continue;
             }
@@ -122,6 +122,20 @@ mod tests {
             p.gear.forces(s, p.loading.cg, Controls::default()).0,
             [0.; 3]
         );
+    }
+    #[test]
+    fn ground_level_raises_the_contact_surface() {
+        let mut p = crate::aircraft::own_parameters();
+        let s = State {
+            position: [0., 0., -100.],
+            velocity: [0.; 3],
+            orientation: Quaternion::IDENTITY,
+            rates: [0.; 3],
+        };
+        assert_eq!(p.gear.forces(s, p.loading.cg, Controls::default()).2, 0);
+        p.gear.ground_level = 99.;
+        let (force, _, count) = p.gear.forces(s, p.loading.cg, Controls::default());
+        assert!(count == 3 && force[2] < 0.);
     }
     #[test]
     fn nosewheel_steers_with_rudder_direction() {
