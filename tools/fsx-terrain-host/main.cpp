@@ -4,9 +4,11 @@
 // headers, import libraries, windows or simulation state are used.
 //
 // Protocol on stdin/stdout (little endian), repeated until EOF:
-//   request:  u32 compression, u32 columns, u32 rows, u32 length, length bytes
-//             (the record payload after the 0x28-byte TRQ1 header)
-//   response: u32 status (1 ok, 0 failed), then columns*rows f32 when ok.
+//   request:  u32 compression | format << 16, u32 columns, u32 rows,
+//             u32 length, length bytes (record payload after the TRQ1 header).
+//             format 0 = elevation (f32 metres), 1 = 8-bit class grid.
+//   response: u32 status (1 ok, 0 failed), then columns*rows samples when ok
+//             (f32 for elevation, u8 for class grids).
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -28,6 +30,7 @@ namespace fs = std::filesystem;
 constexpr uint32_t CONSTRUCT_RVA = 0x79090;  // decoder object constructor (this in ECX)
 constexpr uint32_t DECODE_RVA = 0x79240;     // __thiscall decode(type, data, size, descriptor)
 constexpr uint16_t FORMAT_ELEVATION = 0x0F;  // int16 * RCS1 scale + offset -> f32
+constexpr uint16_t FORMAT_CLASS = 0x01;      // one byte per sample
 
 using Construct = void*(__fastcall*)(void* self, void* unused);
 using Decode = int(__fastcall*)(void* self, void* unused, uint32_t type, const void* data,
@@ -76,7 +79,7 @@ static int run(const fs::path& root) {
     _setmode(_fileno(stdin), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
     std::vector<uint8_t> input;
-    std::vector<float> output;
+    std::vector<uint8_t> output;
     for (;;) {
         uint32_t header[4];
         if (!read_exact(header, sizeof header)) return 0;
@@ -85,17 +88,20 @@ static int run(const fs::path& root) {
             throw std::runtime_error("Invalid terrain request.");
         input.resize(length);
         if (!read_exact(input.data(), length)) return 0;
-        output.assign(size_t(columns) * rows, 0.f);
+        const uint32_t format = type >> 16;
+        if (format > 1) throw std::runtime_error("Unsupported terrain format.");
+        const size_t sample = format == 0 ? sizeof(float) : 1;
+        output.assign(size_t(columns) * rows * sample, 0);
         Descriptor d{};
-        d.format = FORMAT_ELEVATION;
+        d.format = format == 0 ? FORMAT_ELEVATION : FORMAT_CLASS;
         d.columns = int32_t(columns);
         d.rows = int32_t(rows);
-        d.stride = int32_t(columns * sizeof(float));
-        d.capacity = uint32_t(output.size() * sizeof(float));
-        d.output = output.data();
+        d.stride = int32_t(columns * sample);
+        d.capacity = uint32_t(output.size());
+        d.output = reinterpret_cast<float*>(output.data());
         uint32_t ok = guarded(decode, object, type & 0xFF, input.data(), length, &d) ? 1 : 0;
         fwrite(&ok, 4, 1, stdout);
-        if (ok) fwrite(output.data(), sizeof(float), output.size(), stdout);
+        if (ok) fwrite(output.data(), 1, output.size(), stdout);
         fflush(stdout);
     }
 }

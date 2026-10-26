@@ -66,12 +66,23 @@ fn u32_at(d: &[u8], i: usize) -> Result<u32, String> {
 }
 /// Elevation records of one BGL file, keyed by cell.
 pub fn index_file(path: &Path, d: &[u8], out: &mut HashMap<Cell, Record>) -> Result<(), String> {
+    index_section(path, d, SECTION_ELEVATION, 2, out)
+}
+/// TRQ1 records of one section type and data type (2 elevation, 3 land class,
+/// 4 water class).
+pub fn index_section(
+    path: &Path,
+    d: &[u8],
+    section: u32,
+    data_type: u32,
+    out: &mut HashMap<Cell, Record>,
+) -> Result<(), String> {
     if u32_at(d, 0)? != 0x1992_0201 {
         return Err("Not an FSX BGL file".into());
     }
     for s in 0..(u32_at(d, 0x14)? as usize).min(4096) {
         let h = 0x38 + s * 20;
-        if u32_at(d, h)? != SECTION_ELEVATION {
+        if u32_at(d, h)? != section {
             continue;
         }
         let (count, table) = (u32_at(d, h + 8)? as usize, u32_at(d, h + 12)? as usize);
@@ -92,7 +103,7 @@ pub fn index_file(path: &Path, d: &[u8], out: &mut HashMap<Cell, Record>) -> Res
             ) else {
                 continue;
             };
-            if u32_at(r, 8)? & 0xFFFF != 2 || columns == 0 || rows == 0 || columns > 1024 {
+            if u32_at(r, 8)? & 0xFFFF != data_type || columns == 0 || rows == 0 || columns > 1024 {
                 continue;
             }
             out.insert(
@@ -198,6 +209,34 @@ impl Grid {
         top + (bottom - top) * fy
     }
 }
+/// Land-class grid (Olson classes and FSX extensions), row 0 at the north edge.
+#[derive(Debug, Clone)]
+pub struct ClassGrid {
+    pub cell: Cell,
+    pub columns: usize,
+    pub rows: usize,
+    pub classes: Vec<u8>,
+}
+impl ClassGrid {
+    /// Nearest sample: classes are categories and must not be interpolated.
+    pub fn sample(&self, latitude: f64, longitude: f64) -> u8 {
+        let (west, north) = self.cell.origin();
+        let (w, h) = Cell::size(self.cell.level);
+        let x = ((longitude - west) / w * (self.columns - 1) as f64).round();
+        let y = ((north - latitude) / h * (self.rows - 1) as f64).round();
+        let x = x.clamp(0., (self.columns - 1) as f64) as usize;
+        let y = y.clamp(0., (self.rows - 1) as f64) as usize;
+        self.classes[y * self.columns + x]
+    }
+}
+/// Land-class records of BASE/Scenery/worldlc.bgl (section 0x68, level 7).
+pub fn land_class_index(installation: &Path) -> Result<HashMap<Cell, Record>, String> {
+    let path = installation.join("Scenery/BASE/Scenery/worldlc.bgl");
+    let data = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut out = HashMap::new();
+    index_section(&path, &data, 0x68, 3, &mut out)?;
+    Ok(out)
+}
 /// Connection to the x86 decode helper.
 pub struct Decoder {
     child: Child,
@@ -229,7 +268,8 @@ impl Decoder {
             output,
         })
     }
-    pub fn decode(&mut self, cell: Cell, record: &Record) -> Result<Grid, String> {
+    /// Raw samples: format 0 returns f32 elevation bytes, 1 one byte per class.
+    fn decode_raw(&mut self, cell: Cell, record: &Record, format: u32) -> Result<Vec<u8>, String> {
         let mut file = std::fs::File::open(&record.file).map_err(|e| e.to_string())?;
         use std::io::Seek;
         file.seek(std::io::SeekFrom::Start(record.offset))
@@ -238,7 +278,7 @@ impl Decoder {
         file.read_exact(&mut payload).map_err(|e| e.to_string())?;
         let mut request = Vec::with_capacity(16 + payload.len());
         for v in [
-            record.compression,
+            record.compression | format << 16,
             record.columns,
             record.rows,
             record.length,
@@ -258,10 +298,22 @@ impl Decoder {
             return Err(format!("terrain.dll rejected cell {cell:?}"));
         }
         let count = record.columns as usize * record.rows as usize;
-        let mut bytes = vec![0; count * 4];
+        let mut bytes = vec![0; count * if format == 0 { 4 } else { 1 }];
         self.output
             .read_exact(&mut bytes)
             .map_err(|e| e.to_string())?;
+        Ok(bytes)
+    }
+    pub fn decode_classes(&mut self, cell: Cell, record: &Record) -> Result<ClassGrid, String> {
+        Ok(ClassGrid {
+            cell,
+            columns: record.columns as usize,
+            rows: record.rows as usize,
+            classes: self.decode_raw(cell, record, 1)?,
+        })
+    }
+    pub fn decode(&mut self, cell: Cell, record: &Record) -> Result<Grid, String> {
+        let bytes = self.decode_raw(cell, record, 0)?;
         let heights: Vec<f32> = bytes
             .chunks_exact(4)
             .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
@@ -284,6 +336,34 @@ impl Drop for Decoder {
     }
 }
 /// Elevation sampler over the finest available cells up to `max_level`.
+/// Land-class sampler at the stock world level.
+pub struct LandClass {
+    records: HashMap<Cell, Record>,
+    cache: HashMap<Cell, Option<ClassGrid>>,
+}
+impl LandClass {
+    pub fn new(records: HashMap<Cell, Record>) -> Self {
+        Self {
+            records,
+            cache: HashMap::new(),
+        }
+    }
+    pub fn class(&mut self, decoder: &mut Decoder, latitude: f64, longitude: f64) -> Option<u8> {
+        let level = self.records.keys().next()?.level;
+        let cell = Cell::containing(latitude, longitude, level);
+        if !self.cache.contains_key(&cell) {
+            let grid = self
+                .records
+                .get(&cell)
+                .and_then(|r| decoder.decode_classes(cell, &r.clone()).ok());
+            self.cache.insert(cell, grid);
+        }
+        self.cache
+            .get(&cell)?
+            .as_ref()
+            .map(|g| g.sample(latitude, longitude))
+    }
+}
 pub struct Elevation {
     records: HashMap<Cell, Record>,
     decoder: Decoder,
@@ -298,6 +378,9 @@ impl Elevation {
             cache: HashMap::new(),
             max_level,
         }
+    }
+    pub fn decoder(&mut self) -> &mut Decoder {
+        &mut self.decoder
     }
     pub fn height(&mut self, latitude: f64, longitude: f64) -> Option<f32> {
         for level in (4..=self.max_level).rev() {
@@ -362,5 +445,22 @@ mod tests {
         // Mount Rainier summit (4392 m) appears in the coarser stock mesh.
         let rainier = e.height(46.8529, -121.7604).unwrap();
         assert!(rainier > 3500., "Rainier {rainier}");
+    }
+    #[test]
+    fn installed_ksea_land_class_when_present() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../FSX");
+        let helper =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/fsx-terrain-host.exe");
+        if !root.join("terrain.dll").is_file() || !helper.is_file() {
+            return;
+        }
+        let mut lc = LandClass::new(land_class_index(&root).unwrap());
+        let mut d = Decoder::start(&helper, &root).unwrap();
+        // Seattle-Tacoma is urban grid; the Cascades foothills are conifer forest.
+        assert_eq!(lc.class(&mut d, 47.449, -122.309), Some(101));
+        assert!(matches!(
+            lc.class(&mut d, 47.2, -121.6),
+            Some(3 | 20..=27 | 61 | 62)
+        ));
     }
 }

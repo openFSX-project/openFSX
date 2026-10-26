@@ -90,11 +90,35 @@ impl Image {
         let data = read_image(path)?;
         if data.starts_with(b"DDS ") {
             Self::dds(&data)
+        } else if data.starts_with(b"BM") && data.get(30..34).is_some_and(is_dxt) {
+            Self::bmp_dxt(&data)
         } else if data.starts_with(b"BM") {
             Self::bmp(&data)
         } else {
             Err("Expected a supported DDS or BMP image".into())
         }
+    }
+    /// FSX terrain textures: a BITMAPINFOHEADER whose compression field is a
+    /// DXT FourCC, followed by block data (top mip first) at bfOffBits.
+    pub fn bmp_dxt(b: &[u8]) -> Result<Self> {
+        let (offset, width, height) = (word(b, 10)? as usize, word(b, 18)?, word(b, 22)?);
+        let format: [u8; 4] = b
+            .get(30..34)
+            .ok_or("Truncated BMP header")?
+            .try_into()
+            .unwrap();
+        if !is_dxt(&format) || offset < 54 || offset > b.len() {
+            return Err("Invalid DXT BMP header".into());
+        }
+        // Reuse the DDS block decoder with an equivalent legacy header.
+        let mut dds = vec![0u8; 128];
+        dds[..4].copy_from_slice(b"DDS ");
+        for (at, v) in [(4, 124u32), (12, height), (16, width), (76, 32), (80, 4)] {
+            dds[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        dds[84..88].copy_from_slice(&format);
+        dds.extend_from_slice(&b[offset..]);
+        Self::dds(&dds)
     }
     pub fn dds(b: &[u8]) -> Result<Self> {
         if b.len() < 128 || &b[..4] != b"DDS " || word(b, 4)? != 124 || word(b, 76)? != 32 {
@@ -416,5 +440,51 @@ mod tests {
         fs::remove_dir(a).unwrap();
         fs::remove_dir(z).unwrap();
         fs::remove_dir(root).unwrap();
+    }
+}
+fn is_dxt(format: &[u8]) -> bool {
+    matches!(format, b"DXT1" | b"DXT3" | b"DXT5")
+}
+#[cfg(test)]
+mod dxt_bmp_tests {
+    use super::*;
+    #[test]
+    fn installed_terrain_texture_decodes_when_present() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../FSX/Scenery/World/texture");
+        if !dir.is_dir() {
+            return;
+        }
+        for name in [
+            "022b2su1", "040b2su1", "031b2su1", "301b2su1", "305b2su1", "313b2su1", "139b2su1",
+            "123b2su1",
+        ] {
+            let i = Image::load(&dir.join(format!("{name}.bmp"))).unwrap();
+            let n = (i.width * i.height) as f64;
+            let avg: Vec<f64> = (0..3)
+                .map(|c| {
+                    i.rgba
+                        .iter()
+                        .skip(c)
+                        .step_by(4)
+                        .map(|&v| f64::from(v))
+                        .sum::<f64>()
+                        / n
+                })
+                .collect();
+            eprintln!("{name} {}x{} avg {:.0?}", i.width, i.height, avg);
+            assert!(i.width >= 256 && i.width == i.height);
+        }
+    }
+    #[test]
+    fn rejects_truncated_dxt_bmp() {
+        let mut b = vec![0u8; 54];
+        b[..2].copy_from_slice(b"BM");
+        b[10..14].copy_from_slice(&54u32.to_le_bytes());
+        b[18..22].copy_from_slice(&8u32.to_le_bytes());
+        b[22..26].copy_from_slice(&8u32.to_le_bytes());
+        b[30..34].copy_from_slice(b"DXT1");
+        assert!(Image::bmp_dxt(&b).is_err());
+        b.extend([0u8; 32]);
+        assert_eq!(Image::bmp_dxt(&b).unwrap().width, 8);
     }
 }
