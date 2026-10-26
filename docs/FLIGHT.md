@@ -128,6 +128,11 @@ the stock sheet (about one per 30 m square). Within 5 km of the area centre and
 2 km clear of airports. Building classes, heights, textures, rows of houses and
 the older region-X annotation layout are not decoded.
 
+Start-up reads only BGL section tables for the model/object index (built on
+a background thread while terrain decodes) and then reads just the object
+subsections whose QMID cell overlaps the area; the log prints per-stage times.
+A KSEA/LOWI start takes about 5 s in a release build.
+
 `--airborne` with `--airport` starts trimmed at 90 kt and 300 m over the runway
 threshold, along the runway heading; R returns there.
 The ground uses the stock summer land-class textures: worldlc.bgl classes are

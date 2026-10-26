@@ -47,6 +47,64 @@ fn u32_at(d: &[u8], i: usize) -> Option<u32> {
 fn angle(raw: u16) -> f64 {
     f64::from(raw) * 360. / 65536.
 }
+/// Parse the object records of one 0x25 subsection.
+fn parse_records(d: &[u8], out: &mut Vec<Placement>, out_buildings: &mut Vec<GenericBuilding>) {
+    let end = d.len();
+    let mut p = 0;
+    while p + 4 <= end {
+        let (id, len) = (
+            u16_at(d, p).unwrap_or(0),
+            usize::from(u16_at(d, p + 2).unwrap_or(0)),
+        );
+        if len < 4 || p + len > end {
+            break;
+        }
+        if id == RECORD_GENERIC_BUILDING && len >= 52 + 28 {
+            let r = &d[p..p + len];
+            // Building section at 48: u16 code, u16 size, then the
+            // type, footprint and the base/window/top band heights.
+            let w = |i: usize| f64::from(u16_at(r, 52 + 2 * i).unwrap_or(0));
+            let scale = f64::from(f32::from_bits(u32_at(r, 44).unwrap_or(0)));
+            let scale = if scale.is_finite() && scale > 0. {
+                scale
+            } else {
+                1.
+            };
+            let height = w(4) + w(8) + w(13);
+            if w(1) > 0. && w(2) > 0. && height > 0. && height < 500. {
+                out_buildings.push(GenericBuilding {
+                    longitude: crate::longitude(u32_at(r, 4).unwrap_or(0)),
+                    latitude: crate::latitude(u32_at(r, 8).unwrap_or(0)),
+                    altitude: f64::from(u32_at(r, 12).unwrap_or(0) as i32) / 1000.,
+                    agl: u16_at(r, 16).unwrap_or(0) & 1 != 0,
+                    heading: angle(u16_at(r, 22).unwrap_or(0)),
+                    size: [w(1) * scale, height * scale, w(2) * scale],
+                    pitched_roof: w(0) != 4.,
+                });
+            }
+        }
+        if id == RECORD_LIBRARY_OBJECT && len >= 64 {
+            let r = &d[p..p + len];
+            let scale = f64::from(f32::from_bits(u32_at(r, 60).unwrap_or(0)));
+            out.push(Placement {
+                longitude: crate::longitude(u32_at(r, 4).unwrap_or(0)),
+                latitude: crate::latitude(u32_at(r, 8).unwrap_or(0)),
+                altitude: f64::from(u32_at(r, 12).unwrap_or(0) as i32) / 1000.,
+                agl: u16_at(r, 16).unwrap_or(0) & 1 != 0,
+                pitch: angle(u16_at(r, 18).unwrap_or(0)),
+                bank: angle(u16_at(r, 20).unwrap_or(0)),
+                heading: angle(u16_at(r, 22).unwrap_or(0)),
+                model: r[44..60].try_into().unwrap(),
+                scale: if scale.is_finite() && scale > 0. {
+                    scale
+                } else {
+                    1.
+                },
+            });
+        }
+        p += len;
+    }
+}
 /// Library object placements in one BGL file.
 pub fn placements(d: &[u8]) -> Vec<Placement> {
     objects(d).0
@@ -73,60 +131,11 @@ pub fn objects(d: &[u8]) -> (Vec<Placement>, Vec<GenericBuilding>) {
                 break;
             };
             let end = (start as usize).saturating_add(size as usize).min(d.len());
-            let mut p = start as usize;
-            while p + 4 <= end {
-                let (id, len) = (
-                    u16_at(d, p).unwrap_or(0),
-                    usize::from(u16_at(d, p + 2).unwrap_or(0)),
-                );
-                if len < 4 || p + len > end {
-                    break;
-                }
-                if id == RECORD_GENERIC_BUILDING && len >= 52 + 28 {
-                    let r = &d[p..p + len];
-                    // Building section at 48: u16 code, u16 size, then the
-                    // type, footprint and the base/window/top band heights.
-                    let w = |i: usize| f64::from(u16_at(r, 52 + 2 * i).unwrap_or(0));
-                    let scale = f64::from(f32::from_bits(u32_at(r, 44).unwrap_or(0)));
-                    let scale = if scale.is_finite() && scale > 0. {
-                        scale
-                    } else {
-                        1.
-                    };
-                    let height = w(4) + w(8) + w(13);
-                    if w(1) > 0. && w(2) > 0. && height > 0. && height < 500. {
-                        out_buildings.push(GenericBuilding {
-                            longitude: crate::longitude(u32_at(r, 4).unwrap_or(0)),
-                            latitude: crate::latitude(u32_at(r, 8).unwrap_or(0)),
-                            altitude: f64::from(u32_at(r, 12).unwrap_or(0) as i32) / 1000.,
-                            agl: u16_at(r, 16).unwrap_or(0) & 1 != 0,
-                            heading: angle(u16_at(r, 22).unwrap_or(0)),
-                            size: [w(1) * scale, height * scale, w(2) * scale],
-                            pitched_roof: w(0) != 4.,
-                        });
-                    }
-                }
-                if id == RECORD_LIBRARY_OBJECT && len >= 64 {
-                    let r = &d[p..p + len];
-                    let scale = f64::from(f32::from_bits(u32_at(r, 60).unwrap_or(0)));
-                    out.push(Placement {
-                        longitude: crate::longitude(u32_at(r, 4).unwrap_or(0)),
-                        latitude: crate::latitude(u32_at(r, 8).unwrap_or(0)),
-                        altitude: f64::from(u32_at(r, 12).unwrap_or(0) as i32) / 1000.,
-                        agl: u16_at(r, 16).unwrap_or(0) & 1 != 0,
-                        pitch: angle(u16_at(r, 18).unwrap_or(0)),
-                        bank: angle(u16_at(r, 20).unwrap_or(0)),
-                        heading: angle(u16_at(r, 22).unwrap_or(0)),
-                        model: r[44..60].try_into().unwrap(),
-                        scale: if scale.is_finite() && scale > 0. {
-                            scale
-                        } else {
-                            1.
-                        },
-                    });
-                }
-                p += len;
-            }
+            parse_records(
+                d.get(start as usize..end).unwrap_or_default(),
+                &mut out,
+                &mut out_buildings,
+            );
         }
     }
     (out, out_buildings)
@@ -333,5 +342,129 @@ mod tests {
             .model]
             .read();
         assert!(model.is_ok());
+    }
+}
+
+/// One pass over every installed BGL reading only section tables: the model
+/// library GUID index and the location (QMID cell) of every object subsection.
+pub struct SceneryIndex {
+    pub models: HashMap<Guid, ModelEntry>,
+    objects: Vec<(PathBuf, crate::terrain::Cell, u64, u32)>,
+}
+impl SceneryIndex {
+    pub fn build(installation: &Path) -> Self {
+        let mut models = HashMap::new();
+        let mut objects = Vec::new();
+        let mut stack = vec![installation.join("Scenery")];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                if name.ends_with(".bgl") && !name.starts_with("dem") && !name.starts_with("cvx") {
+                    let _ = index_file(&path, &mut models, &mut objects);
+                }
+            }
+        }
+        Self { models, objects }
+    }
+    /// Library placements and generic buildings whose subsection cell overlaps
+    /// a square of `radius` metres around a point; only those bytes are read.
+    pub fn objects_near(
+        &self,
+        latitude: f64,
+        longitude: f64,
+        radius: f64,
+    ) -> (Vec<Placement>, Vec<GenericBuilding>) {
+        let dlat = (radius / 6_371_000.).to_degrees();
+        let dlon = dlat / latitude.to_radians().cos().max(0.05);
+        let (mut out, mut buildings) = (Vec::new(), Vec::new());
+        for (file, cell, offset, size) in &self.objects {
+            let (west, north) = cell.origin();
+            let (w, h) = crate::terrain::Cell::size(cell.level);
+            if longitude + dlon < west
+                || longitude - dlon > west + w
+                || latitude - dlat > north
+                || latitude + dlat < north - h
+            {
+                continue;
+            }
+            let Ok(mut f) = std::fs::File::open(file) else {
+                continue;
+            };
+            let Ok(bytes) = read_at(&mut f, *offset, *size as usize) else {
+                continue;
+            };
+            parse_records(&bytes, &mut out, &mut buildings);
+        }
+        let near =
+            |lat: f64, lon: f64| (lat - latitude).abs() < dlat && (lon - longitude).abs() < dlon;
+        out.retain(|p| near(p.latitude, p.longitude));
+        buildings.retain(|b| near(b.latitude, b.longitude));
+        (out, buildings)
+    }
+}
+fn index_file(
+    path: &Path,
+    models: &mut HashMap<Guid, ModelEntry>,
+    objects: &mut Vec<(PathBuf, crate::terrain::Cell, u64, u32)>,
+) -> std::io::Result<()> {
+    index_models(path, models)?;
+    let mut f = std::fs::File::open(path)?;
+    let header = read_at(&mut f, 0, 0x38)?;
+    if u32_at(&header, 0) != Some(0x1992_0201) {
+        return Ok(());
+    }
+    let sections = u32_at(&header, 0x14).unwrap_or(0).min(4096) as usize;
+    let table = read_at(&mut f, 0x38, sections * 20)?;
+    for s in 0..sections {
+        if u32_at(&table, s * 20) != Some(SECTION_OBJECTS) {
+            continue;
+        }
+        let count = u32_at(&table, s * 20 + 8).unwrap_or(0).min(65536) as usize;
+        let subs = read_at(
+            &mut f,
+            u64::from(u32_at(&table, s * 20 + 12).unwrap_or(0)),
+            count * 16,
+        )?;
+        for k in 0..count {
+            let qmid = u64::from(u32_at(&subs, k * 16).unwrap_or(0));
+            let (Some(cell), Some(offset), Some(size)) = (
+                crate::terrain::Cell::from_qmid(qmid),
+                u32_at(&subs, k * 16 + 8),
+                u32_at(&subs, k * 16 + 12),
+            ) else {
+                continue;
+            };
+            if size <= 1 << 24 {
+                objects.push((path.to_path_buf(), cell, u64::from(offset), size));
+            }
+        }
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+    #[test]
+    fn indexed_lookup_matches_full_scan_when_present() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../FSX");
+        if !root.join("Scenery").is_dir() {
+            return;
+        }
+        let index = SceneryIndex::build(&root);
+        let (fast, fast_buildings) = index.objects_near(47.449, -122.309, 3000.);
+        let (slow, slow_buildings) = objects_near(&root, 47.449, -122.309, 3000.);
+        assert_eq!(
+            (fast.len(), fast_buildings.len()),
+            (slow.len(), slow_buildings.len())
+        );
+        assert!(index.models.len() > 10_000);
     }
 }

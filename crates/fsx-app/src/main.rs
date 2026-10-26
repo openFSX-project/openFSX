@@ -554,9 +554,7 @@ struct World {
     root: PathBuf,
     catalog: Arc<fsx_scenery::catalog::Catalog>,
     /// Model library GUID index and texture file index for placed objects.
-    models: Arc<
-        std::collections::HashMap<fsx_scenery::objects::Guid, fsx_scenery::objects::ModelEntry>,
-    >,
+    scenery: Arc<LazyIndex>,
     textures: Arc<std::collections::HashMap<String, PathBuf>>,
     origin: (f64, f64),
     /// Mean-sea-level elevation of the origin plane.
@@ -566,6 +564,7 @@ impl World {
     /// Runways within 25 km and terrain within +-40 km of a local north/east centre.
     fn ground(&self, center: (f64, f64)) -> fsx_render::Ground {
         use fsx_scenery::catalog::local;
+        let started = Instant::now();
         let mut runways = Vec::new();
         let (mut paved, mut taxi_lines) = (Vec::new(), Vec::new());
         let mut fields = Vec::new();
@@ -631,6 +630,7 @@ impl World {
                 }
             }
         }
+        let airports = started.elapsed();
         let (terrain, classes) = match self.terrain(center, &fields) {
             Ok((t, c)) => (Some(t), c),
             Err(e) => {
@@ -660,7 +660,14 @@ impl World {
         if surfaces.is_empty() {
             runways.iter_mut().for_each(|r| r.surface = None);
         }
+        let surroundings = started.elapsed();
         let objects = self.objects(center, terrain.as_ref(), autogen.houses);
+        println!(
+            "Scenery build: airports {:.1} s, terrain/land class/trees/autogen {:.1} s, objects {:.1} s",
+            airports.as_secs_f64(),
+            (surroundings - airports).as_secs_f64(),
+            (started.elapsed() - surroundings).as_secs_f64()
+        );
         fsx_render::Ground {
             runways,
             terrain,
@@ -682,8 +689,7 @@ impl World {
     ) -> Option<fsx_render::StaticScene> {
         use fsx_scenery::catalog::{local, offset};
         let (lat, lon) = offset(self.origin.0, self.origin.1, center.0, center.1);
-        let (mut placements, buildings) =
-            fsx_scenery::objects::objects_near(&self.root, lat, lon, 6000.);
+        let (mut placements, buildings) = self.scenery.get().objects_near(lat, lon, 6000.);
         // Nearest first, so the placement budget favours what the pilot sees.
         let distance = |p: &fsx_scenery::objects::Placement| {
             let (n, e) = local((lat, lon), (p.latitude, p.longitude));
@@ -702,9 +708,12 @@ impl World {
             };
             Some([east as f32, up, north as f32])
         };
-        let mut scene = scenery_objects::build(&placements, &self.models, &self.textures, |p| {
-            position(p.latitude, p.longitude, p.altitude, p.agl)
-        })
+        let mut scene = scenery_objects::build(
+            &placements,
+            &self.scenery.get().models,
+            &self.textures,
+            |p| position(p.latitude, p.longitude, p.altitude, p.agl),
+        )
         .unwrap_or_default();
         scenery_objects::add_generic_buildings(&mut scene, &buildings, |b| {
             position(b.latitude, b.longitude, b.altitude, b.agl)
@@ -847,7 +856,9 @@ fn airport_scenery(
         .ancestors()
         .find(|p| p.join("fsx.exe").is_file() && p.join("Scenery").is_dir())
         .ok_or("--airport needs an aircraft inside the FSX installation")?;
+    let started = Instant::now();
     let (catalog, failed) = fsx_scenery::catalog::Catalog::load(root)?;
+    println!("Airport catalog: {:.1} s", started.elapsed().as_secs_f64());
     if failed > 0 {
         eprintln!("{failed} airport BGL files could not be decoded");
     }
@@ -870,7 +881,7 @@ fn airport_scenery(
         origin: (start.latitude, start.longitude),
         base: start.altitude,
         catalog: Arc::new(catalog),
-        models: Arc::new(fsx_scenery::objects::model_index(root)),
+        scenery: Arc::new(LazyIndex::spawn(root.to_path_buf())),
         textures: Arc::new(scenery_objects::texture_index(root)),
     };
     let ground = world.ground((0., 0.));
@@ -1012,6 +1023,36 @@ impl World {
             cache.values().filter(|a| a.is_some()).count()
         );
         out
+    }
+}
+/// Scenery object/model index built on a background thread at start-up, so
+/// it overlaps terrain decoding; the first object build waits for it.
+struct LazyIndex {
+    index: std::sync::OnceLock<fsx_scenery::objects::SceneryIndex>,
+    builder: std::sync::Mutex<Option<std::thread::JoinHandle<fsx_scenery::objects::SceneryIndex>>>,
+}
+impl LazyIndex {
+    fn spawn(root: PathBuf) -> Self {
+        Self {
+            index: std::sync::OnceLock::new(),
+            builder: std::sync::Mutex::new(Some(std::thread::spawn(move || {
+                let started = Instant::now();
+                let index = fsx_scenery::objects::SceneryIndex::build(&root);
+                println!(
+                    "Scenery object/model index: {:.1} s",
+                    started.elapsed().as_secs_f64()
+                );
+                index
+            }))),
+        }
+    }
+    fn get(&self) -> &fsx_scenery::objects::SceneryIndex {
+        self.index.get_or_init(|| {
+            let handle = self.builder.lock().ok().and_then(|mut h| h.take());
+            handle
+                .and_then(|h| h.join().ok())
+                .unwrap_or_else(|| fsx_scenery::objects::SceneryIndex::build(Path::new("")))
+        })
     }
 }
 /// Installed runway surface textures, indexed by runway_surface().
