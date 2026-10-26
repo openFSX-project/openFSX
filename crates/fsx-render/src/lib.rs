@@ -291,6 +291,8 @@ pub struct Ground {
     pub terrain: Option<Terrain>,
     pub sky: Option<Sky>,
     pub trees: Option<Trees>,
+    /// Runway surface textures (FSX Texture/runway*), tiled along each runway.
+    pub surfaces: Vec<Image>,
 }
 /// Vegetation drawn as crossed alpha-tested quads.
 #[derive(Debug, Clone)]
@@ -431,6 +433,29 @@ pub struct GroundRunway {
     pub hard: bool,
     /// Surface height above the flight origin plane, metres.
     pub height: f32,
+    /// Index into Ground::surfaces, or None for a flat colour.
+    pub surface: Option<u8>,
+    /// Painted designators (primary, secondary), ASCII, e.g. b"16L".
+    pub ends: [[u8; 3]; 2],
+}
+/// 5 x 7 pixel glyphs for runway designators: digits, L, R, C.
+fn designator_glyph(c: u8) -> Option<[u8; 7]> {
+    Some(match c {
+        b'0' => [14, 17, 19, 21, 25, 17, 14],
+        b'1' => [4, 12, 4, 4, 4, 4, 14],
+        b'2' => [14, 17, 1, 2, 4, 8, 31],
+        b'3' => [31, 2, 4, 2, 1, 17, 14],
+        b'4' => [2, 6, 10, 18, 31, 2, 2],
+        b'5' => [31, 16, 30, 1, 1, 17, 14],
+        b'6' => [6, 8, 16, 30, 17, 17, 14],
+        b'7' => [31, 1, 2, 4, 8, 8, 8],
+        b'8' => [14, 17, 17, 14, 17, 17, 14],
+        b'9' => [14, 17, 17, 15, 1, 2, 12],
+        b'L' => [16, 16, 16, 16, 16, 16, 31],
+        b'R' => [30, 17, 17, 30, 20, 18, 17],
+        b'C' => [14, 17, 16, 16, 16, 17, 14],
+        _ => return None,
+    })
 }
 struct UploadedScene {
     vertex: wgpu::Buffer,
@@ -787,6 +812,15 @@ impl Gpu {
             textures.push(Some(upload(&trees.sprites)));
             textures.len() - 1
         });
+        let surface_textures: Vec<usize> = ground
+            .map(|g| g.surfaces.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .map(|image| {
+                textures.push(Some(upload(image)));
+                textures.len() - 1
+            })
+            .collect();
         let sky_textures = sky.map(|sky| {
             textures.push(Some(upload(&sky.gradient)));
             textures.push(Some(upload(&sky.sprites)));
@@ -846,6 +880,16 @@ impl Gpu {
                 alpha_threshold: 0.5,
                 clamp_texture: true,
             });
+            for &texture in &surface_textures {
+                materials.push(Material {
+                    diffuse: [1.; 4],
+                    diffuse_texture: Some(texture),
+                    alpha_blend: false,
+                    alpha_function: 0,
+                    alpha_threshold: 0.,
+                    clamp_texture: false,
+                });
+            }
         }
         for material in &materials {
             let view = material
@@ -1173,32 +1217,106 @@ impl Gpu {
                 for (hard, material) in [(true, ground_material + 1), (false, ground_material + 4)]
                 {
                     draw(&mut vertices, material, &mut |v| {
-                        for r in ground.runways.iter().filter(|r| r.hard == hard) {
+                        for r in ground
+                            .runways
+                            .iter()
+                            .filter(|r| r.hard == hard && r.surface.is_none())
+                        {
                             let (l, w) = (r.length / 2., r.width / 2.);
                             rect(v, r, -l, l, -w, w, 0.02);
+                        }
+                    });
+                }
+                // Textured surfaces: u spans the width, v repeats every 1.5 widths.
+                for k in 0..surface_textures.len() {
+                    draw(&mut vertices, ground_material + 9 + k, &mut |v| {
+                        for r in ground.runways.iter().filter(|r| r.surface == Some(k as u8)) {
+                            let (l, w) = (r.length / 2., r.width / 2.);
+                            let first = v.len();
+                            rect(v, r, -l, l, -w, w, 0.02);
+                            let h = r.heading.to_radians();
+                            for vertex in &mut v[first..] {
+                                let (de, dn) = (vertex[0] - r.east, vertex[2] - r.north);
+                                let along = de * h.sin() + dn * h.cos();
+                                let across = de * h.cos() - dn * h.sin();
+                                vertex[6] = (across + w) / (2. * w);
+                                vertex[7] = (along + l) / (3. * w);
+                            }
                         }
                     });
                 }
                 draw(&mut vertices, ground_material + 2, &mut |v| {
                     for r in ground.runways.iter().filter(|r| r.hard) {
                         let (l, w) = (r.length / 2., r.width / 2.);
-                        // Centreline dashes, threshold bars and edge lines.
-                        let mut a = -l + 60.;
-                        while a + 30. < l - 60. {
+                        // Centreline dashes between the designators.
+                        let mut a = -l + 120.;
+                        while a + 30. < l - 120. {
                             rect(v, r, a, a + 30., -0.45, 0.45, 0.04);
                             a += 50.;
                         }
                         for end in [-1f32, 1.] {
-                            let (a0, a1) = if end < 0. {
-                                (-l + 6., -l + 36.)
-                            } else {
-                                (l - 36., l - 6.)
+                            // Distances measured inward from this end's threshold.
+                            let span = |d0: f32, d1: f32| {
+                                if end < 0. {
+                                    (-l + d0, -l + d1)
+                                } else {
+                                    (l - d1, l - d0)
+                                }
                             };
+                            let (a0, a1) = span(6., 36.);
                             let bars = ((w * 2. - 6.) / 4.).floor().clamp(2., 16.) as i32;
                             for b in 0..bars {
                                 let c = -w + 3. + (b as f32 + 0.25) * (w * 2. - 6.) / bars as f32;
                                 rect(v, r, a0, a1, c, c + 1.8, 0.04);
                             }
+                            // Aiming point blocks 300 m in, on runways long enough.
+                            if r.length > 1200. {
+                                let (a0, a1) = span(300., 345.);
+                                let (c0, c1) = (w * 0.25, w * 0.25 + (w * 0.4).min(9.));
+                                rect(v, r, a0, a1, c0, c1, 0.04);
+                                rect(v, r, a0, a1, -c1, -c0, 0.04);
+                            }
+                            // Designator read by the landing pilot: letter nearer the
+                            // threshold, number beyond it; glyph rows run away from
+                            // the threshold and columns to the pilot's right.
+                            let text = r.ends[usize::from(end > 0.)];
+                            let digits: Vec<u8> =
+                                text.iter().copied().filter(u8::is_ascii_digit).collect();
+                            let letter: Vec<u8> = text
+                                .iter()
+                                .copied()
+                                .filter(|c| c.is_ascii_alphabetic())
+                                .collect();
+                            // Slender FAA-like proportions: about 12 m wide and 30 m long on 45 m runways.
+                            let (px, py) = ((w / 16.).clamp(1., 2.4), (w / 5.).clamp(2.5, 4.5));
+                            let mut line = |chars: &[u8], start: f32| {
+                                let width = chars.len() as f32 * 6. * px - px;
+                                for (i, &ch) in chars.iter().enumerate() {
+                                    let Some(glyph) = designator_glyph(ch) else {
+                                        continue;
+                                    };
+                                    for (row, bits) in glyph.iter().enumerate() {
+                                        for col in 0..5 {
+                                            if bits & (16 >> col) == 0 {
+                                                continue;
+                                            }
+                                            let d0 = start + (6 - row) as f32 * py;
+                                            let x = -width / 2. + (i * 6 + col) as f32 * px;
+                                            let (a0, a1) = span(d0, d0 + py);
+                                            // The secondary end faces the opposite way.
+                                            let (c0, c1) =
+                                                if end < 0. { (x, x + px) } else { (-x - px, -x) };
+                                            rect(v, r, a0, a1, c0, c1, 0.05);
+                                        }
+                                    }
+                                }
+                            };
+                            let mut at = 48.;
+                            if !letter.is_empty() {
+                                line(&letter, at);
+                                at += 7. * py + 6.;
+                            }
+                            line(&digits, at);
                         }
                         rect(v, r, -l, l, -w, -w + 0.9, 0.04);
                         rect(v, r, -l, l, w - 0.9, w, 0.04);

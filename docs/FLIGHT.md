@@ -84,6 +84,14 @@ tall, within 8 km of the area centre and at least 1.8 km from airports. Species
 and density come from the land class (e.g. 36 per 310 m quad in forest, 3 in
 suburbs); this is an openFSX density model, not FSX autogen annotation.
 
+Runways use installed surface textures by FSX surface code (concrete
+`NewRunwayLayout.DDS`, asphalt/bituminous/tarmac `runway12.dds`, grass, dirt,
+sand and gravel variants), tiled every 1.5 runway widths. openFSX paints
+threshold bars, edge lines, centreline dashes, aiming-point blocks 300 m in
+(runways over 1200 m) and both designators (e.g. 16L / 34R) from a 5 x 7 pixel
+font, oriented for the landing pilot. FSX's own marking geometry, lights,
+taxiways and aprons are not reproduced yet; water runways are not drawn.
+
 `--airborne` with `--airport` starts trimmed at 90 kt and 300 m over the runway
 threshold, along the runway heading; R returns there.
 The ground uses the stock summer land-class textures: worldlc.bgl classes are

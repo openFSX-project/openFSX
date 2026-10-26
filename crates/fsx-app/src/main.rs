@@ -570,8 +570,16 @@ impl World {
             if d > 25_000. {
                 continue;
             }
-            for r in &a.runways {
+            // Water runways (seaplane bases) have no painted surface.
+            for r in a.runways.iter().filter(|r| r.surface != 2) {
                 let (north, east) = local(self.origin, (r.latitude, r.longitude));
+                let name = r.name();
+                let mut ends = [[b' '; 3]; 2];
+                for (end, text) in ends.iter_mut().zip(name.split('/')) {
+                    for (slot, byte) in end.iter_mut().zip(text.bytes()) {
+                        *slot = byte;
+                    }
+                }
                 runways.push(fsx_render::GroundRunway {
                     east: east as f32,
                     north: north as f32,
@@ -580,6 +588,8 @@ impl World {
                     width: r.width as f32,
                     hard: r.hard(),
                     height: (r.altitude - self.base) as f32,
+                    surface: runway_surface(r.surface),
+                    ends,
                 });
             }
         }
@@ -597,11 +607,23 @@ impl World {
             .as_ref()
             .map_or(0., |t| t.heights.iter().fold(0f32, |a, &h| a.max(h)));
         let sky = self.sky(center, top);
+        let surfaces = RUNWAY_TEXTURES
+            .iter()
+            .map(|name| fsx_render::TextureImage::load(&self.root.join("Texture").join(name)))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap_or_else(|e| {
+                eprintln!("Runway textures unavailable: {e}");
+                Vec::new()
+            });
+        if surfaces.is_empty() {
+            runways.iter_mut().for_each(|r| r.surface = None);
+        }
         fsx_render::Ground {
             runways,
             terrain,
             sky,
             trees,
+            surfaces,
         }
     }
     /// Trees from the installed sheet within 8 km of the area centre, chosen
@@ -769,6 +791,27 @@ fn airport_scenery(
         }
     );
     Ok((start, ground, world))
+}
+/// Installed runway surface textures, indexed by runway_surface().
+const RUNWAY_TEXTURES: [&str; 6] = [
+    "NewRunwayLayout.DDS",
+    "runway12.dds",
+    "runway13_su.bmp",
+    "runway10_su.bmp",
+    "runway15.bmp",
+    "runway14.bmp",
+];
+/// FSX runway surface code to a RUNWAY_TEXTURES index.
+fn runway_surface(code: u16) -> Option<u8> {
+    Some(match code {
+        0 | 16 | 18 | 20 => 0,
+        4 | 15 | 17 | 19 | 23 => 1,
+        1 | 3 | 5 | 6 | 7 | 11 => 2,
+        12 | 13 | 22 => 3,
+        8 | 9 | 21 => 4,
+        14 => 5,
+        _ => return None,
+    })
 }
 const TERRAIN_SIZE: usize = 257;
 const TERRAIN_HALF: f64 = 40_000.;
