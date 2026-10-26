@@ -616,7 +616,30 @@ fn airport_terrain(
     if found < SIZE * SIZE / 2 {
         return Err("No elevation records cover this airport".into());
     }
+    let (atlas, quad_slots) = match terrain::land_class_index(root) {
+        Ok(index) => {
+            let mut classes = terrain::LandClass::new(index);
+            let mut quads = Vec::with_capacity((SIZE - 1) * (SIZE - 1));
+            for r in 0..SIZE - 1 {
+                for c in 0..SIZE - 1 {
+                    let north = HALF - (r as f64 + 0.5) * spacing;
+                    let east = -HALF + (c as f64 + 0.5) * spacing;
+                    let (lat, lon) = catalog::offset(origin.0, origin.1, north, east);
+                    quads.push(classes.class(elevation.decoder(), lat, lon).unwrap_or(0));
+                }
+            }
+            land_atlas(root, &quads)
+        }
+        Err(e) => {
+            eprintln!("Land class unavailable: {e}");
+            (None, Vec::new())
+        }
+    };
     Ok(fsx_render::Terrain {
+        atlas,
+        atlas_slots: ATLAS_SLOTS,
+        quad_slots,
+        texture_quads: 4,
         columns: SIZE,
         rows: SIZE,
         west: -HALF as f32,
@@ -625,6 +648,101 @@ fn airport_terrain(
         heights,
         base: start.altitude as f32,
     })
+}
+const ATLAS_SLOTS: u32 = 8;
+const SLOT_PIXELS: u32 = 256;
+/// Stock texture number for a land class. Natural Olson classes use their own
+/// number; urban, suburban and water classes use approximations until the
+/// lclookup.bgl remapping is decoded.
+fn land_texture(class: u8) -> u16 {
+    match class {
+        0 | 100 | 123..=126 => 123,
+        // Texture 001 is snow, so urban grids use the grey crops-and-town set.
+        1 | 101..=108 | 121 => 31,
+        109..=120 => 30,
+        139 | 140 => 139,
+        c => u16::from(c),
+    }
+}
+/// Summer texture `NNN?2su1.bmp`, preferring region b, box-filtered to a slot.
+fn land_image(root: &Path, texture: u16) -> Option<fsx_render::TextureImage> {
+    let folder = root.join("Scenery/World/texture");
+    let path = "bacdefg".chars().find_map(|region| {
+        let p = folder.join(format!("{texture:03}{region}2su1.bmp"));
+        p.is_file().then_some(p)
+    })?;
+    let image = fsx_render::TextureImage::load(&path).ok()?;
+    let step = (image.width / SLOT_PIXELS).max(1);
+    let mut rgba = Vec::with_capacity((SLOT_PIXELS * SLOT_PIXELS * 4) as usize);
+    for y in 0..SLOT_PIXELS {
+        for x in 0..SLOT_PIXELS {
+            let mut sum = [0u32; 4];
+            for dy in 0..step {
+                for dx in 0..step {
+                    let sx =
+                        ((x * step + dx) * image.width / (SLOT_PIXELS * step)).min(image.width - 1);
+                    let sy = ((y * step + dy) * image.height / (SLOT_PIXELS * step))
+                        .min(image.height - 1);
+                    let i = ((sy * image.width + sx) * 4) as usize;
+                    for k in 0..4 {
+                        sum[k] += u32::from(image.rgba[i + k]);
+                    }
+                }
+            }
+            rgba.extend(sum.map(|v| (v / (step * step)) as u8));
+        }
+    }
+    Some(fsx_render::TextureImage {
+        width: SLOT_PIXELS,
+        height: SLOT_PIXELS,
+        rgba,
+    })
+}
+/// Pack the textures of the land classes in view into one atlas.
+fn land_atlas(root: &Path, quads: &[u8]) -> (Option<fsx_render::TextureImage>, Vec<u16>) {
+    let side = ATLAS_SLOTS * SLOT_PIXELS;
+    let mut atlas = vec![0u8; (side * side * 4) as usize];
+    let mut slots: std::collections::HashMap<u16, u16> = std::collections::HashMap::new();
+    let mut used = 0u32;
+    let mut place = |texture: u16, atlas: &mut Vec<u8>| -> Option<u16> {
+        if let Some(s) = slots.get(&texture) {
+            return Some(*s);
+        }
+        if used >= ATLAS_SLOTS * ATLAS_SLOTS {
+            return None;
+        }
+        let image = land_image(root, texture)?;
+        let (ox, oy) = (
+            (used % ATLAS_SLOTS) * SLOT_PIXELS,
+            (used / ATLAS_SLOTS) * SLOT_PIXELS,
+        );
+        for y in 0..SLOT_PIXELS {
+            let src = (y * SLOT_PIXELS * 4) as usize;
+            let dst = (((oy + y) * side + ox) * 4) as usize;
+            atlas[dst..dst + (SLOT_PIXELS * 4) as usize]
+                .copy_from_slice(&image.rgba[src..src + (SLOT_PIXELS * 4) as usize]);
+        }
+        let slot = used as u16;
+        used += 1;
+        slots.insert(texture, slot);
+        Some(slot)
+    };
+    let fallback = place(40, &mut atlas).or_else(|| place(31, &mut atlas));
+    let Some(fallback) = fallback else {
+        return (None, Vec::new());
+    };
+    let quad_slots = quads
+        .iter()
+        .map(|&c| place(land_texture(c), &mut atlas).unwrap_or(fallback))
+        .collect();
+    (
+        Some(fsx_render::TextureImage {
+            width: side,
+            height: side,
+            rgba: atlas,
+        }),
+        quad_slots,
+    )
 }
 fn run_menu(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]

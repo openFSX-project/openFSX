@@ -54,10 +54,17 @@ centreline, edge and threshold markings. The world is a flat plane at field
 elevation; reported and instrument altitude include that elevation, while air
 density still uses height above the plane. When `target/fsx-terrain-host.exe`
 is built, a 257 x 257 elevation mesh of +-40 km (about 310 m spacing) is decoded
-from the installed DEM files and coloured by height; the airport is flattened to
+from the installed DEM files; the airport is flattened to
 field elevation within 3 km, blending to real terrain by 6 km. Descending into
 terrain outside the flattened area is an impact: the flight stops until R.
-Land-class textures, water polygons, buildings and taxiways are not loaded yet.
+The ground uses the stock summer land-class textures: worldlc.bgl classes are
+sampled per mesh quad and the matching `NNN?2su1.bmp` textures (DXT1 inside a
+BMP header) are packed into a 2048-pixel atlas, one texture per 4 x 4 quads
+(about 1.25 km). Natural Olson classes use their own texture number; urban,
+suburban and water classes are approximated (031, 030, 123) because the
+lclookup.bgl remapping, regions and seasons are not decoded yet. Without the
+helper or land-class data the mesh falls back to a height colour gradient.
+Water polygons, buildings, autogen and taxiways are not loaded yet.
 
 ## Controls
 

@@ -1667,3 +1667,16 @@ elevation descriptor, so all types decode exactly as FSX does. RVAs and
 prologues are pinned to terrain.dll sha256 85fd7221...; another build is
 rejected. Checks: KSEA field 132 m, Mount Rainier above 3500 m.
 
+### Land class and terrain textures
+
+`Scenery/BASE/Scenery/worldlc.bgl` holds section 0x68 TRQ1 records of data type
+3 (level-7 cells, 257 x 257, one byte per sample, Olson classes 0-99 plus FSX
+classes 100-147 as listed in the SDK Terrain Configuration File page);
+`worldwc.bgl` holds section 0x69 water classes (type 4). Both decode through the
+same terrain.dll dispatcher with descriptor format 1 (8 bits, one channel).
+Terrain textures in `Scenery/World/texture` are named `NNNR2SSV.bmp` (texture
+number, region A-X, constant 2, season SU/SP/FA/WI/HW/LM/AN, variation) and are
+BITMAPINFOHEADER files whose compression field is a DXT FourCC with block data
+(top mip first) at bfOffBits. Texture 001 is snow, not city. lclookup.bgl
+(section 0x6F) maps classes to texture sets per region/season and is not decoded.
+

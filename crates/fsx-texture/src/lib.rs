@@ -455,7 +455,7 @@ mod dxt_bmp_tests {
             return;
         }
         for name in [
-            "022b2su1", "040b2su1", "031b2su1", "301b2su1", "305b2su1", "313b2su1", "139b2su1",
+            "001b2su1", "012b2su1", "031b2su1", "030b2su1", "035b2su1", "056b2su1", "139b2su1",
             "123b2su1",
         ] {
             let i = Image::load(&dir.join(format!("{name}.bmp"))).unwrap();

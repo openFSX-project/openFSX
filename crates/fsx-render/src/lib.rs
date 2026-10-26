@@ -1,6 +1,7 @@
 //! wgpu aircraft rendering and reproducible offscreen capture.
 use fsx_geometry::{self as math, Mat4};
 use fsx_model::{Geometry, Material, Model};
+pub use fsx_texture::Image as TextureImage;
 use fsx_texture::{self as texture, Image};
 use std::{
     future::Future,
@@ -282,13 +283,13 @@ pub struct Gpu {
     aircraft_draws: usize,
 }
 /// Airport runways in world metres: x east, z north, relative to the flight origin.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default)]
 pub struct Ground {
     pub runways: Vec<GroundRunway>,
     pub terrain: Option<Terrain>,
 }
 /// Regular elevation grid in world metres around the flight origin.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default)]
 pub struct Terrain {
     pub columns: usize,
     pub rows: usize,
@@ -300,6 +301,13 @@ pub struct Terrain {
     pub heights: Vec<f32>,
     /// Mean-sea-level elevation of the origin plane.
     pub base: f32,
+    /// Optional ground texture atlas of square slots, `atlas_slots` per row.
+    pub atlas: Option<Image>,
+    pub atlas_slots: u32,
+    /// Atlas slot per grid quad ((columns - 1) * (rows - 1), row-major).
+    pub quad_slots: Vec<u16>,
+    /// Quads covered by one texture repetition along each axis.
+    pub texture_quads: u32,
 }
 impl Terrain {
     /// Bilinear height above the origin plane; None outside the grid.
@@ -699,6 +707,13 @@ impl Gpu {
             .collect::<Vec<_>>();
         let gradient = textures.len();
         textures.push(Some(upload(&terrain_gradient())));
+        let atlas = ground
+            .and_then(|g| g.terrain.as_ref())
+            .and_then(|t| t.atlas.as_ref())
+            .map(|image| {
+                textures.push(Some(upload(image)));
+                textures.len() - 1
+            });
         let views = textures
             .iter()
             .map(|texture| texture.as_ref().map(|t| t.create_view(&Default::default())))
@@ -725,7 +740,7 @@ impl Gpu {
             }
             materials.push(Material {
                 diffuse: [1.; 4],
-                diffuse_texture: Some(gradient),
+                diffuse_texture: Some(atlas.unwrap_or(gradient)),
                 alpha_blend: false,
                 alpha_function: 0,
                 alpha_threshold: 0.,
@@ -841,10 +856,30 @@ impl Gpu {
                     };
                     [x, h, z, n[0] / l, n[1] / l, n[2] / l, u.min(1.), 0.5, 0.]
                 };
+                let textured =
+                    atlas.is_some() && t.quad_slots.len() == (t.columns - 1) * (t.rows - 1);
+                let slots = t.atlas_slots.max(1) as f32;
+                let repeat = t.texture_quads.max(1);
                 for r in 0..t.rows - 1 {
                     for c in 0..t.columns - 1 {
                         for (dc, dr) in [(0, 0), (1, 1), (1, 0), (0, 0), (0, 1), (1, 1)] {
-                            vertices.push(vertex(c + dc, r + dr));
+                            let mut v = vertex(c + dc, r + dr);
+                            if textured {
+                                // Sub-rectangle of the quad's slot, inset half a
+                                // texel so linear filtering stays inside it.
+                                let slot = u32::from(t.quad_slots[r * (t.columns - 1) + c]);
+                                let size = 1. / slots;
+                                let inset = size / 512.;
+                                let sx = ((c as u32 % repeat) + dc as u32) as f32 / repeat as f32;
+                                let sy = ((r as u32 % repeat) + dr as u32) as f32 / repeat as f32;
+                                v[6] = (slot % t.atlas_slots) as f32 * size
+                                    + inset
+                                    + sx * (size - 2. * inset);
+                                v[7] = (slot / t.atlas_slots) as f32 * size
+                                    + inset
+                                    + sy * (size - 2. * inset);
+                            }
+                            vertices.push(v);
                         }
                     }
                 }
