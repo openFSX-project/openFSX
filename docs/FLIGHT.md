@@ -87,6 +87,16 @@ peak. Drag (0.06 at full, quadratic in deflection) and nose-down pitch (-0.08,
 linear) are generic estimates scaled by `drag_scalar`/`pitch_scalar`. AIR flap
 tables are not decoded yet, so this is a playable approximation, not FSX parity.
 
+Flight plays the aircraft's `sound/sound.cfg`: every engine combustion, propeller
+and non-combustion layer with its rparams pitch line and vparams volume curve,
+cockpit (viewpoint 1) or exterior (viewpoint 2) set by the current view, plus
+stall horn, wind, ground roll, flap motor and touchdown sounds (shared files
+come from the installation `Sound` folder). PCM 8/16-bit and MS ADPCM WAVE are
+decoded. The flight model has no RPM state yet, so normalized RPM is estimated
+from throttle and airspeed (idle 0.25, about 0.85 static full power). The stall
+horn sounds from 4 degrees below the AIR lift peak. Missing audio hardware or
+sound files only disable sound.
+
 The window title reports live flight state. Add **--debug-hud** for the optional original telemetry overlay; it is hidden by default.
 The camera follows the aircraft. The runway and grid are original test geometry,
 not FSX scenery. Wheel contact continues the rigid-body simulation, including

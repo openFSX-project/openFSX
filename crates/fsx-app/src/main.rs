@@ -15,6 +15,7 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
+mod audio;
 mod desktop_flight;
 mod flight_gauges;
 mod flight_pose;
@@ -46,6 +47,9 @@ struct App {
     visibility_nodes: Option<Vec<bool>>,
     gauges: Option<flight_gauges::FlightGauges>,
     gamepad: Option<gamepad::Gamepad>,
+    audio: Option<audio::Audio>,
+    /// Previous wheel contact and flap deflection, for sound events.
+    sound_state: (bool, f64),
 }
 impl App {
     fn click_gauge(&mut self) -> Result<bool, String> {
@@ -163,7 +167,40 @@ impl App {
                 }
                 flight.analog = analog;
             }
+            let sink = flight.simulation.state.velocity[2];
             flight.advance(elapsed)?;
+            if let Some(audio) = &mut self.audio {
+                let t = flight.simulation.telemetry()?;
+                let c = flight.simulation.controls;
+                let [n, e, _] = flight.simulation.state.velocity;
+                let (was_down, flaps) = self.sound_state;
+                audio.update(
+                    audio::Cue {
+                        throttle: c.throttle,
+                        airspeed: t.speed,
+                        cruise_speed: flight.simulation.parameters.cruise_speed,
+                        on_ground: t.ground_contact,
+                        ground_speed: n.hypot(e),
+                        // The horn leads the lift peak by about 4 degrees, like the
+                        // C172 reed warning a few knots above the stall.
+                        stalled: t.stalled
+                            || flight
+                                .simulation
+                                .parameters
+                                .aero
+                                .lift
+                                .peak()
+                                .is_ok_and(|(alpha, _)| t.alpha > alpha - 4f64.to_radians()),
+                        flaps_moving: (c.flaps - flaps).abs() > 1e-9,
+                        cockpit: self.cockpit,
+                        paused: flight.paused,
+                        touchdown: (t.ground_contact && !was_down && flight.simulation.time > 1.)
+                            .then_some(sink.max(0.)),
+                    },
+                    elapsed,
+                );
+                self.sound_state = (t.ground_contact, c.flaps);
+            }
             if let Some(alternate) = &mut self.alternate {
                 alternate.update(flight)?;
             }
@@ -1091,6 +1128,13 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
         return Ok(());
     }
     let gamepad = flight.is_some().then(gamepad::Gamepad::new);
+    let audio = if flight.is_some() {
+        audio::Audio::new(&path.join("sound"), windows_1252)
+            .map_err(|e| eprintln!("Aircraft sound unavailable: {e}"))
+            .ok()
+    } else {
+        None
+    };
     let mut app = App {
         visual: flight_view::Visual {
             model,
@@ -1119,6 +1163,8 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
         visibility_nodes,
         gauges,
         gamepad,
+        audio,
+        sound_state: (true, 0.),
     };
     EventLoop::new()
         .map_err(|e| e.to_string())?

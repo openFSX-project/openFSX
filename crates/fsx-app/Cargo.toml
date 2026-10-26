@@ -14,12 +14,13 @@ serde_json.workspace = true
 fsx-render = { workspace = true, optional = true }
 winit = { workspace = true, optional = true }
 gilrs = { workspace = true, optional = true }
+cpal = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 fsx-ui = { workspace = true, optional = true }
 
 [features]
-viewer = ["dep:fsx-render", "dep:winit", "dep:fsx-ui", "dep:gilrs"]
+viewer = ["dep:fsx-render", "dep:winit", "dep:fsx-ui", "dep:gilrs", "dep:cpal"]
 
 [[bin]]
 name = "openfsx-viewer"
