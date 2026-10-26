@@ -1538,3 +1538,28 @@ not change the table. Explicit provider activation remains necessary for other
 equipment. Recreate the table with a fresh network/reset or reload its observed
 state; the simulation does not own this external table's lifecycle. This adds no
 automatic viewer scheduler, live RPM, failure/mode default or switch-to-load guess.
+
+### Pitot heater activity prefix
+
+```powershell
+python scripts/check-pitot-activity.py FSX/sim1.dll target/pitot-activity-reference
+cargo run -p fsx-app --example legacy-pitot-activity-check --locked -- target/pitot-activity-reference/report.json target/pitot-activity-comparison
+```
+
+The pinned original prefix checks the requested switch, positive float32 heater
+rate and circuit 7 availability before writing its activity word. Off/nonpositive
+rate paths skip availability and clear activity. 768 guarded original cases
+cover rate sign, voltage equality/nextafter, context fallback, master, override,
+forced-off and missing circuit. The reference stops immediately after the flag
+write; thermal/icing arithmetic does not run and is not claimed supported.
+
+ConsumerState.update_pitot_activity accepts optional request, heater rate and
+availability. A known off request clears the flag even with other providers
+unknown. A positive requested heater needs known availability; missing required
+inputs yield unknown activity. Nonfinite rates fail atomically as an explicit
+supported-input validation policy. Only slot 7 changes. The heater-rate field's
+authored/default/live mapping is still unverified, so no value 1 is assumed;
+installed and flight-history checks label that input explicitly. Availability
+is obtained separately from the checked power predicate, not inferred from a
+switch or generator admission. Viewer activation timing and the physical heater
+temperature/icing model remain open.

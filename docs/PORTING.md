@@ -10,6 +10,31 @@ changes. Keep the full FSX 1:1 objective active until its original scope is met.
 
 ## Current stage — 26 October 2026
 
+After `b13934f`, the original pitot-heat activity prefix is ported. A requested
+heater with positive float32 heater-rate input queries circuit 7 availability;
+it writes active=1 only when that query permits. Off requests, nonpositive rate
+or unavailable power write zero. The prefix stops at the activity/thermal boundary;
+the heater-rate's configuration/runtime provenance and subsequent temperature/
+icing equations remain separate work. No thermal model or default rate is claimed.
+
+scripts/check-pitot-activity.py executes original prefix/predicate instructions
+with guarded writes/ranges and explicit switch/rate/context/circuit data. 768
+cases cover negative/zero/positive rate, strict voltage boundary, fallback,
+battery-master, override, forced-off and absent circuit metadata. Rust matches
+every activity flag exactly in target/legacy-pitot-activity-comparison-01/report.json
+using target/legacy-pitot-activity-reference-01/report.json.
+
+ConsumerState.update_pitot_activity updates only slot 7, preserves unknown supply
+when needed, resolves a known off request without supply and rejects nonfinite
+rate atomically. The flight-history regression now activates pitot through this
+prefix API and checks subsequent explicit switch-off. Installed C172 load checks
+also use the API with labeled explicit rate/power values. Workspace tests pass in
+target/legacy-pitot-activity-tests-01.log; installed regression passes in
+target/legacy-pitot-activity-installed-01.log. Formatting/architecture/docs checks
+pass. Automatic provider discovery, real switch update scheduling, thermal/
+icing simulation and other equipment activity remain unfinished; Goal active.
+
+### Previous equipment-history stage — 26 October 2026
 After `b29a3a3`, original equipment-adapter activate/deactivate methods are checked
 and ported into legacy_consumers::ConsumerState. Each method writes exactly 1/0
 to one selected activity word; it does not query supply, change another record

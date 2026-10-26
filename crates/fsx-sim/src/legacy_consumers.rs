@@ -15,6 +15,28 @@ pub struct ConsumerState {
     records: [Consumer; SLOTS],
 }
 impl ConsumerState {
+    /// Checked pitot activity prefix only; heater rate provenance and thermal/
+    /// icing dynamics remain separate providers. Availability is not a switch.
+    pub fn update_pitot_activity(
+        &mut self,
+        requested: Option<bool>,
+        heater_rate: Option<f32>,
+        power_available: Option<bool>,
+    ) -> Result<(), String> {
+        if heater_rate.is_some_and(|v| !v.is_finite()) {
+            return Err("Nonfinite pitot heater rate".into());
+        }
+        let active = match requested {
+            Some(false) => Some(false),
+            Some(true) => match heater_rate {
+                Some(v) if v <= 0. => Some(false),
+                Some(_) => power_available,
+                None => None,
+            },
+            None => None,
+        };
+        self.set_active(7, active)
+    }
     pub fn observed(
         config: &fsx_vehicle::electrical::Electrical,
         activity: [Option<u32>; SLOTS],

@@ -547,7 +547,9 @@ mod tests {
                 .unwrap();
         let config = s.electrical.source_configuration();
         let mut consumers = ConsumerState::fresh(&config);
-        consumers.set_active(7, Some(true)).unwrap();
+        consumers
+            .update_pitot_activity(Some(true), Some(1.), Some(true))
+            .unwrap();
         let mut switches = FlightElectrical::default();
         switches.battery = Some(true);
         switches.generators[0] = Some(false);
@@ -629,6 +631,10 @@ mod tests {
         assert_eq!(consumers.records()[1].active, None);
         assert_eq!(consumers.records()[5].active, None);
         assert_eq!(consumers.records()[7].active, Some(1));
+        consumers
+            .update_pitot_activity(Some(false), None, None)
+            .unwrap();
+        assert_eq!(consumers.records()[7].active, Some(0));
     }
     #[test]
     fn provider_electrical_frame_commits_once_with_flight_and_rolls_back_on_errors() {

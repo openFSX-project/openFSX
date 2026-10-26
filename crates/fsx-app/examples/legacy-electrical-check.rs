@@ -511,7 +511,7 @@ fn main() -> Result<(), String> {
         fsx_sim::legacy_consumers::sum(equipment.records())? == Some(0.),
         "Fresh equipment activity was not zero",
     )?;
-    equipment.set_active(7, Some(true))?;
+    equipment.update_pitot_activity(Some(true), Some(1.), Some(true))?;
     equipment.set_active(22, Some(true))?;
     ensure(
         fsx_sim::legacy_consumers::sum(equipment.records())?
