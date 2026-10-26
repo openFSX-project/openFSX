@@ -49,6 +49,10 @@ struct App {
     gamepad: Option<gamepad::Gamepad>,
     audio: Option<audio::Audio>,
     ground: Option<fsx_render::Ground>,
+    /// Scenery source for rebuilding ground as the aircraft travels.
+    world: Option<World>,
+    terrain_center: (f64, f64),
+    pending_ground: Option<std::thread::JoinHandle<((f64, f64), fsx_render::Ground)>>,
     /// Previous wheel contact and flap deflection, for sound events.
     sound_state: (bool, f64),
 }
@@ -182,6 +186,35 @@ impl App {
                     eprintln!("Crash: {e}. Press R to reset");
                 }
                 other => other?,
+            }
+            // Stream terrain: rebuild around the aircraft in the background
+            // once it is 20 km from the loaded centre, then swap it in.
+            if let Some(world) = &self.world {
+                let [north, east, _] = flight.simulation.state.position;
+                let finished = self
+                    .pending_ground
+                    .as_ref()
+                    .is_some_and(|h| h.is_finished());
+                if finished {
+                    if let Some(Ok((center, ground))) = self.pending_ground.take().map(|h| h.join())
+                    {
+                        self.terrain_center = center;
+                        if let Some(gpu) = &mut self.gpu {
+                            gpu.set_ground(
+                                Some(ground.clone()),
+                                &self.visual.geometry,
+                                &self.visual.appearance,
+                            )?;
+                        }
+                        self.ground = Some(ground);
+                    }
+                } else if self.pending_ground.is_none()
+                    && (north - self.terrain_center.0).hypot(east - self.terrain_center.1) > 20_000.
+                {
+                    let (world, center) = (world.clone(), (north, east));
+                    self.pending_ground =
+                        Some(std::thread::spawn(move || (center, world.ground(center))));
+                }
             }
             if let Some(audio) = &mut self.audio {
                 let t = flight.simulation.telemetry()?;
@@ -511,10 +544,59 @@ impl ApplicationHandler for App {
 
 /// Runways of the chosen airport and its neighbours, relative to the takeoff
 /// threshold, which becomes the local flight origin.
+/// Installed scenery around a fixed flight origin; ground can be rebuilt
+/// around any local centre as the aircraft travels.
+#[derive(Clone)]
+struct World {
+    root: PathBuf,
+    catalog: Arc<fsx_scenery::catalog::Catalog>,
+    origin: (f64, f64),
+    /// Mean-sea-level elevation of the origin plane.
+    base: f64,
+}
+impl World {
+    /// Runways within 25 km and terrain within +-40 km of a local north/east centre.
+    fn ground(&self, center: (f64, f64)) -> fsx_render::Ground {
+        use fsx_scenery::catalog::local;
+        let mut runways = Vec::new();
+        let mut fields = Vec::new();
+        for a in &self.catalog.airports {
+            let (n, e) = local(self.origin, (a.latitude, a.longitude));
+            let d = (n - center.0).hypot(e - center.1);
+            if d < 60_000. {
+                // Every airport in range is flattened to its own field elevation.
+                fields.push((n, e, a.altitude - self.base));
+            }
+            if d > 25_000. {
+                continue;
+            }
+            for r in &a.runways {
+                let (north, east) = local(self.origin, (r.latitude, r.longitude));
+                runways.push(fsx_render::GroundRunway {
+                    east: east as f32,
+                    north: north as f32,
+                    heading: r.heading as f32,
+                    length: r.length as f32,
+                    width: r.width as f32,
+                    hard: r.hard(),
+                    height: (r.altitude - self.base) as f32,
+                });
+            }
+        }
+        let terrain = match self.terrain(center, &fields) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                eprintln!("Terrain elevation unavailable, using a flat field: {e}");
+                None
+            }
+        };
+        fsx_render::Ground { runways, terrain }
+    }
+}
 fn airport_scenery(
     aircraft_folder: &Path,
     icao: &str,
-) -> Result<(fsx_scenery::catalog::Start, fsx_render::Ground), String> {
+) -> Result<(fsx_scenery::catalog::Start, fsx_render::Ground, World), String> {
     let canonical = aircraft_folder.canonicalize().map_err(|e| e.to_string())?;
     let root = canonical
         .ancestors()
@@ -530,138 +612,115 @@ fn airport_scenery(
     let start = airport
         .default_start()
         .ok_or_else(|| format!("Airport {icao} has no runways"))?;
-    let origin = (start.latitude, start.longitude);
-    let mut runways = Vec::new();
-    for a in &catalog.airports {
-        let (n, e) = fsx_scenery::catalog::local(origin, (a.latitude, a.longitude));
-        if n.hypot(e) > 25_000. {
-            continue;
-        }
-        for r in &a.runways {
-            let (north, east) = fsx_scenery::catalog::local(origin, (r.latitude, r.longitude));
-            runways.push(fsx_render::GroundRunway {
-                east: east as f32,
-                north: north as f32,
-                heading: r.heading as f32,
-                length: r.length as f32,
-                width: r.width as f32,
-                hard: r.hard(),
-                height: (r.altitude - start.altitude) as f32,
-            });
-        }
-    }
-    // Every airport in range is flattened to its own field elevation.
-    let fields: Vec<(f64, f64, f64)> = catalog
-        .airports
-        .iter()
-        .filter_map(|a| {
-            let (n, e) = fsx_scenery::catalog::local(
-                (start.latitude, start.longitude),
-                (a.latitude, a.longitude),
-            );
-            (n.hypot(e) < 60_000.).then_some((n, e, a.altitude - start.altitude))
-        })
-        .collect();
-    let terrain = match airport_terrain(root, &start, &fields) {
-        Ok(t) => Some(t),
-        Err(e) => {
-            eprintln!("Terrain elevation unavailable, using a flat field: {e}");
-            None
-        }
-    };
     println!(
-        "Airport {} {}: runway {} heading {:.0}°, field elevation {:.0} m; {} runways within 25 km; {}.",
+        "Airport {} {}: runway {} heading {:.0}°, field elevation {:.0} m.",
         airport.icao,
         airport.name.as_deref().unwrap_or(""),
         start.runway,
         start.heading,
         start.altitude,
-        runways.len(),
-        if terrain.is_some() {
+    );
+    let world = World {
+        root: root.to_path_buf(),
+        origin: (start.latitude, start.longitude),
+        base: start.altitude,
+        catalog: Arc::new(catalog),
+    };
+    let ground = world.ground((0., 0.));
+    println!(
+        "{} runways within 25 km; {}.",
+        ground.runways.len(),
+        if ground.terrain.is_some() {
             "installed FSX elevation mesh"
         } else {
             "flat terrain"
         }
     );
-    Ok((start, fsx_render::Ground { runways, terrain }))
+    Ok((start, ground, world))
 }
-/// Elevation grid of +-40 km around the runway start, decoded by the installed
-/// terrain.dll through the x86 helper. The airport itself is flattened to its
-/// field elevation, as FSX does with airport flattening.
-fn airport_terrain(
-    root: &Path,
-    start: &fsx_scenery::catalog::Start,
-    fields: &[(f64, f64, f64)],
-) -> Result<fsx_render::Terrain, String> {
-    use fsx_scenery::{catalog, terrain};
-    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    let helper = executable
-        .ancestors()
-        .skip(1)
-        .take(2)
-        .map(|d| d.join("fsx-terrain-host.exe"))
-        .find(|p| p.is_file())
-        .ok_or("target/fsx-terrain-host.exe not built (scripts/build-terrain-host.ps1)")?;
-    const SIZE: usize = 257;
-    const HALF: f64 = 40_000.;
-    let records = terrain::index_near(root, start.latitude, start.longitude, HALF * 1.5)?;
-    let mut elevation =
-        terrain::Elevation::new(records, terrain::Decoder::start(&helper, root)?, 12);
-    let spacing = 2. * HALF / (SIZE - 1) as f64;
-    let origin = (start.latitude, start.longitude);
-    let mut heights = Vec::with_capacity(SIZE * SIZE);
-    let mut found = 0;
-    for r in 0..SIZE {
-        for c in 0..SIZE {
-            let (north, east) = (HALF - r as f64 * spacing, -HALF + c as f64 * spacing);
-            let (lat, lon) = catalog::offset(origin.0, origin.1, north, east);
-            let absolute = elevation.height(lat, lon).map(f64::from);
-            found += usize::from(absolute.is_some());
-            let relative = absolute.unwrap_or(start.altitude) - start.altitude;
-            // Blend from the nearest flat field (3 km) to raw terrain (6 km).
-            let (d, field) = fields
-                .iter()
-                .map(|&(n, e, h)| ((north - n).hypot(east - e), h))
-                .fold((f64::INFINITY, 0.), |a, b| if b.0 < a.0 { b } else { a });
-            let k = ((d - 3000.) / 3000.).clamp(0., 1.);
-            heights.push((field + (relative - field) * k * k * (3. - 2. * k)) as f32);
-        }
-    }
-    if found < SIZE * SIZE / 2 {
-        return Err("No elevation records cover this airport".into());
-    }
-    let (atlas, quad_slots) = match terrain::land_class_index(root) {
-        Ok(index) => {
-            let mut classes = terrain::LandClass::new(index);
-            let mut quads = Vec::with_capacity((SIZE - 1) * (SIZE - 1));
-            for r in 0..SIZE - 1 {
-                for c in 0..SIZE - 1 {
-                    let north = HALF - (r as f64 + 0.5) * spacing;
-                    let east = -HALF + (c as f64 + 0.5) * spacing;
-                    let (lat, lon) = catalog::offset(origin.0, origin.1, north, east);
-                    quads.push(classes.class(elevation.decoder(), lat, lon).unwrap_or(0));
-                }
+const TERRAIN_SIZE: usize = 257;
+const TERRAIN_HALF: f64 = 40_000.;
+impl World {
+    /// Elevation grid of +-40 km around a local centre, decoded by the installed
+    /// terrain.dll through the x86 helper, with airport flattening.
+    fn terrain(
+        &self,
+        center: (f64, f64),
+        fields: &[(f64, f64, f64)],
+    ) -> Result<fsx_render::Terrain, String> {
+        use fsx_scenery::{catalog, terrain};
+        const SIZE: usize = TERRAIN_SIZE;
+        const HALF: f64 = TERRAIN_HALF;
+        let root = self.root.as_path();
+        let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+        let helper = executable
+            .ancestors()
+            .skip(1)
+            .take(3)
+            .map(|d| d.join("fsx-terrain-host.exe"))
+            .find(|p| p.is_file())
+            .ok_or("target/fsx-terrain-host.exe not built (scripts/build-terrain-host.ps1)")?;
+        let origin = self.origin;
+        let (lat0, lon0) = catalog::offset(origin.0, origin.1, center.0, center.1);
+        let records = terrain::index_near(root, lat0, lon0, HALF * 1.5)?;
+        let mut elevation =
+            terrain::Elevation::new(records, terrain::Decoder::start(&helper, root)?, 12);
+        let spacing = 2. * HALF / (SIZE - 1) as f64;
+        let (top, left) = (center.0 + HALF, center.1 - HALF);
+        let mut heights = Vec::with_capacity(SIZE * SIZE);
+        let mut found = 0;
+        for r in 0..SIZE {
+            for c in 0..SIZE {
+                let (north, east) = (top - r as f64 * spacing, left + c as f64 * spacing);
+                let (lat, lon) = catalog::offset(origin.0, origin.1, north, east);
+                let absolute = elevation.height(lat, lon).map(f64::from);
+                found += usize::from(absolute.is_some());
+                let relative = absolute.unwrap_or(self.base) - self.base;
+                // Blend from the nearest flat field (3 km) to raw terrain (6 km).
+                let (d, field) = fields
+                    .iter()
+                    .map(|&(n, e, h)| ((north - n).hypot(east - e), h))
+                    .fold((f64::INFINITY, 0.), |a, b| if b.0 < a.0 { b } else { a });
+                let k = ((d - 3000.) / 3000.).clamp(0., 1.);
+                heights.push((field + (relative - field) * k * k * (3. - 2. * k)) as f32);
             }
-            land_atlas(root, &quads)
         }
-        Err(e) => {
-            eprintln!("Land class unavailable: {e}");
-            (None, Vec::new())
+        if found < SIZE * SIZE / 2 {
+            return Err("No elevation records cover this area".into());
         }
-    };
-    Ok(fsx_render::Terrain {
-        atlas,
-        atlas_slots: ATLAS_SLOTS,
-        quad_slots,
-        texture_quads: 4,
-        columns: SIZE,
-        rows: SIZE,
-        west: -HALF as f32,
-        north: HALF as f32,
-        spacing: spacing as f32,
-        heights,
-        base: start.altitude as f32,
-    })
+        let (atlas, quad_slots) = match terrain::land_class_index(root) {
+            Ok(index) => {
+                let mut classes = terrain::LandClass::new(index);
+                let mut quads = Vec::with_capacity((SIZE - 1) * (SIZE - 1));
+                for r in 0..SIZE - 1 {
+                    for c in 0..SIZE - 1 {
+                        let north = top - (r as f64 + 0.5) * spacing;
+                        let east = left + (c as f64 + 0.5) * spacing;
+                        let (lat, lon) = catalog::offset(origin.0, origin.1, north, east);
+                        quads.push(classes.class(elevation.decoder(), lat, lon).unwrap_or(0));
+                    }
+                }
+                land_atlas(root, &quads)
+            }
+            Err(e) => {
+                eprintln!("Land class unavailable: {e}");
+                (None, Vec::new())
+            }
+        };
+        Ok(fsx_render::Terrain {
+            atlas,
+            atlas_slots: ATLAS_SLOTS,
+            quad_slots,
+            texture_quads: 4,
+            columns: SIZE,
+            rows: SIZE,
+            west: left as f32,
+            north: top as f32,
+            spacing: spacing as f32,
+            heights,
+            base: self.base as f32,
+        })
+    }
 }
 const ATLAS_SLOTS: u32 = 8;
 const SLOT_PIXELS: u32 = 256;
@@ -1328,7 +1387,7 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
     };
     let mut flight = aircraft
         .map(|a| {
-            if let Some((start, _)) = &scenery {
+            if let Some((start, _, _)) = &scenery {
                 FlightSession::on_runway(a.parameters, [0., 0.], start.heading.to_radians()).map(
                     |mut f| {
                         f.set_field_elevation(start.altitude);
@@ -1400,7 +1459,7 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
             960,
             720,
         ))?;
-        if let Some((_, ground)) = &scenery {
+        if let Some((_, ground, _)) = &scenery {
             gpu.set_ground(Some(ground.clone()), &geometry, &appearance)?;
         }
         if let Some(flight) = &flight {
@@ -1459,7 +1518,10 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
         gamepad,
         audio,
         sound_state: (true, 0.),
-        ground: scenery.map(|(_, g)| g),
+        ground: scenery.as_ref().map(|(_, g, _)| g.clone()),
+        world: scenery.map(|(_, _, w)| w),
+        terrain_center: (0., 0.),
+        pending_ground: None,
     };
     EventLoop::new()
         .map_err(|e| e.to_string())?
@@ -1477,5 +1539,26 @@ fn main() -> std::process::ExitCode {
             eprintln!("Error: {error}");
             std::process::ExitCode::FAILURE
         }
+    }
+}
+#[cfg(test)]
+mod world_tests {
+    use super::*;
+    #[test]
+    fn recentred_ground_moves_with_the_aircraft_when_installed() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../FSX");
+        let helper =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/fsx-terrain-host.exe");
+        if !root.join("terrain.dll").is_file() || !helper.is_file() {
+            return;
+        }
+        let aircraft = root.join("SimObjects/Airplanes/C172");
+        let (_, first, world) = airport_scenery(&aircraft, "KSEA").unwrap();
+        let moved = world.ground((30_000., 0.));
+        let (a, b) = (first.terrain.unwrap(), moved.terrain.unwrap());
+        assert!((b.north - a.north - 30_000.).abs() < 1.);
+        // Seattle Boeing Field and Paine Field sit north of KSEA.
+        assert!(!moved.runways.is_empty());
+        assert!(b.height_at(0., 30_000.).is_some() && a.height_at(0., 45_000.).is_none());
     }
 }

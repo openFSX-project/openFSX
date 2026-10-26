@@ -60,6 +60,12 @@ runways are drawn at that height. Each frame the wheel contact plane is moved to
 the terrain height under the aircraft (locally level), so landings at other
 airports and on open terrain use the same spring/damper gear. A CG penetration
 or numeric blow-up is a crash: the flight stops until R.
+
+Terrain streams with the flight: when the aircraft is 20 km from the centre of
+the loaded area, a background thread decodes a new +-40 km area (runways,
+flattening, elevation, land class) around it and swaps it in; the local origin
+stays at the start, so very long flights accumulate flat-earth error. The swap
+re-uploads scene textures and may cause a short hitch.
 The ground uses the stock summer land-class textures: worldlc.bgl classes are
 sampled per mesh quad and the matching `NNN?2su1.bmp` textures (DXT1 inside a
 BMP header) are packed into a 2048-pixel atlas, one texture per 4 x 4 quads
