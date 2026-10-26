@@ -10,6 +10,31 @@ changes. Keep the full FSX 1:1 objective active until its original scope is met.
 
 ## Current stage — 26 October 2026
 
+After `954710c`, the original pitot thermal prefix is ported up to temperature
+storage, before icing. scripts/check-pitot-thermal.py executes the pinned original
+instructions with an explicit weather environment scalar, seeded float32 probe
+temperature, heater rate, switch and bus supply. The scalar is converted as
+Celsius to Rankine (x*1.8+32+459.7). Active heat adds rate*dt; inactive probes
+above ambient cool by 3*dt; the result is clamped to [ambient, 560]. 192 isolated
+cases and four 60-frame sequences with alternating 1/120 and 1/60 s intervals
+match every float32 temperature and activity flag exactly in
+target/legacy-pitot-thermal-comparison-03/report.json, using
+target/legacy-pitot-thermal-reference-04/report.json.
+
+legacy_pitot::Core retains only the probe temperature; missing environment, seed,
+switch, rate or supply yields unknown and clears retained state. Invalid intervals
+or nonfinite inputs fail atomically. Activity gating is shared with ConsumerState
+through legacy_consumers::pitot_activity. The activity reference now places dt at
+the original stack argument slot; all 768 activity cases still match in
+target/legacy-pitot-activity-comparison-02/report.json.
+
+Workspace tests pass in target/legacy-pitot-thermal-tests-01.log. Configuration
+and AIR comparisons still pass. Formatting/architecture/docs checks pass. The
+physical meaning/provider of the environment scalar, initial temperature
+provider, icing and indicated-airspeed effects, and live Simulation binding remain
+open; Goal active.
+
+### Previous pitot-AIR stage — 26 October 2026
 After `6ff3e7c`, the pitot legacy provider is resolved to AIR record 0x0324.
 The original helper scans id/size records, reads up to its 8-byte destination,
 and the initializer tests the first 32-bit word for nonzero. A guarded reference

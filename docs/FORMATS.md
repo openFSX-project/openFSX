@@ -1613,3 +1613,19 @@ An explicit nonnegative CFG value wins and leaves the unused legacy provider
 unknown. Standalone Parameters without an AIR source stays unknown; known absence
 from a successfully parsed AIR file becomes Missing and selects original fallback 1.
 No user configuration write-back is performed automatically.
+
+### Legacy pitot thermal prefix
+
+```powershell
+python scripts/check-pitot-thermal.py FSX/sim1.dll target/pitot-thermal-reference
+cargo run -p fsx-app --example legacy-pitot-activity-check --locked -- target/pitot-thermal-reference/report.json target/pitot-thermal-comparison
+```
+
+The reference stops at the original temperature store, before icing logic. It
+supplies the weather scalar, seeded float32 temperature, heater rate, switch and
+bus supply explicitly; it does not run the original process. Ambient is
+x*1.8+32+459.7 in float32. Active heat adds rate*dt, inactive cooling above
+ambient subtracts 3*dt, and the stored value is clamped to [ambient, 560].
+432 cases cover isolated grids and retained 60-frame sequences; Rust matches
+exactly. Intervals outside (0, 1/60] and nonfinite inputs are rejected. Unknown
+providers produce unknown temperature rather than a default.

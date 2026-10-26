@@ -27,7 +27,7 @@ def case(image,base,requested,rate,voltage,voltage_mode,master,override,forced,p
     def stop(vm,address,_size,_data):
         if address in (0x20B45909,0x20B45982):vm.emu_stop()
     v.hook_add(UC_HOOK_CODE,stop)
-    sp=t.STACK+0xF000;m.word(sp,t.SENTINEL);m.real(sp+16,1./120.)
+    sp=t.STACK+0xF000;m.word(sp,t.SENTINEL);m.real(sp+12,1./120.)
     v.reg_write(UC_X86_REG_ESP,sp);v.reg_write(UC_X86_REG_ECX,t.CONTEXT)
     v.emu_start(0x20B458B0,t.SENTINEL,count=4096)
     if v.reg_read(UC_X86_REG_EIP) not in (0x20B45909,0x20B45982):raise ValueError('Pitot prefix did not reach activity boundary')

@@ -1,6 +1,24 @@
 //! Original ordered consumer-load sum. Slot 0 is not visited; slots 1..=33 are.
 //! Metadata/presence and prior activity need providers; CFG omissions are unknown.
 pub const SLOTS: usize = 34;
+pub fn pitot_activity(
+    requested: Option<bool>,
+    heater_rate: Option<f32>,
+    power_available: Option<bool>,
+) -> Result<Option<bool>, String> {
+    if heater_rate.is_some_and(|v| !v.is_finite()) {
+        return Err("Nonfinite pitot heater rate".into());
+    }
+    Ok(match requested {
+        Some(false) => Some(false),
+        Some(true) => match heater_rate {
+            Some(v) if v <= 0. => Some(false),
+            Some(_) => power_available,
+            None => None,
+        },
+        None => None,
+    })
+}
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Consumer {
     /// Raw original prior-frame activity word; any nonzero value is active.
@@ -23,18 +41,7 @@ impl ConsumerState {
         heater_rate: Option<f32>,
         power_available: Option<bool>,
     ) -> Result<(), String> {
-        if heater_rate.is_some_and(|v| !v.is_finite()) {
-            return Err("Nonfinite pitot heater rate".into());
-        }
-        let active = match requested {
-            Some(false) => Some(false),
-            Some(true) => match heater_rate {
-                Some(v) if v <= 0. => Some(false),
-                Some(_) => power_available,
-                None => None,
-            },
-            None => None,
-        };
+        let active = pitot_activity(requested, heater_rate, power_available)?;
         self.set_active(7, active)
     }
     pub fn observed(

@@ -37,7 +37,8 @@ fn main() -> Result<(), String> {
     if report["schema"] != 1
         || (report["source"] != "bounded-original-pitot-activity"
             && report["source"] != "bounded-original-pitot-configuration"
-            && report["source"] != "bounded-original-pitot-air-record")
+            && report["source"] != "bounded-original-pitot-air-record"
+            && report["source"] != "bounded-original-pitot-thermal")
         || report["sha256"] != "4bb9ef1b9669bb48676ef16ede667a2c590af27943eb34f03f09332a5417ae0e"
     {
         return Err("Unexpected pitot reference".into());
@@ -48,6 +49,65 @@ fn main() -> Result<(), String> {
         .ok_or("Invalid case budget")?;
     let config = Electrical::default()
         .with_legacy_circuit_defaults(SourceDefaults::FsxSteam62615SinglePiston)?;
+    if report["source"] == "bounded-original-pitot-thermal" {
+        let mut histories =
+            std::collections::BTreeMap::<String, fsx_sim::legacy_pitot::Core>::new();
+        for case in cases {
+            let mut isolated = fsx_sim::legacy_pitot::Core::default();
+            let core = if let Some(name) = case["sequence"].as_str() {
+                let core = histories.entry(name.into()).or_default();
+                if case["frame"] == 0 {
+                    core.seed(Some(number(case, "initial_temperature")? as f32))?;
+                }
+                if core.temperature() != Some(number(case, "initial_temperature")? as f32) {
+                    return Err("Thermal sequence lost preceding state".into());
+                }
+                core
+            } else {
+                isolated.seed(Some(number(case, "initial_temperature")? as f32))?;
+                &mut isolated
+            };
+            let step = core.advance(
+                fsx_sim::legacy_pitot::Inputs {
+                    requested: Some(boolean(case, "requested")?),
+                    heater_rate: Some(number(case, "heater_rate")? as f32),
+                    power_available: Some(boolean(case, "power_available")?),
+                    environment_scalar: Some(number(case, "environment_scalar")?),
+                },
+                number(case, "dt")?,
+            )?;
+            if step.active != Some(boolean(case, "active")?)
+                || step.temperature.map(f64::from) != case["temperature"].as_f64()
+            {
+                return Err(format!(
+                    "Original thermal prefix differs: {step:?} vs {case}"
+                ));
+            }
+        }
+        let mut core = fsx_sim::legacy_pitot::Core::default();
+        core.seed(Some(500.))?;
+        if core
+            .advance(fsx_sim::legacy_pitot::Inputs::default(), 0.)
+            .is_ok()
+            || core.temperature() != Some(500.)
+        {
+            return Err("Invalid thermal interval changed state".into());
+        }
+        if core
+            .advance(fsx_sim::legacy_pitot::Inputs::default(), 1. / 120.)?
+            .temperature
+            .is_some()
+        {
+            return Err("Missing thermal providers retained state".into());
+        }
+        fs::create_dir(&output).map_err(|e| e.to_string())?;
+        fs::write(output.join("report.json"),serde_json::to_vec_pretty(&json!({"schema":1,"thermal_cases":cases.len(),"all_temperatures_equal":true,"unknown_and_atomic_errors_checked":true,"scope":"thermal prefix only; explicit environment/seed, no icing or live flight binding"})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+        println!(
+            "PASS: {} original thermal prefix temperatures/activity equal",
+            cases.len()
+        );
+        return Ok(());
+    }
     if report["source"] == "bounded-original-pitot-air-record" {
         for case in cases {
             let mut bytes = Vec::new();
