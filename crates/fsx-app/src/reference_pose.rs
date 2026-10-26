@@ -129,7 +129,7 @@ impl Instruments {
         self.values["sim_time_seconds"]
     }
     /// Actual recorded instrument indications, without ideal-ISA reconstruction.
-    pub fn native_inputs(&self) -> Result<[f64; 6], String> {
+    pub fn native_inputs(&self) -> Result<[f64; 8], String> {
         if [
             "failure_airspeed",
             "failure_altimeter",
@@ -154,6 +154,9 @@ impl Instruments {
             self.values["gyro_pitch_deg"],
             self.values["gyro_bank_deg"],
             self.values["gyro_heading_deg"],
+            0.,
+            // The recorded instrument profile carries no engine speed.
+            0.,
         ];
         if input[0] < 0. || input.iter().any(|v| !v.is_finite() || v.abs() > 1e12) {
             return Err("Recorded inputs exceed the native profile's numeric domain".into());

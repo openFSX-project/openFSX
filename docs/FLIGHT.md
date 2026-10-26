@@ -112,6 +112,13 @@ Generic buildings (record 0x0A) are drawn as solid-colour boxes of the authored
 footprint and band heights, pitched for non-flat roof types; their FSX texture
 bands are not decoded.
 
+Engine speed is simulated for a fixed-pitch propeller: equilibrium RPM grows
+with the square root of power (idle fuel 6 %) and with forward speed, about
+85 % of `[piston_engine] max_rated_rpm` static at full throttle and 100 % at
+cruise speed, followed with a 0.6 s lag. It drives the engine sound layers and
+the native C172 tachometer needle (GENERAL ENG RPM, token 390, helper input 7).
+Thrust still uses the momentum-disk model; FSX propeller tables are not used.
+
 `--airborne` with `--airport` starts trimmed at 90 kt and 300 m over the runway
 threshold, along the runway heading; R returns there.
 The ground uses the stock summer land-class textures: worldlc.bgl classes are

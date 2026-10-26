@@ -10,12 +10,14 @@ use std::{
 };
 
 const WAIT: Duration = Duration::from_millis(5500);
-pub const BINDINGS: [(&str, &str, i32, u32, usize); 5] = [
+pub const BINDINGS: [(&str, &str, i32, u32, usize); 6] = [
     ("Cessna172.dll", "Airspeed", 1001, 61, 0),
     ("Cessna.dll", "Altimeter", 1033, 74, 1),
     ("Cessna.dll", "Altimeter", 1032, 74, 1),
     ("Cessna.dll", "Altimeter", 1031, 74, 1),
     ("Cessna.dll", "Vertical_Speed", 5047, 65, 2),
+    // GENERAL ENG RPM (token 390), engine speed at input 7.
+    ("Cessna172.dll", "Tachometer", 5023, 390, 7),
 ];
 // library, gauge, bitmap, token, input index (6 = MODULE_VAR_NONE), axis, callback
 const SPRITE_BINDINGS: [(&str, &str, i32, u32, usize, u32, bool); 9] = [
@@ -145,7 +147,7 @@ fn decode_frame(
     line: &str,
     sequence: u64,
     time: f64,
-    inputs: [f64; 6],
+    inputs: [f64; 8],
     reused: bool,
     evaluated: u64,
     clock_seconds: Option<(f64, u64)>,
@@ -165,7 +167,7 @@ fn decode_frame(
     let values = v["values"]
         .as_array()
         .filter(|a| a.len() == BINDINGS.len() + SPRITE_BINDINGS.len())
-        .ok_or("Expected five needle and nine sprite-axis results")?;
+        .ok_or("Expected six needle and nine sprite-axis results")?;
     let mut out = Vec::new();
     for (value, (library, gauge, resource, token, input)) in values.iter().zip(BINDINGS) {
         if value["library"] != library
@@ -348,7 +350,7 @@ impl Process {
             .ok_or("Invalid native helper PID")?;
         if ready["pointer_bits"] != 32
             || ready["libraries_loaded"] != 3
-            || ready["bindings"] != 14
+            || ready["bindings"] != 15
             || ready["panel_services"] != false
             || (clock
                 && (ready["clock_connected"] != true
@@ -442,7 +444,7 @@ pub struct NativeGauges {
     process: Option<Process>,
     sequence: u64,
     evaluated: u64,
-    last: Option<(f64, [f64; 6], Option<f64>)>,
+    last: Option<(f64, [f64; 8], Option<f64>)>,
     clock: bool,
     display_dirty: bool,
     clock_events: u64,
@@ -516,7 +518,7 @@ impl NativeGauges {
         self.display_dirty = true;
         Ok(())
     }
-    pub fn update(&mut self, time: f64, inputs: [f64; 6]) -> Result<Frame, String> {
+    pub fn update(&mut self, time: f64, inputs: [f64; 8]) -> Result<Frame, String> {
         self.update_with_clock(time, inputs, None)
     }
     pub fn click_clock(
@@ -579,7 +581,7 @@ impl NativeGauges {
     pub fn update_with_clock(
         &mut self,
         time: f64,
-        inputs: [f64; 6],
+        inputs: [f64; 8],
         clock_seconds: Option<f64>,
     ) -> Result<Frame, String> {
         if self.clock != clock_seconds.is_some()
@@ -613,8 +615,8 @@ impl NativeGauges {
         let result = (|| -> Result<Frame, String> {
             let clock_suffix = clock_seconds.map(|s| format!(" {s}")).unwrap_or_default();
             process.write(&format!(
-                "frame {sequence} {time} {} {} {} {} {} {}{clock_suffix}\n",
-                inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5]
+                "frame {sequence} {time} {} {} {} {} {} {} {}{clock_suffix}\n",
+                inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5], inputs[7]
             ))?;
             decode_frame(
                 &process.receive()?,
@@ -668,7 +670,7 @@ mod tests {
                 &v.to_string(),
                 1,
                 0.5,
-                [75., 500., 256., -10., -30., 90.],
+                [75., 500., 256., -10., -30., 90., 0., 2400.],
                 false,
                 1,
                 seconds,
@@ -720,7 +722,7 @@ mod tests {
         }
     }
     fn fixture() -> Value {
-        let inputs = [75., 500., 256., -10., -30., 90.];
+        let inputs = [75., 500., 256., -10., -30., 90., 0., 2400.];
         let mut values: Vec<_> = BINDINGS.iter().map(|(l,g,r,t,i)|serde_json::json!({"library":l,"gauge":g,"resource":r,"token":t,"raw_input":inputs[*i],"callback_result":42.,"element_kind":1,"axis":0,"callback_called":true})).collect();
         values.extend(SPRITE_BINDINGS.iter().map(|(l,g,r,t,i,axis,called)| {
             let raw = if *i == 6 {0.} else {inputs[*i]};
@@ -735,13 +737,13 @@ mod tests {
             &v.to_string(),
             1,
             0.5,
-            [75., 500., 256., -10., -30., 90.],
+            [75., 500., 256., -10., -30., 90., 0., 2400.],
             false,
             1,
             None,
         )
         .unwrap();
-        assert_eq!(f.values.len(), 5);
+        assert_eq!(f.values.len(), 6);
         assert_eq!(f.values[4].token, 65);
         assert_eq!(f.sprites.len(), 3);
         assert_eq!(f.sprites[2].tokens, [0, 78, 80]);
@@ -753,7 +755,7 @@ mod tests {
                 &bad.to_string(),
                 1,
                 0.5,
-                [75., 500., 256., -10., -30., 90.],
+                [75., 500., 256., -10., -30., 90., 0., 2400.],
                 false,
                 1,
                 None
@@ -778,7 +780,7 @@ mod tests {
                     &bad.to_string(),
                     1,
                     0.5,
-                    [75., 500., 256., -10., -30., 90.],
+                    [75., 500., 256., -10., -30., 90., 0., 2400.],
                     false,
                     1,
                     None

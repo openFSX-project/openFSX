@@ -283,6 +283,8 @@ pub struct Simulation {
     /// Height of the local ground plane above mean sea level, metres. Reported
     /// altitude includes it; aerodynamic density still uses height above ground.
     pub field_elevation: f64,
+    /// Engine speed in revolutions per minute (fixed-pitch propeller model).
+    pub rpm: f64,
 }
 impl Simulation {
     /// Commit physics and equipment history together. Load uses prior records;
@@ -483,7 +485,24 @@ impl Simulation {
             time: 0.,
             ground_contact: false,
             field_elevation: 0.,
+            rpm: 0.,
         })
+        .map(|mut s: Self| {
+            s.rpm = s.equilibrium_rpm(s.controls.throttle);
+            s
+        })
+    }
+    /// Steady fixed-pitch propeller speed: absorbed power grows with RPM cubed
+    /// and falls as forward speed unloads the blades, so RPM rises with the
+    /// square root of power and with airspeed. Calibrated to about 85 % of
+    /// rated RPM static at full power and 100 % at cruise speed; idle fuel flow
+    /// keeps about 21 %. A playable model, not the FSX propeller tables.
+    pub fn equilibrium_rpm(&self, throttle: f64) -> f64 {
+        let p = &self.parameters;
+        let forward = self.state.orientation.inverse().rotate(self.state.velocity)[0];
+        let unload = (forward / p.cruise_speed.max(1.)).clamp(0., 1.4);
+        let power = 0.06 + 0.94 * throttle.clamp(0., 1.);
+        p.rated_rpm * (0.85 * power.sqrt() * (1. + 0.176 * unload)).min(1.12)
     }
     pub fn step(&mut self, controls: Controls, dt: f64) -> Result<()> {
         self.step_physics(controls, dt, true)
@@ -527,6 +546,15 @@ impl Simulation {
         if next.position[2] + level >= 0. {
             return Err("Aircraft CG penetrated the ground; reset required".into());
         }
+        // Engine speed follows its equilibrium with propeller inertia.
+        let target = {
+            let previous = self.state;
+            self.state = next;
+            let target = self.equilibrium_rpm(controls.throttle);
+            self.state = previous;
+            target
+        };
+        self.rpm += (target - self.rpm) * (dt / 0.6).min(1.);
         // No electrical mutation until this physics substep has passed all
         // fallible calculations. Contact subdivision advances each interval once.
         if independent_electrical {
@@ -567,6 +595,26 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::aircraft::own_parameters;
+    #[test]
+    fn rpm_settles_at_idle_static_power_and_rises_with_airspeed() {
+        let mut s = Simulation::on_ground(own_parameters()).unwrap();
+        assert!(
+            (s.rpm / 2700. - 0.85 * 0.06f64.sqrt()).abs() < 0.01,
+            "idle {}",
+            s.rpm
+        );
+        let full = Controls {
+            throttle: 1.,
+            brake: 1.,
+            ..s.controls
+        };
+        for _ in 0..600 {
+            s.step(full, 1. / 120.).unwrap();
+        }
+        assert!((s.rpm / 2700. - 0.85).abs() < 0.01, "static {}", s.rpm);
+        let cruise = Simulation::trimmed(own_parameters(), 55., 300.).unwrap();
+        assert!(cruise.equilibrium_rpm(1.) > 2650. && cruise.equilibrium_rpm(1.) <= 2700. * 1.12);
+    }
     #[test]
     fn flaps_add_lift_drag_and_nose_down_moment() {
         let mut p = fsx_vehicle::aircraft::own_parameters();

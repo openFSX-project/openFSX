@@ -69,7 +69,7 @@ The CFG inspector reads `title` values from `[fltsim.N]` under `SimObjects/Airpl
 Flight mode starts at 90 kt and 300 m with solved initial trim. Add **--cockpit** to start inside the configured native interior; **F9/F11** select cockpit/exterior without resetting physics. The eye point follows CFG datum and aircraft attitude; default gauges remain blank. Use **Down/Up** to pull/push, **Left/Right** to bank, **Q/E** for rudder, **Page Up/Down** for throttle, **Home/End** for trim, **F5–F8** for flaps, **P** to pause and **R** to reset. A game controller also works (left stick, right-stick rudder, triggers for throttle, D-pad flaps). Add **--debug-hud** for the optional experimental on-screen panel. It reports true airspeed, height, vertical speed, local heading, throttle, trim, attitude and status. The ground is original test geometry. Read the [flight guide](docs/FLIGHT.md) for the actual data subset, approximation choices, controls and observed results. Flight behavior has not been validated against recorded FSX trajectories.
 
 On Windows, build `scripts/build-gauge-host.ps1` and add **--native-gauges**
-to opt into five live C172 needles: airspeed, vertical speed and three altimeter
+to opt into six live C172 needles: airspeed, vertical speed, tachometer and three altimeter
 hands, plus the native attitude and heading sprites. A separate x86 process executes the checked installed callbacks; ideal
 ISA flight data drives existing GPU panel textures. Other instruments remain
 static or blank. Pause/reset and view changes have local integration checks;

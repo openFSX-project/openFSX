@@ -220,7 +220,7 @@ fn run() -> Result<(), String> {
     let report = json!({"schema":1,"source":"openfsx-recorded-instrument-replay","recorded_source":source,"title":title,"object_id":object,
         "samples":frames,"paused_reuses":paused,"clock_rewinds":rewinds,"fixed_camera":true,"physics_replayed":false,
         "control_animation":"available stateless authored bindings; positive lag and unsupported expressions omitted",
-        "native_panel_profile":"C172 five needles and three sprites; neutral healthy instruments only",
+        "native_panel_profile":"C172 six needles (tachometer at 0 without recorded RPM) and three sprites; neutral healthy instruments only",
         "fsx_parity_validated":false});
     std::fs::write(output.join("report.json"), report.to_string()).map_err(|e| e.to_string())?;
     println!("PASS recorded indication replay: {report}");

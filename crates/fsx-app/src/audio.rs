@@ -1,7 +1,5 @@
-//! Aircraft sound playback: sound.cfg engine layers driven by an estimated
-//! RPM, plus stall horn, wind, ground roll, flap motor and touchdown sounds.
-//! The RPM estimate is a playable approximation; the flight model has no
-//! engine RPM state yet.
+//! Aircraft sound playback: sound.cfg engine layers driven by the simulated
+//! engine RPM, plus stall horn, wind, ground roll, flap motor and touchdown.
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use fsx_vehicle::sound::{Sounds, Viewpoint};
 use fsx_vehicle::wav::Wave;
@@ -65,6 +63,8 @@ struct Engine {
 /// Per-frame aircraft state the sound mix depends on.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Cue {
+    /// Engine speed as a fraction of rated RPM.
+    pub rpm: f64,
     pub throttle: f64,
     pub airspeed: f64,
     pub cruise_speed: f64,
@@ -177,12 +177,9 @@ impl Audio {
         })
     }
     pub fn update(&mut self, cue: Cue, elapsed: f64) {
-        // Idle about 0.25 of rated RPM, ~0.85 static full power, approaching
-        // rated RPM as the propeller unloads with airspeed.
-        let unload = (cue.airspeed / cue.cruise_speed.max(1.)).clamp(0., 1.3);
-        let target =
-            (0.25 + 0.6 * cue.throttle + 0.12 * unload * (0.3 + 0.7 * cue.throttle)).clamp(0., 1.);
-        self.rpm += (target - self.rpm) * (elapsed / 0.8).min(1.);
+        // Engine speed comes from the simulation's propeller model.
+        let _ = elapsed;
+        self.rpm = cue.rpm.clamp(0., 1.2);
         let Ok(mut m) = self.mix.lock() else { return };
         let mute = if cue.paused { 0. } else { 1. };
         for e in &self.engine {

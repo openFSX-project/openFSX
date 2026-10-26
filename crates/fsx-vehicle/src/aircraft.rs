@@ -26,6 +26,8 @@ pub struct Parameters {
     pub chord: f64,
     pub efficiency: f64,
     pub power: f64,
+    /// Rated engine speed, revolutions per minute ([piston_engine] max_rated_rpm).
+    pub rated_rpm: f64,
     pub prop_area: f64,
     pub tail_incidence: f64,
     pub controls: [f64; 4],
@@ -258,6 +260,7 @@ impl Parameters {
             efficiency: required("airplane_geometry", "oswald_efficiency_factor", 1.)?,
             power: required("piston_engine", "max_rated_hp", HORSEPOWER)?
                 * c.optional_number("piston_engine", "power_scalar", 1.)?,
+            rated_rpm: c.optional_number("piston_engine", "max_rated_rpm", 2700.)?,
             prop_area: std::f64::consts::PI * diameter * diameter / 4.,
             tail_incidence: c
                 .optional_number("airplane_geometry", "htail_incidence", 0.)?
@@ -326,6 +329,7 @@ pub fn own_parameters() -> Parameters {
         chord: 1.6,
         efficiency: 0.8,
         power: 130000.,
+        rated_rpm: 2700.,
         prop_area: 3.,
         tail_incidence: 0.,
         controls: [1.; 4],

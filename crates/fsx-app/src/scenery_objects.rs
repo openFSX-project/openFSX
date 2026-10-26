@@ -195,7 +195,7 @@ pub fn add_generic_buildings(
         let at =
             |x: f32, y: f32, z: f32| [p[0] + x * cos + z * sin, p[1] + y, p[2] - x * sin + z * cos];
         let normal = |x: f32, y: f32, z: f32| [x * cos + z * sin, y, -x * sin + z * cos];
-        let mut face = |out: &mut Vec<[f32; 8]>, corners: [[f32; 3]; 4], n: [f32; 3]| {
+        let face = |out: &mut Vec<[f32; 8]>, corners: [[f32; 3]; 4], n: [f32; 3]| {
             let n = normal(n[0], n[1], n[2]);
             for i in [0, 1, 2, 0, 2, 3] {
                 let c = at(corners[i][0], corners[i][1], corners[i][2]);

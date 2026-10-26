@@ -276,14 +276,15 @@ static std::vector<uintptr_t> elements(const Module& module, uintptr_t header) {
     return out;
 }
 
-struct FrameInput {uint64_t sequence;double time;std::array<double,6> inputs;double local_seconds=0;};
+// inputs: IAS, baro feet, VS raw, pitch, bank, heading, (6 = none), engine RPM.
+struct FrameInput {uint64_t sequence;double time;std::array<double,8> inputs;double local_seconds=0;};
 static FrameInput parse_frame(const std::string& line, bool flight=false, bool clock=false) {
     std::istringstream stream(line);stream.imbue(std::locale::classic());
     std::string command;FrameInput frame{};
     if (!(stream>>command>>frame.sequence>>frame.time>>frame.inputs[0]>>frame.inputs[1]>>frame.inputs[2]) || command!="frame")
         throw std::runtime_error("Expected: frame SEQUENCE SECONDS IAS_KNOTS BARO_FEET VERTICAL_SPEED_RAW");
-    if (flight && !(stream>>frame.inputs[3]>>frame.inputs[4]>>frame.inputs[5]))
-        throw std::runtime_error("Flight frames also require PITCH_DEG BANK_DEG GYRO_HEADING_DEG");
+    if (flight && !(stream>>frame.inputs[3]>>frame.inputs[4]>>frame.inputs[5]>>frame.inputs[7]))
+        throw std::runtime_error("Flight frames also require PITCH_DEG BANK_DEG GYRO_HEADING_DEG ENGINE_RPM");
     if (clock && (!(stream>>frame.local_seconds) || !std::isfinite(frame.local_seconds) || frame.local_seconds<0 || frame.local_seconds>=86400)) throw std::runtime_error("Clock frames require finite local seconds of day in [0,86400).");
     std::string extra;if (stream>>extra) throw std::runtime_error("Trailing frame data.");
     if (!frame.sequence || !std::isfinite(frame.time) || frame.time<0. || frame.time>1e9
@@ -594,12 +595,13 @@ static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=fals
     InitializedModule cessna(library_path(root,"Cessna.dll"));
     InitializedModule c172(library_path(root,"Cessna172.dll"));
     auto bell=flight?std::make_unique<InitializedModule>(library_path(root,"Bell_206B.dll")):nullptr;
-    std::array<Binding,14> bindings{{
+    std::array<Binding,15> bindings{{
         {&c172,"Cessna172.dll","Airspeed",1001,61,0},
         {&cessna,"Cessna.dll","Altimeter",1033,74,1},
         {&cessna,"Cessna.dll","Altimeter",1032,74,1},
         {&cessna,"Cessna.dll","Altimeter",1031,74,1},
         {&cessna,"Cessna.dll","Vertical_Speed",5047,65,2},
+        {&c172,"Cessna172.dll","Tachometer",5023,390,7},
         {&cessna,"Cessna.dll","Heading_Indicator",4001,0,6,6,0},
         {&cessna,"Cessna.dll","Heading_Indicator",4001,0,6,6,1},
         {&cessna,"Cessna.dll","Heading_Indicator",4001,84,5,6,2},
@@ -610,7 +612,7 @@ static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=fals
         {bell.get(),"Bell_206B.dll","Attitude",2002,78,3,6,1},
         {bell.get(),"Bell_206B.dll","Attitude",2002,80,4,6,2}
     }};
-    const size_t count=flight?14:5;const int schema=clock?4:(flight?2:1);
+    const size_t count=flight?15:5;const int schema=clock?4:(flight?2:1);
     for (size_t i=0;i<count;++i) bindings[i].locate();
     auto clock_header=clock?gauge(c172.module,c172.linkage,"Clock"):0;
     auto clock_panels=clock?std::make_unique<ClockPanels>(c172,clock_header,0):nullptr;
@@ -620,7 +622,7 @@ static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=fals
         <<",\"libraries_loaded\":"<<(flight?3:2)<<",\"bindings\":"<<count<<",\"panel_services\":false";
     if(clock)std::cout<<",\"clock_connected\":true,\"string_bindings\":1,\"guarded_buffer\":true,\"clock_set\":true,\"clock_mouse\":true,\"fractional_clock\":true";
     std::cout<<'}'<<std::endl;
-    uint64_t sequence=0,evaluated=0;double time=-1.;std::array<double,6> inputs{};std::array<double,14> results{};
+    uint64_t sequence=0,evaluated=0;double time=-1.;std::array<double,8> inputs{};std::array<double,15> results{};
     double local_seconds=0;uint64_t clock_events=0;
     std::string line;
     while (true) {
@@ -655,7 +657,7 @@ static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=fals
         bool reused=frame.time==time;
         if (reused && (frame.inputs!=inputs || (clock && frame.local_seconds!=local_seconds))) throw std::runtime_error("Changed physics inputs at an unchanged simulation time.");
         if (!reused) {
-            for (size_t i=0;i<count;++i) results[i]=bindings[i].update(bindings[i].input<6?frame.inputs[bindings[i].input]:0.);
+            for (size_t i=0;i<count;++i) results[i]=bindings[i].update(bindings[i].input<8&&bindings[i].input!=6?frame.inputs[bindings[i].input]:0.);
             if(clock_binding){clock_panels->set_time(frame.local_seconds);clock_binding->update(static_cast<uint32_t>(frame.local_seconds));clock_panels->check();}
             ++evaluated;inputs=frame.inputs;time=frame.time;local_seconds=frame.local_seconds;
         }
@@ -665,7 +667,7 @@ static int frame_stream(const fs::path& root,Deadline& deadline,bool flight=fals
         for (size_t i=0;i<count;++i) {
             auto& b=bindings[i];if (i) std::cout<<',';
             std::cout<<"{\"library\":"<<json(b.library)<<",\"gauge\":"<<json(b.name)<<",\"resource\":"<<b.resource<<",\"token\":"<<b.token
-                <<",\"raw_input\":"<<(b.input<6?inputs[b.input]:0.)<<",\"callback_result\":"<<results[i];
+                <<",\"raw_input\":"<<(b.input<8&&b.input!=6?inputs[b.input]:0.)<<",\"callback_result\":"<<results[i];
             if (flight) std::cout<<",\"element_kind\":"<<b.kind<<",\"axis\":"<<b.axis<<",\"callback_called\":"<<(b.callback?"true":"false");
             std::cout<<'}';
         }
@@ -763,9 +765,9 @@ static int self_test() {
         if (!rejected) throw std::runtime_error("Invalid raw input accepted.");
     }
     auto frame=parse_frame("frame 1 0.25 75 500 -256");
-    if (frame.sequence!=1 || frame.time!=0.25 || frame.inputs!=std::array<double,6>{75.,500.,-256.,0.,0.,0.}) throw std::runtime_error("Synthetic frame protocol failed.");
-    auto flight=parse_frame("frame 1 0.25 75 500 -256 -10 -30 90",true);
-    if (flight.inputs!=std::array<double,6>{75.,500.,-256.,-10.,-30.,90.}) throw std::runtime_error("Synthetic flight protocol failed.");
+    if (frame.sequence!=1 || frame.time!=0.25 || frame.inputs!=std::array<double,8>{75.,500.,-256.,0.,0.,0.,0.,0.}) throw std::runtime_error("Synthetic frame protocol failed.");
+    auto flight=parse_frame("frame 1 0.25 75 500 -256 -10 -30 90 2400",true);
+    if (flight.inputs!=std::array<double,8>{75.,500.,-256.,-10.,-30.,90.,0.,2400.}) throw std::runtime_error("Synthetic flight protocol failed.");
     for (const char* bad:{"frame 1 0 75 500 0","frame 1 0 75 500 0 1 2 NaN","frame 1 0 75 500 0 1 2 3 extra"}) {
         bool rejected=false;try {parse_frame(bad,true);} catch (...) {rejected=true;}
         if (!rejected) throw std::runtime_error("Invalid flight frame accepted.");

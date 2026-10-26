@@ -385,7 +385,7 @@ fn run() -> Result<(), String> {
             first.clock.as_ref().unwrap().text == reset.clock.as_ref().unwrap().text,
             "Reset did not restore local clock origin",
         )?;
-        let inputs = [75., 500., 256., 0., 0., 90.];
+        let inputs = [75., 500., 256., 0., 0., 90., 0., 2400.];
         let mut clock_pixels = Vec::new();
         let mut fixed_results: Option<native_gauges::Frame> = None;
         for (i, time) in [0.75, 1.25, 61.25, 86401.25].into_iter().enumerate() {

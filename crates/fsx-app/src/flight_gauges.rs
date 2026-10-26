@@ -366,7 +366,7 @@ impl FlightGauges {
         self.display_dirty = true;
         Ok(())
     }
-    pub fn update_inputs(&mut self, time: f64, inputs: [f64; 6]) -> Result<Frame, String> {
+    pub fn update_inputs(&mut self, time: f64, inputs: [f64; 8]) -> Result<Frame, String> {
         if self.last_clock_time.is_some_and(|last| time < last) {
             if let Some((clock, _)) = &mut self.clock {
                 clock.reset();
@@ -398,6 +398,8 @@ impl FlightGauges {
                 attitude[0],
                 attitude[1],
                 attitude[2],
+                0.,
+                simulation.rpm,
             ],
         )
     }
@@ -575,7 +577,10 @@ impl FlightGauges {
             }
             appearance.bind_image(texture, preview.image)?;
         }
-        if drawn != 5 || sprites_drawn != 3 || strings_drawn != usize::from(self.clock.is_some()) {
+        if drawn != crate::native_gauges::BINDINGS.len()
+            || sprites_drawn != 3
+            || strings_drawn != usize::from(self.clock.is_some())
+        {
             return Err(
                 "Native flight profile did not draw all configured needles, sprites and strings"
                     .into(),

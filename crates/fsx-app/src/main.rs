@@ -225,6 +225,7 @@ impl App {
                 let (was_down, flaps) = self.sound_state;
                 audio.update(
                     audio::Cue {
+                        rpm: flight.simulation.rpm / flight.simulation.parameters.rated_rpm,
                         throttle: c.throttle,
                         airspeed: t.speed,
                         cruise_speed: flight.simulation.parameters.cruise_speed,
@@ -1725,7 +1726,7 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
                     .ok_or("Native gauges need the configured interior model")?;
                 gauges.apply(&frame, &interior.model, &mut interior.appearance, None)?;
             }
-            println!("Native C172 gauges: helper PID {}, sequence {}, time {}, evaluated {}; five needles and three attitude/heading sprites, ideal ISA/English units and ideal gyros; RPM, needle lag and full panel lifecycle remain unsupported.",gauges.pid(),frame.sequence,frame.time,frame.evaluated);
+            println!("Native C172 gauges: helper PID {}, sequence {}, time {}, evaluated {}; six needles (including the tachometer from simulated engine RPM) and three attitude/heading sprites, ideal ISA/English units and ideal gyros; needle lag and full panel lifecycle remain unsupported.",gauges.pid(),frame.sequence,frame.time,frame.evaluated);
         }
     }
     if let Some(path) = snapshot {
