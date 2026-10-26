@@ -4,6 +4,7 @@ use fsx_sim::{
     legacy_power::{self, Circuit, Context},
 };
 use fsx_vehicle::electrical::{Electrical, SourceDefaults};
+use fsx_vehicle::pitot_static::{LegacyPitotHeat, PitotStatic};
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
 fn boolean(v: &Value, key: &str) -> Result<bool, String> {
@@ -34,7 +35,8 @@ fn main() -> Result<(), String> {
     }
     let report: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     if report["schema"] != 1
-        || report["source"] != "bounded-original-pitot-activity"
+        || (report["source"] != "bounded-original-pitot-activity"
+            && report["source"] != "bounded-original-pitot-configuration")
         || report["sha256"] != "4bb9ef1b9669bb48676ef16ede667a2c590af27943eb34f03f09332a5417ae0e"
     {
         return Err("Unexpected pitot reference".into());
@@ -45,6 +47,50 @@ fn main() -> Result<(), String> {
         .ok_or("Invalid case budget")?;
     let config = Electrical::default()
         .with_legacy_circuit_defaults(SourceDefaults::FsxSteam62615SinglePiston)?;
+    if report["source"] == "bounded-original-pitot-configuration" {
+        for case in cases {
+            let text = if case["authored"].is_null() {
+                "[pitot_static]".to_string()
+            } else {
+                format!("[pitot_static]\npitot_heat={}", number(case, "authored")?)
+            };
+            let parsed = PitotStatic::parse(&text)?;
+            let legacy = if case["legacy_field"].is_null() {
+                LegacyPitotHeat::Missing
+            } else {
+                LegacyPitotHeat::Value(boolean(case, "legacy_field")?)
+            };
+            let resolved = parsed.resolve(legacy)?;
+            if resolved.rate.map(f64::from) != case["heater_rate"].as_f64() {
+                return Err("Original configured pitot rate differs".into());
+            }
+            let writes = case["recorded_write_back"]
+                .as_array()
+                .filter(|v| v.len() <= 1)
+                .ok_or("Invalid write-back array")?;
+            if writes.first().and_then(Value::as_f64) != resolved.write_back {
+                return Err("Original requested pitot write-back differs".into());
+            }
+            let mut state = ConsumerState::fresh(&config);
+            state.update_pitot_activity(Some(true), resolved.rate, Some(true))?;
+            if state.records()[7].active != Some(u32::from(number(case, "heater_rate")? > 0.)) {
+                return Err("Configured pitot activity differs".into());
+            }
+        }
+        let unresolved = PitotStatic::default().resolve(LegacyPitotHeat::Unknown)?;
+        if unresolved.rate.is_some() || unresolved.write_back.is_some() {
+            return Err("Unknown legacy provider became missing/default".into());
+        }
+        for value in ["NaN", "inf", "1e300", "bad"] {
+            if PitotStatic::parse(&format!("[pitot_static]\npitot_heat={value}")).is_ok() {
+                return Err("Invalid pitot configuration accepted".into());
+            }
+        }
+        fs::create_dir(&output).map_err(|e| e.to_string())?;
+        fs::write(output.join("report.json"),serde_json::to_vec_pretty(&json!({"schema":1,"configuration_cases":cases.len(),"all_rates_and_requested_writes_equal":true,"configuration_drives_activity":true,"unknown_legacy_stays_unknown":true,"user_files_modified":false})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+        println!("PASS: {} original pitot configurations/write requests equal; configured activity and unknown provider checked",cases.len());
+        return Ok(());
+    }
     for case in cases {
         let c = &case["context"];
         let context = Context {

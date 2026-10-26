@@ -1563,3 +1563,28 @@ installed and flight-history checks label that input explicitly. Availability
 is obtained separately from the checked power predicate, not inferred from a
 switch or generator admission. Viewer activation timing and the physical heater
 temperature/icing model remain open.
+
+### Pitot heater configuration
+
+```powershell
+python scripts/check-pitot-configuration.py FSX/sim1.dll target/pitot-configuration-reference
+cargo run -p fsx-app --example legacy-pitot-activity-check --locked -- target/pitot-configuration-reference/report.json target/pitot-configuration-comparison
+```
+
+The original initializer reads [pitot_static] pitot_heat separately from the
+[electrical] pitot_heat circuit triple. Nonnegative values become float32 heater
+rate; zero is retained as disabled. Missing/negative inputs invoke a legacy
+field-read service (field 0x324). False/true yields 0/1; a missing field defaults
+to 1. This fallback also calls the original CFG write service with the resolved
+boolean value. The guarded reference records the write request, never writing
+user files. 21 cases compare rate, requested persistence and subsequent activity.
+
+fsx_vehicle::pitot_static::PitotStatic parses authored input and is carried in
+aircraft Parameters. resolve accepts LegacyPitotHeat::Unknown/Missing/Value:
+unknown field provenance is not treated as a failed/missing lookup. It returns
+optional float32 rate and optional write_back data; persistence is caller-owned.
+The supported parser domain rejects nonfinite inputs and positive f32 overflow;
+it does not claim the original external CFG parser's complete validation policy.
+Installed C172 has authored rate 1.0 and requires no fallback. Its load checker
+now consumes that parsed value. The actual legacy field reader, live request/
+power scheduling and thermal/icing dynamics remain separate unfinished work.

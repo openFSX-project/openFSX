@@ -8,6 +8,7 @@ pub mod gauge;
 pub mod ground;
 pub mod mass;
 pub mod panel;
+pub mod pitot_static;
 pub mod realism;
 pub mod xml_gauge;
 pub mod xml_text;

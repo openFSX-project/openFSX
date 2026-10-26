@@ -10,6 +10,32 @@ changes. Keep the full FSX 1:1 objective active until its original scope is met.
 
 ## Current stage — 26 October 2026
 
+After `b582b43`, authored [pitot_static] pitot_heat and its pinned initializer
+fallback are ported. Original code copies nonnegative CFG values into float32
+heater rate (zero disables); negative/missing CFG invokes a legacy field-read
+service for field 0x324. A known false/true field becomes 0/1; a missing field
+defaults to 1. The original then requests CFG write-back for that fallback.
+The reference records those calls without changing any user files. The actual
+legacy field storage/parser and full heater thermal/icing model remain unported.
+
+21 original initializer calls compare exactly in
+target/legacy-pitot-configuration-comparison-01/report.json, using
+target/legacy-pitot-configuration-reference-01/report.json. PitotStatic parses
+authored data and resolves LegacyPitotHeat::Value/Missing/Unknown distinctly.
+Unknown is not missing and does not select the fallback default. Resolution
+returns rate and requested write_back data; no implicit file write occurs.
+Finite authored nonnegative values retain float32 rounding; nonfinite/positive
+overflow are rejected as the supported input domain. Aircraft Parameters carries
+the parsed input. Installed C172's authored 1.0 now drives the activity/load check
+without a substituted test coefficient or assumed legacy field.
+
+Workspace tests pass in target/legacy-pitot-configuration-tests-01.log; installed
+checks pass in target/legacy-pitot-configuration-installed-01.log; all 768
+activity-prefix cases still pass. Formatting/architecture/docs checks pass.
+Automatic live switch/power/mode/RPM providers and thermal/icing remain open.
+The full Goal stays active; this stage is committed and pushed after validation.
+
+### Previous pitot-activity stage — 26 October 2026
 After `b13934f`, the original pitot-heat activity prefix is ported. A requested
 heater with positive float32 heater-rate input queries circuit 7 availability;
 it writes active=1 only when that query permits. Off requests, nonpositive rate

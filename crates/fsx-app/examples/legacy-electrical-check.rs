@@ -511,7 +511,15 @@ fn main() -> Result<(), String> {
         fsx_sim::legacy_consumers::sum(equipment.records())? == Some(0.),
         "Fresh equipment activity was not zero",
     )?;
-    equipment.update_pitot_activity(Some(true), Some(1.), Some(true))?;
+    let pitot_configuration = aircraft
+        .parameters
+        .pitot_static
+        .resolve(fsx_vehicle::pitot_static::LegacyPitotHeat::Unknown)?;
+    ensure(
+        pitot_configuration.rate == Some(1.) && pitot_configuration.write_back.is_none(),
+        "Installed C172 pitot coefficient missing or fallback unexpectedly required",
+    )?;
+    equipment.update_pitot_activity(Some(true), pitot_configuration.rate, Some(true))?;
     equipment.set_active(22, Some(true))?;
     ensure(
         fsx_sim::legacy_consumers::sum(equipment.records())?
