@@ -144,8 +144,8 @@ fn asset(
 enum Action {
     Preview(usize),
     PreviewVisible(bool),
-    /// Catalog index and optional ICAO start airport.
-    Fly(usize, Option<String>),
+    /// Catalog index, optional ICAO start airport and optional HH:MM time.
+    Fly(usize, Option<String>, Option<String>),
     Exit,
     Minimize,
     Drag,
@@ -225,12 +225,27 @@ impl ApplicationHandler<Action> for Shell {
                             .and_then(|s| s.parse().ok())
                             .map(Action::Preview),
                         _ => message.strip_prefix("fly:").and_then(|s| {
-                            let (index, icao) = s.split_once(':').unwrap_or((s, ""));
+                            let (index, rest) = s.split_once(':').unwrap_or((s, ""));
+                            let (icao, time) =
+                                rest.split_once(':').map_or((rest, ""), |(a, t)| (a, t));
                             let icao = icao.trim().to_ascii_uppercase();
+                            // HH:MM arrives as "HH:MM" after the airport field.
+                            let time = time.trim();
+                            let clock = (time.len() == 5
+                                && time.as_bytes()[2] == b':'
+                                && time
+                                    .bytes()
+                                    .enumerate()
+                                    .all(|(i, b)| i == 2 || b.is_ascii_digit()))
+                            .then(|| time.to_owned());
                             let valid = !icao.is_empty()
                                 && icao.len() <= 8
                                 && icao.bytes().all(|b| b.is_ascii_alphanumeric());
-                            Some(Action::Fly(index.parse().ok()?, valid.then_some(icao)))
+                            Some(Action::Fly(
+                                index.parse().ok()?,
+                                valid.then_some(icao),
+                                clock,
+                            ))
                         }),
                     };
                     if let Some(action) = action {
@@ -325,7 +340,7 @@ impl ApplicationHandler<Action> for Shell {
                     let _ = w.drag_window();
                 }
             }
-            Action::Fly(index, airport) => {
+            Action::Fly(index, airport, clock) => {
                 if self.child.is_some() {
                     return;
                 }
@@ -347,6 +362,7 @@ impl ApplicationHandler<Action> for Shell {
                         .arg(entry.variant.to_string())
                         .args(native_gauge_arguments())
                         .args(airport.iter().flat_map(|icao| ["--airport", icao.as_str()]))
+                        .args(clock.iter().flat_map(|t| ["--time", t.as_str()]))
                         .stdout(Stdio::null())
                         .stderr(Stdio::piped())
                         .creation_flags(0x08000000)

@@ -559,6 +559,8 @@ struct World {
     origin: (f64, f64),
     /// Mean-sea-level elevation of the origin plane.
     base: f64,
+    /// Local time of day in hours (0..24), fixed for the flight.
+    hours: f64,
 }
 impl World {
     /// Runways within 25 km and terrain within +-40 km of a local north/east centre.
@@ -668,7 +670,14 @@ impl World {
             (surroundings - airports).as_secs_f64(),
             (started.elapsed() - surroundings).as_secs_f64()
         );
+        let lights = if night_lights(self.hours) {
+            runway_lights(&runways)
+        } else {
+            Vec::new()
+        };
         fsx_render::Ground {
+            lights,
+            tint: day_tint(self.hours),
             runways,
             terrain,
             sky,
@@ -800,9 +809,10 @@ impl World {
         let texture = self.root.join("Texture");
         let load = |name: &str| fsx_render::TextureImage::load(&texture.join(name)).ok();
         // 32-bit BI_RGB sky strips use the explicit BGRA path; the sky is opaque.
-        let mut gradient = std::fs::read(texture.join("sky_noon_5.bmp"))
-            .ok()
-            .and_then(|b| fsx_render::TextureImage::bmp_alpha(&b).ok())?;
+        let mut gradient =
+            std::fs::read(texture.join(format!("sky_{}_5.bmp", sky_period(self.hours))))
+                .ok()
+                .and_then(|b| fsx_render::TextureImage::bmp_alpha(&b).ok())?;
         gradient.rgba.chunks_mut(4).for_each(|p| p[3] = 255);
         let sprites = load("cumulus01.bmp")?;
         let base = (terrain_top + 500.).max(1500.);
@@ -850,6 +860,7 @@ impl World {
 fn airport_scenery(
     aircraft_folder: &Path,
     icao: &str,
+    hours: f64,
 ) -> Result<(fsx_scenery::catalog::Start, fsx_render::Ground, World), String> {
     let canonical = aircraft_folder.canonicalize().map_err(|e| e.to_string())?;
     let root = canonical
@@ -880,6 +891,7 @@ fn airport_scenery(
         root: root.to_path_buf(),
         origin: (start.latitude, start.longitude),
         base: start.altitude,
+        hours,
         catalog: Arc::new(catalog),
         scenery: Arc::new(LazyIndex::spawn(root.to_path_buf())),
         textures: Arc::new(scenery_objects::texture_index(root)),
@@ -1054,6 +1066,84 @@ impl LazyIndex {
                 .unwrap_or_else(|| fsx_scenery::objects::SceneryIndex::build(Path::new("")))
         })
     }
+}
+/// FSX sky texture period for a local hour (Texture/sky_<period>_N.bmp).
+fn sky_period(hours: f64) -> &'static str {
+    match hours.rem_euclid(24.) {
+        h if h < 4.5 => "midnight",
+        h if h < 5. => "predawn1",
+        h if h < 5.5 => "predawn2",
+        h if h < 6. => "dawn",
+        h if h < 6.5 => "postdawn1",
+        h if h < 7. => "postdawn2",
+        h if h < 10. => "morning",
+        h if h < 14. => "noon",
+        h if h < 17. => "afternoon",
+        h if h < 17.5 => "presunset1",
+        h if h < 18. => "presunset2",
+        h if h < 18.5 => "sunset",
+        h if h < 19. => "postsunset1",
+        h if h < 19.5 => "postsunset2",
+        _ => "midnight",
+    }
+}
+/// Light tint on lit surfaces: full daylight, warm low sun, dark blue night.
+/// Fixed hours, not computed from date, latitude or the sun position.
+fn day_tint(hours: f64) -> [f32; 3] {
+    let h = hours.rem_euclid(24.) as f32;
+    // Linear values: about 15 % displayed brightness after sRGB encoding.
+    let night = [0.018, 0.02, 0.035];
+    let warm = [0.95, 0.70, 0.52];
+    let day = [1., 1., 1.];
+    let mix = |a: [f32; 3], b: [f32; 3], t: f32| {
+        std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t.clamp(0., 1.))
+    };
+    match h {
+        h if h < 5. => night,
+        h if h < 6.5 => mix(night, warm, (h - 5.) / 1.5),
+        h if h < 8. => mix(warm, day, (h - 6.5) / 1.5),
+        h if h < 17. => day,
+        h if h < 18.5 => mix(day, warm, (h - 17.) / 1.5),
+        h if h < 20. => mix(warm, night, (h - 18.5) / 1.5),
+        _ => night,
+    }
+}
+fn night_lights(hours: f64) -> bool {
+    let h = hours.rem_euclid(24.);
+    !(7. ..18.).contains(&h)
+}
+/// Runway edge lights every 60 m (white), threshold green, far end red,
+/// for both directions on hard runways.
+fn runway_lights(runways: &[fsx_render::GroundRunway]) -> Vec<([f32; 3], u8)> {
+    let mut out = Vec::new();
+    for r in runways.iter().filter(|r| r.hard) {
+        let h = r.heading.to_radians();
+        let (along, across) = ([h.sin(), h.cos()], [h.cos(), -h.sin()]);
+        let at = |a: f32, c: f32| {
+            [
+                r.east + along[0] * a + across[0] * c,
+                r.height,
+                r.north + along[1] * a + across[1] * c,
+            ]
+        };
+        let (l, w) = (r.length / 2., r.width / 2. + 1.5);
+        let mut a = -l;
+        while a <= l {
+            out.push((at(a, -w), 0));
+            out.push((at(a, w), 0));
+            a += 60.;
+        }
+        let mut c = -w;
+        while c <= w {
+            // Green facing arrivals at both thresholds, red just inside the ends.
+            out.push((at(-l - 2., c), 1));
+            out.push((at(l + 2., c), 1));
+            out.push((at(-l + 2., c), 2));
+            out.push((at(l - 2., c), 2));
+            c += 4.;
+        }
+    }
+    out
 }
 /// Installed runway surface textures, indexed by runway_surface().
 const RUNWAY_TEXTURES: [&str; 6] = [
@@ -1322,6 +1412,7 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
     let (mut fly, mut variant, mut windows_1252, mut seconds) = (false, 0u32, false, 0f64);
     let mut ground = false;
     let mut airport = None;
+    let mut hours = 12.;
     let mut airborne = false;
     let mut cockpit = false;
     let mut native_gauges_enabled = false;
@@ -1479,6 +1570,21 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
             Some("--fly") => fly = true,
             Some("--ground") => ground = true,
             Some("--airborne") => airborne = true,
+            Some("--time") => {
+                let text = args
+                    .next()
+                    .and_then(|a| a.into_string().ok())
+                    .ok_or("Expected --time HH:MM")?;
+                let (h, m) = text.split_once(':').ok_or("Expected --time HH:MM")?;
+                let (h, m): (f64, f64) = (
+                    h.parse().map_err(|_| "Invalid --time hour")?,
+                    m.parse().map_err(|_| "Invalid --time minute")?,
+                );
+                if !(0. ..24.).contains(&h) || !(0. ..60.).contains(&m) {
+                    return Err("--time must be between 00:00 and 23:59".into());
+                }
+                hours = h + m / 60.;
+            }
             Some("--airport") => {
                 airport = Some(
                     args.next()
@@ -1836,7 +1942,7 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
         None
     };
     let scenery = match (&airport, &aircraft) {
-        (Some(icao), Some(_)) => Some(airport_scenery(&path, icao)?),
+        (Some(icao), Some(_)) => Some(airport_scenery(&path, icao, hours)?),
         (Some(_), None) => return Err("--airport requires --fly".into()),
         _ => None,
     };
@@ -2013,7 +2119,7 @@ mod world_tests {
             return;
         }
         let aircraft = root.join("SimObjects/Airplanes/C172");
-        let (_, first, world) = airport_scenery(&aircraft, "KSEA").unwrap();
+        let (_, first, world) = airport_scenery(&aircraft, "KSEA", 12.).unwrap();
         let moved = world.ground((30_000., 0.));
         let (a, b) = (first.terrain.unwrap(), moved.terrain.unwrap());
         assert!((b.north - a.north - 30_000.).abs() < 1.);

@@ -278,6 +278,8 @@ pub struct Gpu {
     ground: Option<Ground>,
     /// Haze colour and density per metre; zero density disables it.
     fog: [f32; 4],
+    /// Time-of-day tint for lit surfaces (rgb, unused w).
+    light: [f32; 4],
     pub hud: Option<crate::hud::Readout>,
     hud_pipeline: wgpu::RenderPipeline,
     hud_vertex: wgpu::Buffer,
@@ -294,6 +296,11 @@ pub struct Ground {
     pub trees: Option<Trees>,
     /// Runway surface textures (FSX Texture/runway*), tiled along each runway.
     pub surfaces: Vec<Image>,
+    /// Point lights drawn self-luminous: position (east, up, north) and colour
+    /// index (0 white, 1 green, 2 red, 3 blue).
+    pub lights: Vec<([f32; 3], u8)>,
+    /// Time-of-day tint for lit surfaces.
+    pub tint: [f32; 3],
     /// Placed scenery models already transformed to world space.
     pub objects: Option<StaticScene>,
     /// Apron and taxiway triangles in world space (east, up, north).
@@ -561,7 +568,7 @@ impl Gpu {
         }
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Camera matrix"),
-            size: 160,
+            size: 176,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -747,6 +754,7 @@ impl Gpu {
             flight,
             ground: None,
             fog: [0.; 4],
+            light: [1., 1., 1., 0.],
             hud: None,
             hud_pipeline,
             hud_vertex,
@@ -926,6 +934,22 @@ impl Gpu {
                 alpha_threshold: 0.,
                 clamp_texture: false,
             });
+            // Self-luminous light colours: white, green, red, blue.
+            for diffuse in [
+                [1., 0.97, 0.85, 1.],
+                [0.2, 1., 0.35, 1.],
+                [1., 0.15, 0.1, 1.],
+                [0.25, 0.45, 1., 1.],
+            ] {
+                materials.push(Material {
+                    diffuse,
+                    diffuse_texture: None,
+                    alpha_blend: false,
+                    alpha_function: 0,
+                    alpha_threshold: 0.,
+                    clamp_texture: false,
+                });
+            }
             for &texture in &surface_textures {
                 materials.push(Material {
                     diffuse: [1.; 4],
@@ -1123,7 +1147,7 @@ impl Gpu {
                     visible: true,
                     range: first..vertices.len() as u32,
                     material: if surface_textures.len() > 1 {
-                        ground_material + 10 + 1
+                        ground_material + 14 + 1
                     } else {
                         ground_material + 1
                     },
@@ -1146,6 +1170,44 @@ impl Gpu {
                     world_space: true,
                 });
             }
+            if let Some(g) = ground.filter(|g| !g.lights.is_empty()) {
+                // Each light: a small upright cross plus a flat square, flagged
+                // self-luminous (model_space 2: no tint or haze).
+                for colour in 0..4u8 {
+                    let first = vertices.len() as u32;
+                    for (p, _) in g.lights.iter().filter(|(_, c)| *c == colour) {
+                        let r = 0.45f32;
+                        let quads: [[[f32; 3]; 4]; 3] = [
+                            [[-r, 0., 0.], [r, 0., 0.], [r, 2. * r, 0.], [-r, 2. * r, 0.]],
+                            [[0., 0., -r], [0., 0., r], [0., 2. * r, r], [0., 2. * r, -r]],
+                            [[-r, 0.3, -r], [r, 0.3, -r], [r, 0.3, r], [-r, 0.3, r]],
+                        ];
+                        for q in quads {
+                            for i in [0, 1, 2, 0, 2, 3] {
+                                vertices.push([
+                                    p[0] + q[i][0],
+                                    p[1] + q[i][1],
+                                    p[2] + q[i][2],
+                                    0.,
+                                    1.,
+                                    0.,
+                                    0.,
+                                    0.,
+                                    2.,
+                                ]);
+                            }
+                        }
+                    }
+                    draws.push(GpuDraw {
+                        visible: true,
+                        range: first..vertices.len() as u32,
+                        material: ground_material + 10 + usize::from(colour),
+                        center: [0.; 3],
+                        blended: false,
+                        world_space: true,
+                    });
+                }
+            }
             if let Some(o) = objects {
                 let base = vertices.len() as u32;
                 vertices.extend(
@@ -1162,7 +1224,7 @@ impl Gpu {
                     draws.push(GpuDraw {
                         visible: true,
                         range: base + range.start..base + range.end,
-                        material: ground_material + 10 + surface_textures.len() + material,
+                        material: ground_material + 14 + surface_textures.len() + material,
                         center: [first[0], first[1], first[2]],
                         blended: o.materials.get(*material).is_some_and(|m| m.alpha_blend),
                         world_space: true,
@@ -1350,7 +1412,7 @@ impl Gpu {
                 }
                 // Textured surfaces: u spans the width, v repeats every 1.5 widths.
                 for k in 0..surface_textures.len() {
-                    draw(&mut vertices, ground_material + 10 + k, &mut |v| {
+                    draw(&mut vertices, ground_material + 14 + k, &mut |v| {
                         for r in ground.runways.iter().filter(|r| r.surface == Some(k as u8)) {
                             let (l, w) = (r.length / 2., r.width / 2.);
                             let first = v.len();
@@ -1521,6 +1583,9 @@ impl Gpu {
                 let c = c.map(|v| v.powf(2.2));
                 [c[0], c[1], c[2], 1. / 24_000.]
             });
+        self.light = ground
+            .as_ref()
+            .map_or([1., 1., 1., 0.], |g| [g.tint[0], g.tint[1], g.tint[2], 0.]);
         self.ground = ground;
         self.replace_scene(geometry, appearance)
     }
@@ -1673,7 +1738,8 @@ impl Gpu {
                     .chain(self.model_matrix)
                     .chain(orbit.eye())
                     .chain([0.])
-                    .chain(self.fog),
+                    .chain(self.fog)
+                    .chain(self.light),
             ),
         );
         let mut encoder = self.device.create_command_encoder(&Default::default());

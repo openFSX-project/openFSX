@@ -102,7 +102,8 @@ pub fn camera(
         std::array::from_fn(|i| eye[i] + forward[i]),
         up,
         0.01,
-        20000.,
+        // Reversed-Z keeps precision across 0.01 m .. 90 km.
+        90000.,
         look.fov,
     )?);
     Ok(())

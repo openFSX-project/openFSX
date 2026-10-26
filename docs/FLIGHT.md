@@ -140,6 +140,15 @@ a background thread while terrain decodes) and then reads just the object
 subsections whose QMID cell overlaps the area; the log prints per-stage times.
 A KSEA/LOWI start takes about 5 s in a release build.
 
+`--time HH:MM` (or CURRENT TIME in the menu) sets a fixed local time: the sky
+uses the matching installed `sky_<period>_5.bmp` (midnight, predawn, dawn,
+morning, noon, afternoon, presunset, sunset, postsunset), haze takes its horizon
+colour, and lit surfaces get a tint from full daylight through warm low sun to
+dark blue night; the aircraft keeps 30 % panel lighting. From 18:00 to 07:00
+hard runways get self-luminous edge lights every 60 m, green thresholds and red
+ends. Sun position, date/latitude, seasons, landing/taxi lights and night
+textures are not simulated.
+
 `--airborne` with `--airport` starts trimmed at 90 kt and 300 m over the runway
 threshold, along the runway heading; R returns there.
 The ground uses the stock summer land-class textures: worldlc.bgl classes are
