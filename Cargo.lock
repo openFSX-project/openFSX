@@ -860,6 +860,7 @@ dependencies = [
  "fsx-geometry",
  "fsx-model",
  "fsx-render",
+ "fsx-scenery",
  "fsx-script",
  "fsx-sim",
  "fsx-ui",
@@ -909,6 +910,10 @@ dependencies = [
  "wgpu",
  "winit",
 ]
+
+[[package]]
+name = "fsx-scenery"
+version = "0.1.0"
 
 [[package]]
 name = "fsx-script"

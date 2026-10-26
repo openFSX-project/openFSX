@@ -144,7 +144,8 @@ fn asset(
 enum Action {
     Preview(usize),
     PreviewVisible(bool),
-    Fly(usize),
+    /// Catalog index and optional ICAO start airport.
+    Fly(usize, Option<String>),
     Exit,
     Minimize,
     Drag,
@@ -223,10 +224,14 @@ impl ApplicationHandler<Action> for Shell {
                             .strip_prefix("preview:")
                             .and_then(|s| s.parse().ok())
                             .map(Action::Preview),
-                        _ => message
-                            .strip_prefix("fly:")
-                            .and_then(|s| s.parse().ok())
-                            .map(Action::Fly),
+                        _ => message.strip_prefix("fly:").and_then(|s| {
+                            let (index, icao) = s.split_once(':').unwrap_or((s, ""));
+                            let icao = icao.trim().to_ascii_uppercase();
+                            let valid = !icao.is_empty()
+                                && icao.len() <= 8
+                                && icao.bytes().all(|b| b.is_ascii_alphanumeric());
+                            Some(Action::Fly(index.parse().ok()?, valid.then_some(icao)))
+                        }),
                     };
                     if let Some(action) = action {
                         let _ = proxy.send_event(action);
@@ -320,7 +325,7 @@ impl ApplicationHandler<Action> for Shell {
                     let _ = w.drag_window();
                 }
             }
-            Action::Fly(index) => {
+            Action::Fly(index, airport) => {
                 if self.child.is_some() {
                     return;
                 }
@@ -341,6 +346,7 @@ impl ApplicationHandler<Action> for Shell {
                         ])
                         .arg(entry.variant.to_string())
                         .args(native_gauge_arguments())
+                        .args(airport.iter().flat_map(|icao| ["--airport", icao.as_str()]))
                         .stdout(Stdio::null())
                         .stderr(Stdio::piped())
                         .creation_flags(0x08000000)

@@ -1629,3 +1629,19 @@ ambient subtracts 3*dt, and the stored value is clamped to [ambient, 560].
 432 cases cover isolated grids and retained 60-frame sequences; Rust matches
 exactly. Intervals outside (0, 1/60] and nonfinite inputs are rejected. Unknown
 providers produce unknown temperature rather than a default.
+
+### BGL airports (fsx-scenery)
+
+FSX BGL files start with magic 0x19920201; the section count is at 0x14 and
+20-byte section headers follow the 0x38-byte file header (type, flags, subsection
+count, subsection-table offset, table size). Each 16-byte subsection header gives
+record count, data offset and size. Section 0x03 holds airport records (id 0x3C,
+0x38-byte header: runway/COM/start counts, packed longitude/latitude, altitude in
+millimetres, tower position, magnetic variation, base-38 ICAO at 0x28) followed by
+subrecords; 0x19 is the name and 0x04 a runway (surface, end numbers and
+designators, centre position/altitude, float length/width/true heading in metres
+and degrees). Longitude = raw*360/(3*2^28)-180, latitude = 90-raw*180/2^29.
+fsx-scenery decodes these from every Scenery/*/scenery/APX*.bgl (24,490 stock
+airports) with bounded, truncation-checked parsing. Terrain elevation, land class,
+taxiways, aprons, lights and scenery objects are not decoded yet.
+

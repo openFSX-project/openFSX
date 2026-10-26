@@ -48,6 +48,7 @@ struct App {
     gauges: Option<flight_gauges::FlightGauges>,
     gamepad: Option<gamepad::Gamepad>,
     audio: Option<audio::Audio>,
+    ground: Option<fsx_render::Ground>,
     /// Previous wheel contact and flap deflection, for sound events.
     sound_state: (bool, f64),
 }
@@ -303,6 +304,13 @@ impl ApplicationHandler for App {
                 size.width.max(1),
                 size.height.max(1),
             ))?);
+            if let (Some(gpu), Some(ground)) = (&mut self.gpu, &self.ground) {
+                gpu.set_ground(
+                    Some(ground.clone()),
+                    &self.visual.geometry,
+                    &self.visual.appearance,
+                )?;
+            }
             window.request_redraw();
             self.window = Some(window);
             self.scrub(0.)?;
@@ -488,6 +496,57 @@ impl ApplicationHandler for App {
     }
 }
 
+/// Runways of the chosen airport and its neighbours, relative to the takeoff
+/// threshold, which becomes the local flight origin.
+fn airport_scenery(
+    aircraft_folder: &Path,
+    icao: &str,
+) -> Result<(fsx_scenery::catalog::Start, fsx_render::Ground), String> {
+    let canonical = aircraft_folder.canonicalize().map_err(|e| e.to_string())?;
+    let root = canonical
+        .ancestors()
+        .find(|p| p.join("fsx.exe").is_file() && p.join("Scenery").is_dir())
+        .ok_or("--airport needs an aircraft inside the FSX installation")?;
+    let (catalog, failed) = fsx_scenery::catalog::Catalog::load(root)?;
+    if failed > 0 {
+        eprintln!("{failed} airport BGL files could not be decoded");
+    }
+    let airport = catalog
+        .find(icao)
+        .ok_or_else(|| format!("Airport {icao} not found in installed scenery"))?;
+    let start = airport
+        .default_start()
+        .ok_or_else(|| format!("Airport {icao} has no runways"))?;
+    let origin = (start.latitude, start.longitude);
+    let mut runways = Vec::new();
+    for a in &catalog.airports {
+        let (n, e) = fsx_scenery::catalog::local(origin, (a.latitude, a.longitude));
+        if n.hypot(e) > 25_000. {
+            continue;
+        }
+        for r in &a.runways {
+            let (north, east) = fsx_scenery::catalog::local(origin, (r.latitude, r.longitude));
+            runways.push(fsx_render::GroundRunway {
+                east: east as f32,
+                north: north as f32,
+                heading: r.heading as f32,
+                length: r.length as f32,
+                width: r.width as f32,
+                hard: r.hard(),
+            });
+        }
+    }
+    println!(
+        "Airport {} {}: runway {} heading {:.0}°, field elevation {:.0} m; {} runways within 25 km. Terrain is flat at field elevation.",
+        airport.icao,
+        airport.name.as_deref().unwrap_or(""),
+        start.runway,
+        start.heading,
+        start.altitude,
+        runways.len()
+    );
+    Ok((start, fsx_render::Ground { runways }))
+}
 fn run_menu(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -539,6 +598,7 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
     let (mut texture_dir, mut no_textures) = (None, false);
     let (mut fly, mut variant, mut windows_1252, mut seconds) = (false, 0u32, false, 0f64);
     let mut ground = false;
+    let mut airport = None;
     let mut cockpit = false;
     let mut native_gauges_enabled = false;
     let mut gauge_host = None;
@@ -694,6 +754,14 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
             Some("--no-textures") => no_textures = true,
             Some("--fly") => fly = true,
             Some("--ground") => ground = true,
+            Some("--airport") => {
+                airport = Some(
+                    args.next()
+                        .and_then(|a| a.into_string().ok())
+                        .ok_or("Expected an airport ICAO code")?,
+                );
+                ground = true;
+            }
             Some("--cockpit") => cockpit = true,
             Some("--menu") => menu = true,
             Some("--debug-hud") => debug_hud = true,
@@ -1042,9 +1110,21 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
     } else {
         None
     };
+    let scenery = match (&airport, &aircraft) {
+        (Some(icao), Some(_)) => Some(airport_scenery(&path, icao)?),
+        (Some(_), None) => return Err("--airport requires --fly".into()),
+        _ => None,
+    };
     let mut flight = aircraft
         .map(|a| {
-            if ground {
+            if let Some((start, _)) = &scenery {
+                FlightSession::on_runway(a.parameters, [0., 0.], start.heading.to_radians()).map(
+                    |mut f| {
+                        f.set_field_elevation(start.altitude);
+                        f
+                    },
+                )
+            } else if ground {
                 FlightSession::on_ground(a.parameters)
             } else {
                 FlightSession::new(a.parameters)
@@ -1109,6 +1189,9 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
             960,
             720,
         ))?;
+        if let Some((_, ground)) = &scenery {
+            gpu.set_ground(Some(ground.clone()), &geometry, &appearance)?;
+        }
         if let Some(flight) = &flight {
             gpu.model_matrix = flight.model_matrix();
             gpu.hud = if debug_hud {
@@ -1165,6 +1248,7 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
         gamepad,
         audio,
         sound_state: (true, 0.),
+        ground: scenery.map(|(_, g)| g),
     };
     EventLoop::new()
         .map_err(|e| e.to_string())?

@@ -47,6 +47,14 @@ initial trim can produce a large nose-up transient and loss of speed. Initial
 runway trim comes from a 65 kt / 300 m level-trim solve; it is not a C172 POH
 takeoff-trim specification. R resets to the selected ground or airborne start.
 
+Add **--airport ICAO** (or pick an airport in the menu's CURRENT LOCATION) to
+start on the threshold of that airport's longest hard runway, parking brake set.
+Runways of every airport within 25 km are drawn from the installed BGL files with
+centreline, edge and threshold markings. The world is a flat plane at field
+elevation; reported and instrument altitude include that elevation, while air
+density still uses height above the plane. Terrain, buildings and taxiways are
+not loaded yet.
+
 ## Controls
 
 | Key | Action |

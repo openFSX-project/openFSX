@@ -17,7 +17,9 @@ sim1 0x20B45A0A..0x20B45B3E (ice fraction at owner+0x4E8, filtered output at
 virtual cockpit with live native gauges when the helper exists, graceful
 exterior/static-panel fallback, CFG-driven flaps (F5–F8) and game-controller
 input. See FLIGHT.md for the flap approximation. Playable stage 2 adds
-sound.cfg engine/event audio (FLIGHT.md). Next: FSX terrain/scenery (BGL).
+sound.cfg engine/event audio (FLIGHT.md). Stage 3 adds fsx-scenery: BGL airport/
+runway decoding, --airport and menu location starts (FORMATS.md, FLIGHT.md).
+Next: terrain elevation and land-class textures (compressed BGL sections).
 
 After `954710c`, the original pitot thermal prefix is ported up to temperature
 storage, before icing. scripts/check-pitot-thermal.py executes the pinned original

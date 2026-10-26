@@ -51,24 +51,32 @@ pub struct FlightSession {
     pending_presses: HashSet<KeyCode>,
     accumulator: f64,
     initial: Parameters,
-    initial_ground: bool,
+    initial_ground: Option<([f64; 2], f64)>,
 }
 impl FlightSession {
     pub fn new(parameters: Parameters) -> Result<Self, String> {
-        Self::with_start(parameters, false)
+        Self::with_start(parameters, None)
     }
     pub fn on_ground(parameters: Parameters) -> Result<Self, String> {
-        Self::with_start(parameters, true)
+        Self::with_start(parameters, Some(([-400., 0.], 0.)))
     }
-    fn with_start(parameters: Parameters, ground: bool) -> Result<Self, String> {
+    /// Runway start at local north/east metres facing a true heading (radians).
+    pub fn on_runway(
+        parameters: Parameters,
+        position: [f64; 2],
+        heading: f64,
+    ) -> Result<Self, String> {
+        Self::with_start(parameters, Some((position, heading)))
+    }
+    fn with_start(parameters: Parameters, ground: Option<([f64; 2], f64)>) -> Result<Self, String> {
         Ok(Self {
-            simulation: if ground {
-                Simulation::on_ground(parameters.clone())?
+            simulation: if let Some((position, heading)) = ground {
+                Simulation::on_ground_at(parameters.clone(), position, heading)?
             } else {
                 Simulation::trimmed(parameters.clone(), 90. * KNOT, 300.)?
             },
             paused: false,
-            parking_brake: ground,
+            parking_brake: ground.is_some(),
             flap_handle: 0,
             analog: None,
             keys: HashSet::new(),
@@ -79,8 +87,13 @@ impl FlightSession {
         })
     }
     pub fn reset(&mut self) -> Result<(), String> {
+        let elevation = self.simulation.field_elevation;
         *self = Self::with_start(self.initial.clone(), self.initial_ground)?;
+        self.simulation.field_elevation = elevation;
         Ok(())
+    }
+    pub fn set_field_elevation(&mut self, metres: f64) {
+        self.simulation.field_elevation = metres;
     }
     pub fn key(&mut self, key: KeyCode, pressed: bool) {
         if pressed {

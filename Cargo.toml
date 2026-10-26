@@ -7,6 +7,7 @@ members = [
     "crates/fsx-model",
     "crates/fsx-texture",
     "crates/fsx-vehicle",
+    "crates/fsx-scenery",
     "crates/fsx-sim",
     "crates/fsx-render",
     "crates/fsx-ui",
@@ -27,6 +28,7 @@ fsx-script = { path = "crates/fsx-script" }
 fsx-model = { path = "crates/fsx-model" }
 fsx-texture = { path = "crates/fsx-texture" }
 fsx-vehicle = { path = "crates/fsx-vehicle" }
+fsx-scenery = { path = "crates/fsx-scenery" }
 fsx-sim = { path = "crates/fsx-sim" }
 fsx-render = { path = "crates/fsx-render" }
 fsx-ui = { path = "crates/fsx-ui" }

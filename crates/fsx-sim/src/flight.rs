@@ -280,6 +280,9 @@ pub struct Simulation {
     pub controls: Controls,
     pub time: f64,
     pub ground_contact: bool,
+    /// Height of the local ground plane above mean sea level, metres. Reported
+    /// altitude includes it; aerodynamic density still uses height above ground.
+    pub field_elevation: f64,
 }
 impl Simulation {
     /// Commit physics and equipment history together. Load uses prior records;
@@ -337,13 +340,21 @@ impl Simulation {
         Ok(frame)
     }
     pub fn on_ground(parameters: Parameters) -> Result<Self> {
+        Self::on_ground_at(parameters, [-400., 0.], 0.)
+    }
+    /// Runway start at a local north/east position facing a true heading (radians).
+    pub fn on_ground_at(parameters: Parameters, position: [f64; 2], heading: f64) -> Result<Self> {
+        if !heading.is_finite() || position.iter().any(|x| !x.is_finite()) {
+            return Err("Invalid runway start position or heading".into());
+        }
         let mut s = Self::trimmed(parameters, 65. * crate::aircraft::KNOT, 300.)?;
         let p = &s.parameters;
         let height = p.ground_height - (p.loading.cg[2] - p.loading.empty_cg[2]);
+        let yaw = Quaternion([(heading * 0.5).cos(), 0., 0., (heading * 0.5).sin()]);
         s.state = State {
-            position: [-400., 0., -height],
+            position: [position[0], position[1], -height],
             velocity: [0.; 3],
-            orientation: Quaternion::pitch(p.gear.static_pitch),
+            orientation: yaw.product(Quaternion::pitch(p.gear.static_pitch)),
             rates: [0.; 3],
         };
         s.controls.throttle = 0.;
@@ -458,6 +469,7 @@ impl Simulation {
             },
             time: 0.,
             ground_contact: false,
+            field_elevation: 0.,
         })
     }
     pub fn step(&mut self, controls: Controls, dt: f64) -> Result<()> {
@@ -523,7 +535,7 @@ impl Simulation {
         let alpha = velocity[2].atan2(velocity[0]);
         Ok(Telemetry {
             speed,
-            altitude: -self.state.position[2],
+            altitude: -self.state.position[2] + self.field_elevation,
             alpha,
             beta: if speed > 1e-9 {
                 (velocity[1] / speed).clamp(-1., 1.).asin()

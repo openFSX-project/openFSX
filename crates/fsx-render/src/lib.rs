@@ -273,12 +273,28 @@ pub struct Gpu {
     draws: Vec<GpuDraw>,
     pub model_matrix: Mat4,
     flight: bool,
+    ground: Option<Ground>,
     pub hud: Option<crate::hud::Readout>,
     hud_pipeline: wgpu::RenderPipeline,
     hud_vertex: wgpu::Buffer,
     presented: bool,
     aircraft_vertices: usize,
     aircraft_draws: usize,
+}
+/// Airport runways in world metres: x east, z north, relative to the flight origin.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Ground {
+    pub runways: Vec<GroundRunway>,
+}
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GroundRunway {
+    pub east: f32,
+    pub north: f32,
+    /// True heading of the primary end, degrees.
+    pub heading: f32,
+    pub length: f32,
+    pub width: f32,
+    pub hard: bool,
 }
 struct UploadedScene {
     vertex: wgpu::Buffer,
@@ -519,6 +535,7 @@ impl Gpu {
             geometry,
             appearance,
             flight,
+            None,
         )?;
         let depth = Self::depth(&device, width, height);
         Ok(Self {
@@ -539,6 +556,7 @@ impl Gpu {
             draws: scene.draws,
             model_matrix: math::IDENTITY,
             flight,
+            ground: None,
             hud: None,
             hud_pipeline,
             hud_vertex,
@@ -554,6 +572,7 @@ impl Gpu {
         geometry: &Geometry,
         appearance: &Appearance,
         flight: bool,
+        ground: Option<&Ground>,
     ) -> Result<UploadedScene, String> {
         if geometry.batches.iter().any(|b| {
             b.material >= appearance.materials.len()
@@ -625,6 +644,7 @@ impl Gpu {
                 [0.06, 0.07, 0.08, 1.],
                 [0.85, 0.85, 0.75, 1.],
                 [0.16, 0.23, 0.10, 1.],
+                [0.30, 0.33, 0.20, 1.],
             ] {
                 materials.push(Material {
                     diffuse,
@@ -704,13 +724,14 @@ impl Gpu {
             .map(|v| [v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], 1.])
             .collect::<Vec<_>>();
         if flight {
-            let mut quad = |x0: f32, z0: f32, x1: f32, z1: f32, y: f32| {
-                for [x, z] in [[x0, z0], [x1, z0], [x1, z1], [x0, z0], [x1, z1], [x0, z1]] {
-                    vertices.push([x, y, z, 0., 1., 0., 0., 0., 0.]);
-                }
-            };
+            let quad =
+                |vertices: &mut Vec<[f32; 9]>, x0: f32, z0: f32, x1: f32, z1: f32, y: f32| {
+                    for [x, z] in [[x0, z0], [x1, z0], [x1, z1], [x0, z0], [x1, z1], [x0, z1]] {
+                        vertices.push([x, y, z, 0., 1., 0., 0., 0., 0.]);
+                    }
+                };
             let start = geometry.vertices.len() as u32;
-            quad(-8000., -8000., 8000., 8000., 0.);
+            quad(&mut vertices, -30000., -30000., 30000., 30000., 0.);
             let mut count = 6;
             draws.push(GpuDraw {
                 visible: true,
@@ -719,31 +740,103 @@ impl Gpu {
                 center: [0.; 3],
                 blended: false,
             });
-            quad(-15., -500., 15., 1500., 0.02);
-            draws.push(GpuDraw {
-                visible: true,
-                range: start + count..start + count + 6,
-                material: ground_material + 1,
-                center: [0.; 3],
-                blended: false,
-            });
-            count += 6;
-            for i in 0..40 {
-                let z = -480. + i as f32 * 50.;
-                quad(-0.7, z, 0.7, z + 25., 0.04);
+            if let Some(ground) = ground {
+                let mut draw =
+                    |vertices: &mut Vec<[f32; 9]>,
+                     material,
+                     add: &mut dyn FnMut(&mut Vec<[f32; 9]>)| {
+                        let first = vertices.len() as u32;
+                        add(vertices);
+                        draws.push(GpuDraw {
+                            visible: true,
+                            range: first..vertices.len() as u32,
+                            material,
+                            center: [0.; 3],
+                            blended: false,
+                        });
+                    };
+                // Oriented rectangle: offsets along/across the runway axis.
+                let rect = |v: &mut Vec<[f32; 9]>,
+                            r: &GroundRunway,
+                            a0: f32,
+                            a1: f32,
+                            c0: f32,
+                            c1: f32,
+                            y: f32| {
+                    let h = r.heading.to_radians();
+                    let (along, across) = ([h.sin(), h.cos()], [h.cos(), -h.sin()]);
+                    let at = |a: f32, c: f32| {
+                        [
+                            r.east + along[0] * a + across[0] * c,
+                            r.north + along[1] * a + across[1] * c,
+                        ]
+                    };
+                    let (p0, p1, p2, p3) = (at(a0, c0), at(a1, c0), at(a1, c1), at(a0, c1));
+                    for [x, z] in [p0, p2, p1, p0, p3, p2] {
+                        v.push([x, y, z, 0., 1., 0., 0., 0., 0.]);
+                    }
+                };
+                for (hard, material) in [(true, ground_material + 1), (false, ground_material + 4)]
+                {
+                    draw(&mut vertices, material, &mut |v| {
+                        for r in ground.runways.iter().filter(|r| r.hard == hard) {
+                            let (l, w) = (r.length / 2., r.width / 2.);
+                            rect(v, r, -l, l, -w, w, 0.02);
+                        }
+                    });
+                }
+                draw(&mut vertices, ground_material + 2, &mut |v| {
+                    for r in ground.runways.iter().filter(|r| r.hard) {
+                        let (l, w) = (r.length / 2., r.width / 2.);
+                        // Centreline dashes, threshold bars and edge lines.
+                        let mut a = -l + 60.;
+                        while a + 30. < l - 60. {
+                            rect(v, r, a, a + 30., -0.45, 0.45, 0.04);
+                            a += 50.;
+                        }
+                        for end in [-1f32, 1.] {
+                            let (a0, a1) = if end < 0. {
+                                (-l + 6., -l + 36.)
+                            } else {
+                                (l - 36., l - 6.)
+                            };
+                            let bars = ((w * 2. - 6.) / 4.).floor().clamp(2., 16.) as i32;
+                            for b in 0..bars {
+                                let c = -w + 3. + (b as f32 + 0.25) * (w * 2. - 6.) / bars as f32;
+                                rect(v, r, a0, a1, c, c + 1.8, 0.04);
+                            }
+                        }
+                        rect(v, r, -l, l, -w, -w + 0.9, 0.04);
+                        rect(v, r, -l, l, w - 0.9, w, 0.04);
+                    }
+                });
+            } else {
+                quad(&mut vertices, -15., -500., 15., 1500., 0.02);
+                draws.push(GpuDraw {
+                    visible: true,
+                    range: start + count..start + count + 6,
+                    material: ground_material + 1,
+                    center: [0.; 3],
+                    blended: false,
+                });
+                count += 6;
+                for i in 0..40 {
+                    let z = -480. + i as f32 * 50.;
+                    quad(&mut vertices, -0.7, z, 0.7, z + 25., 0.04);
+                }
+                draws.push(GpuDraw {
+                    visible: true,
+                    range: start + count..start + count + 240,
+                    material: ground_material + 2,
+                    center: [0.; 3],
+                    blended: false,
+                });
             }
-            draws.push(GpuDraw {
-                visible: true,
-                range: start + count..start + count + 240,
-                material: ground_material + 2,
-                center: [0.; 3],
-                blended: false,
-            });
-            count += 240;
+            let count = vertices.len() as u32 - start;
             for i in -40..=40 {
                 let p = i as f32 * 200.;
-                quad(p, -8000., p + 0.8, 8000., 0.01);
-                quad(-8000., p, 8000., p + 0.8, 0.01);
+                quad(&mut vertices, p, -8000., p + 0.8, 8000., 0.01);
+                quad(&mut vertices, -8000., p, 8000., p + 0.8, 0.01);
             }
             draws.push(GpuDraw {
                 visible: true,
@@ -766,6 +859,16 @@ impl Gpu {
             texture_names: appearance.texture_names.clone(),
         })
     }
+    /// Replace the test runway with airport runways (None restores it).
+    pub fn set_ground(
+        &mut self,
+        ground: Option<Ground>,
+        geometry: &Geometry,
+        appearance: &Appearance,
+    ) -> Result<(), String> {
+        self.ground = ground;
+        self.replace_scene(geometry, appearance)
+    }
     /// Replace model resources without recreating the device, surface or flight state.
     pub fn replace_scene(
         &mut self,
@@ -779,6 +882,7 @@ impl Gpu {
             geometry,
             appearance,
             self.flight,
+            self.ground.as_ref(),
         )?;
         self.vertex = scene.vertex;
         self.material_binds = scene.materials;
