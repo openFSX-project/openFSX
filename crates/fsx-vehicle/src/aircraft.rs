@@ -18,6 +18,7 @@ pub const SLUG_FOOT_SQUARED: f64 = 1.3558179483314;
 #[derive(Debug, Clone)]
 pub struct Parameters {
     pub pitot_static: crate::pitot_static::PitotStatic,
+    pub legacy_pitot_heat: crate::pitot_static::LegacyPitotHeat,
     pub electrical: crate::electrical::Electrical,
     pub loading: Loading,
     pub wing_area: f64,
@@ -213,7 +214,12 @@ impl Aircraft {
             texture: visual.texture,
             panel: visual.panel,
             air_path,
-            parameters: Parameters::from_config(&config, air.dynamics()?)?,
+            parameters: {
+                let mut parameters = Parameters::from_config(&config, air.dynamics()?)?;
+                parameters.legacy_pitot_heat =
+                    parameters.pitot_static.legacy_input_from_air(&air)?;
+                parameters
+            },
         })
     }
 }
@@ -280,6 +286,7 @@ impl Parameters {
             engine_position,
             electrical: crate::electrical::Electrical::from_config(c)?,
             pitot_static: crate::pitot_static::PitotStatic::from_config(c)?,
+            legacy_pitot_heat: crate::pitot_static::LegacyPitotHeat::Unknown,
             aero,
         };
         if p.power <= 0.
@@ -365,6 +372,7 @@ pub fn own_parameters() -> Parameters {
         engine_position: [0.; 3],
         electrical: crate::electrical::Electrical::default(),
         pitot_static: crate::pitot_static::PitotStatic::default(),
+        legacy_pitot_heat: crate::pitot_static::LegacyPitotHeat::Unknown,
         aero: AirFile::parse(&crate::air::own_air())
             .unwrap()
             .dynamics()

@@ -514,7 +514,7 @@ fn main() -> Result<(), String> {
     let pitot_configuration = aircraft
         .parameters
         .pitot_static
-        .resolve(fsx_vehicle::pitot_static::LegacyPitotHeat::Unknown)?;
+        .resolve(aircraft.parameters.legacy_pitot_heat)?;
     ensure(
         pitot_configuration.rate == Some(1.) && pitot_configuration.write_back.is_none(),
         "Installed C172 pitot coefficient missing or fallback unexpectedly required",

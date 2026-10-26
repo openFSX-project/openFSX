@@ -36,7 +36,8 @@ fn main() -> Result<(), String> {
     let report: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     if report["schema"] != 1
         || (report["source"] != "bounded-original-pitot-activity"
-            && report["source"] != "bounded-original-pitot-configuration")
+            && report["source"] != "bounded-original-pitot-configuration"
+            && report["source"] != "bounded-original-pitot-air-record")
         || report["sha256"] != "4bb9ef1b9669bb48676ef16ede667a2c590af27943eb34f03f09332a5417ae0e"
     {
         return Err("Unexpected pitot reference".into());
@@ -47,6 +48,60 @@ fn main() -> Result<(), String> {
         .ok_or("Invalid case budget")?;
     let config = Electrical::default()
         .with_legacy_circuit_defaults(SourceDefaults::FsxSteam62615SinglePiston)?;
+    if report["source"] == "bounded-original-pitot-air-record" {
+        for case in cases {
+            let mut bytes = Vec::new();
+            bytes.extend(0x123u32.to_le_bytes());
+            bytes.extend(3u32.to_le_bytes());
+            bytes.extend(b"own");
+            if let Some(hex) = case["payload_hex"].as_str() {
+                if !hex.is_ascii() || hex.len() > 64 || hex.len() % 2 != 0 {
+                    return Err("Invalid synthetic AIR payload budget".into());
+                }
+                let payload = (0..hex.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|e| e.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                bytes.extend(0x324u32.to_le_bytes());
+                bytes.extend((payload.len() as u32).to_le_bytes());
+                bytes.extend(payload);
+            }
+            let air = fsx_vehicle::air::AirFile::parse(&bytes)?;
+            let actual = LegacyPitotHeat::from_air(&air)?;
+            let expected = if boolean(case, "found")? {
+                LegacyPitotHeat::Value(boolean(case, "enabled")?)
+            } else {
+                LegacyPitotHeat::Missing
+            };
+            if actual != expected {
+                return Err("Original AIR heater fallback differs".into());
+            }
+            let resolved = PitotStatic::default().resolve(actual)?;
+            let enabled = case["enabled"].as_bool().unwrap_or(true);
+            if resolved.rate != Some(if enabled { 1. } else { 0. }) {
+                return Err("AIR record did not drive configured rate".into());
+            }
+        }
+        for size in 0..4 {
+            let air = fsx_vehicle::air::AirFile {
+                records: std::collections::BTreeMap::from([(0x324, vec![0; size])]),
+            };
+            if LegacyPitotHeat::from_air(&air).is_ok() {
+                return Err("Malformed short pitot AIR record accepted".into());
+            }
+            if PitotStatic::parse("[pitot_static]\npitot_heat=1")?.legacy_input_from_air(&air)?
+                != LegacyPitotHeat::Unknown
+            {
+                return Err(
+                    "Authored pitot coefficient consulted malformed unused AIR data".into(),
+                );
+            }
+        }
+        fs::create_dir(&output).map_err(|e| e.to_string())?;
+        fs::write(output.join("report.json"),serde_json::to_vec_pretty(&json!({"schema":1,"air_record_cases":cases.len(),"all_record_values_equal":true,"fallback_rate_checked":true,"short_records_rejected":true,"scope":"original AIR helper with synthetic files; no original live process"})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+        println!("PASS: {} original AIR record lookups and fallback rates equal; malformed short payloads rejected",cases.len());
+        return Ok(());
+    }
     if report["source"] == "bounded-original-pitot-configuration" {
         for case in cases {
             let text = if case["authored"].is_null() {

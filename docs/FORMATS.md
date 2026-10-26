@@ -1588,3 +1588,28 @@ it does not claim the original external CFG parser's complete validation policy.
 Installed C172 has authored rate 1.0 and requires no fallback. Its load checker
 now consumes that parsed value. The actual legacy field reader, live request/
 power scheduling and thermal/icing dynamics remain separate unfinished work.
+
+### Legacy AIR pitot-heater field
+
+```powershell
+python scripts/check-pitot-air-record.py FSX/sim1.dll target/pitot-air-reference
+cargo run -p fsx-app --example legacy-pitot-activity-check --locked -- target/pitot-air-reference/report.json target/pitot-air-comparison
+```
+
+The original legacy service is the AIR id/size-record helper. The pitot initializer
+requests record 0x0324 into an 8-byte destination and tests its first 32-bit word.
+The guarded reference executes original scanning/read/seek/close logic with
+synthetic bounded services. 21 streams cover an absent record, skipped unrelated
+record and present 4/5/7/8/12-byte records with raw words 0/1/2/0xFFFFFFFF.
+LegacyPitotHeat::from_air matches presence and nonzero truth handling, and the
+configuration resolver matches the resulting 0/1 fallback rate. The reference
+does not access the real filesystem or export original bytes.
+
+Short records below 4 bytes are rejected, since the original initializer would
+otherwise consume incomplete stack data. AIR parser duplicate/truncation rules
+remain in force; no broader original malformed-file parity is claimed. Aircraft
+loading uses legacy_input_from_air only for missing/negative authored coefficient.
+An explicit nonnegative CFG value wins and leaves the unused legacy provider
+unknown. Standalone Parameters without an AIR source stays unknown; known absence
+from a successfully parsed AIR file becomes Missing and selects original fallback 1.
+No user configuration write-back is performed automatically.

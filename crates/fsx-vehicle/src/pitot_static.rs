@@ -5,11 +5,26 @@ use fsx_cfg::Config;
 pub struct PitotStatic {
     pub pitot_heat: Option<f64>,
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LegacyPitotHeat {
     Unknown,
     Missing,
     Value(bool),
+}
+impl LegacyPitotHeat {
+    /// Pinned original record lookup, first 32-bit word of AIR record 0x0324.
+    /// Short malformed records are outside the deterministic supported domain.
+    pub fn from_air(air: &crate::air::AirFile) -> Result<Self, String> {
+        let Some(bytes) = air.records.get(&0x324) else {
+            return Ok(Self::Missing);
+        };
+        let word = bytes
+            .get(..4)
+            .and_then(|b| b.try_into().ok())
+            .map(u32::from_le_bytes)
+            .ok_or("AIR pitot-heat record 0x0324 must contain at least 4 bytes")?;
+        Ok(Self::Value(word != 0))
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HeaterConfiguration {
@@ -18,6 +33,18 @@ pub struct HeaterConfiguration {
     pub write_back: Option<f64>,
 }
 impl PitotStatic {
+    /// Avoid consulting legacy data when an explicit nonnegative CFG value won.
+    pub fn legacy_input_from_air(
+        self,
+        air: &crate::air::AirFile,
+    ) -> Result<LegacyPitotHeat, String> {
+        self.validate()?;
+        if self.pitot_heat.is_some_and(|v| v >= 0.) {
+            Ok(LegacyPitotHeat::Unknown)
+        } else {
+            LegacyPitotHeat::from_air(air)
+        }
+    }
     pub fn parse(text: &str) -> Result<Self, String> {
         Self::from_config(&Config::parse(text)?)
     }

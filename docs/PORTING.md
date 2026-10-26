@@ -10,6 +10,30 @@ changes. Keep the full FSX 1:1 objective active until its original scope is met.
 
 ## Current stage — 26 October 2026
 
+After `6ff3e7c`, the pitot legacy provider is resolved to AIR record 0x0324.
+The original helper scans id/size records, reads up to its 8-byte destination,
+and the initializer tests the first 32-bit word for nonzero. A guarded reference
+executes that actual helper with bounded synthetic open/read/seek/close/clear
+services. 21 cases cover absence, raw 0/1/2/0xFFFFFFFF and 4/5/7/8/12-byte payloads,
+including skipping an unrelated record. Rust AIR parsing/field extraction and
+fallback rates match exactly in target/legacy-pitot-air-comparison-01/report.json,
+using target/legacy-pitot-air-reference-01/report.json. No actual file service or
+original process is used; all fixture streams are independently authored.
+
+LegacyPitotHeat::from_air maps absent record to Missing and a present first word
+to Value(nonzero). Payloads shorter than 4 bytes are rejected as outside the
+deterministic supported domain. Aircraft loading resolves the legacy input only
+when pitot_heat is missing/negative; explicit nonnegative CFG wins and does not
+consult an unused legacy record. Parameters retains that provider result rather
+than requiring a caller-supplied boolean. Installed C172 continues using its
+authored coefficient. Generic Parameters without AIR input remains Unknown.
+
+Workspace tests pass in target/legacy-pitot-air-tests-01.log; installed regression
+passes in target/legacy-pitot-air-installed-01.log. Existing configuration/activity
+comparisons pass. Formatting/architecture/docs checks pass. Thermal/icing, live
+switch/power/mode/RPM providers and automatic viewer ownership remain open; Goal active.
+
+### Previous pitot-CFG stage — 26 October 2026
 After `b582b43`, authored [pitot_static] pitot_heat and its pinned initializer
 fallback are ported. Original code copies nonnegative CFG values into float32
 heater rate (zero disables); negative/missing CFG invokes a legacy field-read
