@@ -285,6 +285,8 @@ pub struct Simulation {
     pub field_elevation: f64,
     /// Engine speed in revolutions per minute (fixed-pitch propeller model).
     pub rpm: f64,
+    /// Set when the last usable fuel burns; the engine then only windmills.
+    pub fuel_exhausted: bool,
 }
 impl Simulation {
     /// Commit physics and equipment history together. Load uses prior records;
@@ -486,6 +488,7 @@ impl Simulation {
             ground_contact: false,
             field_elevation: 0.,
             rpm: 0.,
+            fuel_exhausted: false,
         })
         .map(|mut s: Self| {
             s.rpm = s.equilibrium_rpm(s.controls.throttle);
@@ -501,6 +504,10 @@ impl Simulation {
         let p = &self.parameters;
         let forward = self.state.orientation.inverse().rotate(self.state.velocity)[0];
         let unload = (forward / p.cruise_speed.max(1.)).clamp(0., 1.4);
+        if self.fuel_exhausted {
+            // A dead engine windmills with airspeed.
+            return p.rated_rpm * 0.3 * unload;
+        }
         let power = 0.06 + 0.94 * throttle.clamp(0., 1.);
         p.rated_rpm * (0.85 * power.sqrt() * (1. + 0.176 * unload)).min(1.12)
     }
@@ -518,7 +525,10 @@ impl Simulation {
                 "Flight integration step must be positive and no larger than 1/60 second".into(),
             );
         }
-        let controls = controls.validated()?;
+        let mut controls = controls.validated()?;
+        if self.fuel_exhausted {
+            controls.throttle = 0.;
+        }
         // Contact dynamics need smaller steps than the airborne update. RK4
         // still integrates the same state and forces, including during liftoff.
         let level = self.parameters.gear.ground_level;
@@ -555,6 +565,21 @@ impl Simulation {
             target
         };
         self.rpm += (target - self.rpm) * (dt / 0.6).min(1.);
+        // Fuel burn at a typical piston specific consumption of 0.45 lb/hp/h
+        // (7.6e-8 kg/J) of the power actually produced; mass falls with it.
+        let loading = &mut self.parameters.loading;
+        if loading.fuel_mass > 0. && !self.fuel_exhausted {
+            let produced = self.parameters.power
+                * (0.06 + 0.94 * controls.throttle)
+                * (self.rpm / self.parameters.rated_rpm).clamp(0., 1.2);
+            let burned = (7.6e-8 * produced * dt).min(loading.fuel_mass);
+            loading.fuel_mass -= burned;
+            loading.mass -= burned;
+            if loading.fuel_mass <= 0. {
+                loading.fuel_mass = 0.;
+                self.fuel_exhausted = true;
+            }
+        }
         // No electrical mutation until this physics substep has passed all
         // fallible calculations. Contact subdivision advances each interval once.
         if independent_electrical {
@@ -595,6 +620,27 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::aircraft::own_parameters;
+    #[test]
+    fn fuel_burns_mass_and_exhaustion_stops_the_engine() {
+        let mut p = own_parameters();
+        // 0.05 kg lasts a few seconds at 130 kW.
+        p.loading.fuel_mass = 0.05;
+        p.loading.mass += 0.05;
+        let mut s = Simulation::trimmed(p, 55., 300.).unwrap();
+        let mass = s.parameters.loading.mass;
+        let full = Controls {
+            throttle: 1.,
+            ..s.controls
+        };
+        s.step(full, 1. / 120.).unwrap();
+        assert!(s.parameters.loading.mass < mass && !s.fuel_exhausted);
+        for _ in 0..1200 {
+            s.step(full, 1. / 120.).unwrap();
+        }
+        assert!(s.fuel_exhausted && s.parameters.loading.fuel_mass == 0.);
+        assert!((s.parameters.loading.mass - (mass - 0.05)).abs() < 1e-9);
+        assert!(s.rpm < 0.45 * 2700., "windmilling {}", s.rpm);
+    }
     #[test]
     fn rpm_settles_at_idle_static_power_and_rises_with_airspeed() {
         let mut s = Simulation::on_ground(own_parameters()).unwrap();

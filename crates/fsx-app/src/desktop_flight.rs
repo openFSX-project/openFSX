@@ -230,6 +230,8 @@ impl FlightSession {
         let t = self.simulation.telemetry()?;
         let status = if self.crashed {
             "CRASHED — R reset"
+        } else if self.simulation.fuel_exhausted {
+            "ENGINE OUT — fuel exhausted"
         } else if self.paused {
             "PAUSED — P resume"
         } else if t.ground_contact {
@@ -243,7 +245,7 @@ impl FlightSession {
         } else {
             "AIRBORNE"
         };
-        Ok(format!("openFSX Flight | {:.1} kt | {:.0} ft | {:+.0} fpm | bank {:+.1}° | pitch {:+.1}° | throttle {:.0}% | flaps {:.0}° | {status}",t.speed/KNOT,t.altitude/FOOT,t.climb/FOOT*60.,t.attitude[0].to_degrees(),t.attitude[1].to_degrees(),self.simulation.controls.throttle*100.,self.simulation.controls.flaps*self.simulation.parameters.flaps.max_deflection()))
+        Ok(format!("openFSX Flight | {:.1} kt | {:.0} ft | {:+.0} fpm | bank {:+.1}° | pitch {:+.1}° | throttle {:.0}% | flaps {:.0}° | {:.0} rpm | fuel {:.0} L | {status}",t.speed/KNOT,t.altitude/FOOT,t.climb/FOOT*60.,t.attitude[0].to_degrees(),t.attitude[1].to_degrees(),self.simulation.controls.throttle*100.,self.simulation.controls.flaps*self.simulation.parameters.flaps.max_deflection(),self.simulation.rpm,self.simulation.parameters.loading.fuel_mass/0.72))
     }
 }
 #[cfg(test)]

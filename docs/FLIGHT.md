@@ -119,6 +119,13 @@ cruise speed, followed with a 0.6 s lag. It drives the engine sound layers and
 the native C172 tachometer needle (GENERAL ENG RPM, token 390, helper input 7).
 Thrust still uses the momentum-disk model; FSX propeller tables are not used.
 
+Fuel burns from the CFG usable load at 0.45 lb/hp/h (7.6e-8 kg/J) of the power
+produced (idle fuel 6 %, scaled by throttle and RPM), about 35 L/h for the C172
+at cruise power; aircraft mass falls with it. When the tanks run dry the engine
+stops (throttle ineffective, propeller windmilling with airspeed) and the title
+shows ENGINE OUT; R restores full fuel. Tank selection, fuel CG shift, mixture
+and altitude power loss are not modelled.
+
 Autogen uses the stock annotations: each land texture `NNN?2su1.bmp` has an
 `NNN?2an1.agn` covering the same tile (4 x 4 terrain quads here). Rectangular
 buildings become boxes with the annotated footprint and orientation, coloured
