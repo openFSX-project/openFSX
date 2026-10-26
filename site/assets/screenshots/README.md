@@ -284,7 +284,7 @@ node scripts/ppm-to-png.mjs target/uuee-cockpit.ppm site/assets/screenshots/uuee
 `lowi-cockpit.png` and `lowi-terrain.png` are direct 960 × 720 GPU readbacks.
 The mesh is decoded from the user's installed DEM BGL files by their installed
 terrain.dll in the x86 helper; the ground uses the user's stock land-class textures
-(refreshed after land-class texturing).
+(refreshed after land-class texturing and mipmapped anisotropic filtering).
 
 ```powershell
 .\scriptsuild-terrain-host.ps1

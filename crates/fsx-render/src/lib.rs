@@ -326,6 +326,35 @@ impl Terrain {
         Some(top + (bottom - top) * fy)
     }
 }
+/// Full mip chain by 2 x 2 box filtering (edge texels repeat on odd sizes).
+fn mip_chain(image: &Image) -> Vec<Image> {
+    let mut chain = vec![image.clone()];
+    while let Some(last) = chain.last().filter(|i| i.width > 1 || i.height > 1) {
+        let (w, h) = ((last.width / 2).max(1), (last.height / 2).max(1));
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                for k in 0..4 {
+                    let at = |sx: u32, sy: u32| {
+                        let (sx, sy) = (sx.min(last.width - 1), sy.min(last.height - 1));
+                        u32::from(last.rgba[((sy * last.width + sx) * 4 + k) as usize])
+                    };
+                    let sum = at(2 * x, 2 * y)
+                        + at(2 * x + 1, 2 * y)
+                        + at(2 * x, 2 * y + 1)
+                        + at(2 * x + 1, 2 * y + 1);
+                    rgba.push(((sum + 2) / 4) as u8);
+                }
+            }
+        }
+        chain.push(Image {
+            width: w,
+            height: h,
+            rgba,
+        });
+    }
+    chain
+}
 /// Elevation colours: sea, lowland green, forest, dry grass, rock, snow.
 fn terrain_gradient() -> Image {
     let stops: [(f32, [f32; 3]); 6] = [
@@ -659,6 +688,7 @@ impl Gpu {
             return Err("Scene references an unavailable material, texture or vertex range".into());
         }
         let upload = |image: &Image| {
+            let chain = mip_chain(image);
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("DDS diffuse"),
                 size: wgpu::Extent3d {
@@ -666,32 +696,34 @@ impl Gpu {
                     height: image.height,
                     depth_or_array_layers: 1,
                 },
-                mip_level_count: 1,
+                mip_level_count: chain.len() as u32,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: Default::default(),
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &image.rgba,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(image.width * 4),
-                    rows_per_image: Some(image.height),
-                },
-                wgpu::Extent3d {
-                    width: image.width,
-                    height: image.height,
-                    depth_or_array_layers: 1,
-                },
-            );
+            for (level, mip) in chain.iter().enumerate() {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: level as u32,
+                        origin: Default::default(),
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &mip.rgba,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(mip.width * 4),
+                        rows_per_image: Some(mip.height),
+                    },
+                    wgpu::Extent3d {
+                        width: mip.width,
+                        height: mip.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
             texture
         };
         let white_texture = upload(&Image {
@@ -777,6 +809,9 @@ impl Gpu {
                 address_mode_v: address,
                 mag_filter: wgpu::FilterMode::Linear,
                 min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::FilterMode::Linear,
+                // Keeps oblique panels and distant ground sharp with mipmaps.
+                anisotropy_clamp: 16,
                 ..Default::default()
             });
             material_binds.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1073,25 +1108,32 @@ impl Gpu {
                 "Dynamic image dimensions or RGBA extent differ from the uploaded texture".into(),
             );
         }
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: Default::default(),
-                aspect: wgpu::TextureAspect::All,
-            },
-            &image.rgba,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(image.width * 4),
-                rows_per_image: Some(image.height),
-            },
-            wgpu::Extent3d {
-                width: image.width,
-                height: image.height,
-                depth_or_array_layers: 1,
-            },
-        );
+        // Keep every mip level consistent with the new top level.
+        for (level, mip) in mip_chain(image)
+            .iter()
+            .enumerate()
+            .take(texture.mip_level_count() as usize)
+        {
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: level as u32,
+                    origin: Default::default(),
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &mip.rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(mip.width * 4),
+                    rows_per_image: Some(mip.height),
+                },
+                wgpu::Extent3d {
+                    width: mip.width,
+                    height: mip.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
         Ok(())
     }
     pub fn update_geometry(&mut self, geometry: &Geometry) -> Result<(), String> {

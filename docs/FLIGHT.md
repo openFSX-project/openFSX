@@ -62,7 +62,9 @@ sampled per mesh quad and the matching `NNN?2su1.bmp` textures (DXT1 inside a
 BMP header) are packed into a 2048-pixel atlas, one texture per 4 x 4 quads
 (about 1.25 km). Natural Olson classes use their own texture number; urban,
 suburban and water classes are approximated (031, 030, 123) because the
-lclookup.bgl remapping, regions and seasons are not decoded yet. Without the
+lclookup.bgl remapping, regions and seasons are not decoded yet. All textures,
+including the atlas and live panel images, carry box-filtered mip chains with
+trilinear 16x anisotropic sampling. Without the
 helper or land-class data the mesh falls back to a height colour gradient.
 Water polygons, buildings, autogen and taxiways are not loaded yet.
 
