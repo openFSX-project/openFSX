@@ -1414,6 +1414,7 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
     let mut airport = None;
     let mut hours = 12.;
     let mut airborne = false;
+    let mut wind = [0.0_f64; 3];
     let mut cockpit = false;
     let mut native_gauges_enabled = false;
     let mut gauge_host = None;
@@ -1570,6 +1571,26 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
             Some("--fly") => fly = true,
             Some("--ground") => ground = true,
             Some("--airborne") => airborne = true,
+            Some("--wind") => {
+                let text = args
+                    .next()
+                    .and_then(|a| a.into_string().ok())
+                    .ok_or("Expected --wind DEGREES/KNOTS")?;
+                let (d, k) = text
+                    .split_once('/')
+                    .ok_or("Expected --wind DEGREES/KNOTS")?;
+                let (d, k): (f64, f64) = (
+                    d.parse().map_err(|_| "Invalid --wind direction")?,
+                    k.parse().map_err(|_| "Invalid --wind speed")?,
+                );
+                if !d.is_finite() || !k.is_finite() || !(0. ..=100.).contains(&k) {
+                    return Err("--wind speed must be 0 to 100 knots".into());
+                }
+                // Meteorological convention: direction the wind blows from.
+                let toward = (d + 180.).to_radians();
+                let m = k * 1852. / 3600.;
+                wind = [m * toward.cos(), m * toward.sin(), 0.];
+            }
             Some("--time") => {
                 let text = args
                     .next()
@@ -1947,10 +1968,13 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
         _ => None,
     };
     let mut flight = aircraft
-        .map(|a| {
+        .map(|mut a| {
+            a.parameters.wind = wind;
             if let Some((start, _, _)) = scenery.as_ref().filter(|_| airborne) {
                 FlightSession::airborne(a.parameters, start.heading.to_radians()).map(|mut f| {
                     f.set_field_elevation(start.altitude);
+                    f.simulation.state.velocity =
+                        std::array::from_fn(|i| f.simulation.state.velocity[i] + wind[i]);
                     f
                 })
             } else if let Some((start, _, _)) = &scenery {

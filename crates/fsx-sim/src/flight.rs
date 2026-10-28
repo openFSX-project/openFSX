@@ -144,6 +144,10 @@ pub trait AircraftDynamics {
     fn lift_drag(&self, alpha: f64, pitch_control: f64, qhat: f64) -> Result<(f64, f64)>;
     fn derivative(&self, s: State, c: Controls) -> Result<State>;
 }
+/// Ground-referenced velocity minus the steady wind.
+fn air_velocity(parameters: &Parameters, ground: Vec3) -> Vec3 {
+    std::array::from_fn(|i| ground[i] - parameters.wind[i])
+}
 impl AircraftDynamics for Parameters {
     fn predicted_stall(&self, altitude: f64) -> Result<f64> {
         let (_, peak) = self.aero.lift.peak()?;
@@ -168,7 +172,7 @@ impl AircraftDynamics for Parameters {
     }
     fn derivative(&self, s: State, c: Controls) -> Result<State> {
         let orientation = s.orientation.normalized()?;
-        let velocity = orientation.inverse().rotate(s.velocity);
+        let velocity = orientation.inverse().rotate(air_velocity(self, s.velocity));
         let speed = length(velocity);
         let alpha = velocity[2].atan2(velocity[0]);
         let beta = if speed > 1e-9 {
@@ -502,7 +506,11 @@ impl Simulation {
     /// keeps about 21 %. A playable model, not the FSX propeller tables.
     pub fn equilibrium_rpm(&self, throttle: f64) -> f64 {
         let p = &self.parameters;
-        let forward = self.state.orientation.inverse().rotate(self.state.velocity)[0];
+        let forward = self
+            .state
+            .orientation
+            .inverse()
+            .rotate(air_velocity(p, self.state.velocity))[0];
         let unload = (forward / p.cruise_speed.max(1.)).clamp(0., 1.4);
         if self.fuel_exhausted {
             // A dead engine windmills with airspeed.
@@ -597,7 +605,11 @@ impl Simulation {
         Ok(())
     }
     pub fn telemetry(&self) -> Result<Telemetry> {
-        let velocity = self.state.orientation.inverse().rotate(self.state.velocity);
+        let velocity = self
+            .state
+            .orientation
+            .inverse()
+            .rotate(air_velocity(&self.parameters, self.state.velocity));
         let speed = length(velocity);
         let alpha = velocity[2].atan2(velocity[0]);
         Ok(Telemetry {
@@ -660,6 +672,16 @@ mod tests {
         assert!((s.rpm / 2700. - 0.85).abs() < 0.01, "static {}", s.rpm);
         let cruise = Simulation::trimmed(own_parameters(), 55., 300.).unwrap();
         assert!(cruise.equilibrium_rpm(1.) > 2650. && cruise.equilibrium_rpm(1.) <= 2700. * 1.12);
+    }
+    #[test]
+    fn wind_changes_airspeed_but_not_ground_velocity() {
+        let mut s = Simulation::on_ground(own_parameters()).unwrap();
+        s.parameters.wind = [-10., 0., 0.];
+        s.state.velocity = [0.; 3];
+        let t = s.telemetry().unwrap();
+        // Wind blowing toward the south over a stationary aircraft facing north.
+        assert!((t.speed - 10.).abs() < 1e-6);
+        assert_eq!(s.state.velocity, [0.; 3]);
     }
     #[test]
     fn flaps_add_lift_drag_and_nose_down_moment() {

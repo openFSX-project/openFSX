@@ -29,6 +29,8 @@ pub struct Parameters {
     /// Rated engine speed, revolutions per minute ([piston_engine] max_rated_rpm).
     pub rated_rpm: f64,
     pub prop_area: f64,
+    /// Steady wind in north/east/down axes, metres per second (direction the air moves toward).
+    pub wind: [f64; 3],
     pub tail_incidence: f64,
     pub controls: [f64; 4],
     pub elevator_up: f64,
@@ -262,6 +264,7 @@ impl Parameters {
                 * c.optional_number("piston_engine", "power_scalar", 1.)?,
             rated_rpm: c.optional_number("piston_engine", "max_rated_rpm", 2700.)?,
             prop_area: std::f64::consts::PI * diameter * diameter / 4.,
+            wind: [0.; 3],
             tail_incidence: c
                 .optional_number("airplane_geometry", "htail_incidence", 0.)?
                 .to_radians(),
@@ -331,6 +334,7 @@ pub fn own_parameters() -> Parameters {
         power: 130000.,
         rated_rpm: 2700.,
         prop_area: 3.,
+        wind: [0.; 3],
         tail_incidence: 0.,
         controls: [1.; 4],
         elevator_up: 0.4,
