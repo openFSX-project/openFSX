@@ -1731,3 +1731,18 @@ engine-inlet anti-ice state, not an airspeed probe. The existing "pitot" names i
 legacy_pitot/Core describe the electrical circuit that powers the heater (circuit 7)
 and should be renamed when the engine model is ported. Open: the table at
 0x20AD6FE0 and the owner fields +0x254/+0x25C/+0x104/+0x41*4 providers.
+
+## Piston engine recon (28 October 2026, REA)
+
+Chosen next target: the piston engine. Found so far in sim1.dll:
+- Config loader chain for [piston_engine]: 0x20B4E140 (`this`+0x2B0/0x2B8/0x2C0/0x2C8
+  = max_rpm_mechanical_efficiency_scalar, idle_rpm_mechanical_efficiency_scalar,
+  max_rpm_friction_scalar, idle_rpm_friction_scalar, each default 1.0, read via
+  Ordinal_54 with sentinel -DBL_MAX and written back via Ordinal_55), then FUN_20B4DE30.
+  Its caller 0x20B4ED60 has no direct references nor a pointer in .data, so it is
+  reached through a path the static analysis did not resolve (virtual call or
+  computed jump); 54 string references to "piston_engine" lie in 0x20B4E162..0x20B501AC.
+- The runtime piston update has not been located; the only per-engine update found
+  (0x20B45450) is the Mach/pressure-ratio turbine style cycle documented above.
+Next step: map every [piston_engine] key to its object offset from the loader chain,
+then locate the update by searching for reads of those offsets (e.g. +0x2B0).
