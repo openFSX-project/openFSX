@@ -1773,3 +1773,14 @@ form not yet searched. Their physical meaning (they scale +0x140 and +0x148 in
 FUN_20B4D7E0, and 1 - [0x20B992B0] divides the pressure-ratio term) is not yet known,
 so the piston default-table builder stays unported. Next: check sim1's exports and
 the host (FSX/fsx.exe) for writers, or capture the values from a live FSX process.
+
+Resolved: the three globals are the standard-atmosphere table of FUN_20AF5D20
+(sim1 0x20AF5D20), filled through a pointer table (hence no direct stores) from a
+configuration lookup with positive-value defaults: SpecificGasConstant 1716.0,
+SpecificHeatRatio 1.4 (0x20B992A8), StandardSeaLevelDensity 0.0023769 slug/ft^3
+(0x20B992B0), StandardSeaLevelTemperature 518.69 R (0x20B992B8),
+StandardSeaLevelPressure 2116.2 psf (0x20B992C0), GravitySeaLevel 32.174 ft/s^2
+(0x20B992C8), PolarRadius / EquatorialRadius (0x20B992D0/D8). fsx_sim::legacy_atmosphere
+carries the pinned defaults with a bit-pattern test. The source of configuration
+overrides (Ordinal_44 on DAT_20AE2464) is still open; with defaults, FUN_20B4D7E0 and
+FUN_20B4D8A0 are no longer blocked on these globals.

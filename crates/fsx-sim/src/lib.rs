@@ -9,6 +9,7 @@ pub mod electrical_distribution;
 pub mod electrical_sources;
 pub mod flight;
 pub mod ground;
+pub mod legacy_atmosphere;
 pub mod legacy_consumers;
 pub mod legacy_pitot;
 pub mod legacy_power;
