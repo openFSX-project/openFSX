@@ -1693,3 +1693,15 @@ all GPU startup paths have been established.
 
 Keep this checkpoint current at each completed stage so interrupted work can
 resume from concrete evidence. Preserve unfinished changes until verified.
+
+## Pitot icing caller (28 October 2026, REA)
+
+The only caller of sim1 0x20B458B0 is 0x20B45450, a per-engine update (__fastcall,
+loop over the count at [[root+0x19B8]+0x20]). It converts owner+0x104 (double) by
+0.5923975489906849 and passes owner+0x508 = FUN_20B457B0(owner, engine pair, value)
+as the icing filter's input, then also drives FUN_20B456E0, FUN_20AF1710, owner+0x3D
+(a hysteresis flag: input < owner+0x48 + 5.0) and a notification (id 6). Because this
+function lives in an engine update and freezes at 492 R with a precipitation flag, the
+"pitot" attribution of the 0x20B458B0 heater (circuit 7) should be re-checked against
+FUN_20B457B0/FUN_20B456E0 before wiring the port into Simulation; do not claim it is
+the indicated-airspeed probe until those are decoded.
