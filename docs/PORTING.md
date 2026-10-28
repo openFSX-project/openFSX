@@ -1746,3 +1746,13 @@ Chosen next target: the piston engine. Found so far in sim1.dll:
   (0x20B45450) is the Mach/pressure-ratio turbine style cycle documented above.
 Next step: map every [piston_engine] key to its object offset from the loader chain,
 then locate the update by searching for reads of those offsets (e.g. +0x2B0).
+
+Piston engine object (REA, searching reads of +0x2B0): FUN_20B4D8A0 (__fastcall, ECX =
+engine) builds the default performance tables when the CFG gives none: it fills
+owner+0x5CC (21 dwords) and owner+0x620 (17 dwords) from embedded literals and
+owner+0x178 (rated rpm) / +0x158, evaluates piecewise-linear curves through
+FUN_20AF1710 against +0x178 and +0x180, derives a power/torque scale (floors 18.0 and
+16.2, factors 1.1 and 0.9), and resets +0x2B0/+0x2B8/+0x2C0/+0x2C8 to 1.0. Other
+functions touching +0x2B0 in the piston area: 0x20B4DE30, 0x20B4E140, 0x20B4FF10.
+Still not located: the per-frame piston power/RPM update. Porting the table builder
+needs the literals (in the decompilation of 0x20B4D8A0) and FUN_20B4D7E0.
