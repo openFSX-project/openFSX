@@ -1798,3 +1798,18 @@ Accuracy: worst relative error 5.5e-16 against the original's x87 extended
 precision. NOT bit-exact: Rust has no 80-bit float, so this port does not meet
 the exact-parity bar used for the float32 pitot stages. What the fields mean
 (+0x118..+0x150, +0x5F8, +0x170) is still unknown.
+
+Ported: sim1 0x20B4D8A0 (piston default performance curves) as
+fsx_sim::legacy_piston::default_curves, with the table lookup 0x20AF1710 as
+legacy_piston::lookup and the four embedded tables (captured from the original stack
+frame by scripts/check-piston-curves.py). Outputs: the 5-row array copied to +0x5CC
+(x = 0, .25, .75, .8, 1 * f178; y = f158 * 1.2, 1.2, 1.05, 1, 1), the 4-row array copied
+to +0x620 (x = -.11, .11, .185, 1 * f178; y = -2c, 2c, w, c) and +0x2B0/+0x2B8/+0x2C0/
++0x2C8 = 1.0, where c and w come from the power estimate, the 0x20B4D7E0 helper,
+the 18.0 / 16.2 floors and the four table lookups. A hidden dependency found by
+the first failing comparison: the +0x5CC copy overwrites the helper's +0x5F8 input
+with f158 * 1.05 before the helper runs, so the port feeds that value. 200 seeded
+original runs (target/piston-curves-reference-01/report.json, example
+legacy-piston-curves-check) match within 1e-13 relative; arithmetic is f64 against the
+original's x87 extended precision, so again not bit-exact. Field meanings
+(+0x118..+0x180) remain unidentified, and the port is not yet wired into Simulation.
