@@ -214,7 +214,7 @@ sound files only disable sound.
 
 **--wind DEGREES/KNOTS** (also the Wind field of the menu time dialog) sets a steady wind (meteorological direction it blows from, 0 to 100 kt, for example `--wind 270/15`). Aerodynamics, propeller thrust, RPM and the airspeed readout use air-relative velocity; ground contact and climb rate stay ground-referenced, so a headwind shortens the takeoff roll. **--gusts KNOTS** (0 to 30) adds smooth deterministic gusts of that strength on top of it, about half as strong vertically. No turbulence, shear or altitude variation.
 
-The window title reports live flight state. Add **--debug-hud** for the optional original telemetry overlay; it is hidden by default.
+The window title reports live flight state, including the sink rate at the last touchdown; a touchdown faster than 3 m/s (about 590 fpm) shows HARD LANDING while rolling. This is only a report: no gear damage is modelled. Add **--debug-hud** for the optional original telemetry overlay; it is hidden by default.
 The camera follows the aircraft. The runway and grid are original test geometry,
 not FSX scenery. Wheel contact continues the rigid-body simulation, including
 compression, braking and liftoff. Scrape points, damage and validated landing

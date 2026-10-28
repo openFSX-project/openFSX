@@ -249,6 +249,9 @@ impl App {
                     },
                     elapsed,
                 );
+                if t.ground_contact && !was_down && flight.simulation.time > 1. {
+                    flight.last_touchdown = Some(sink.max(0.));
+                }
                 self.sound_state = (t.ground_contact, c.flaps);
             }
             if let Some(alternate) = &mut self.alternate {

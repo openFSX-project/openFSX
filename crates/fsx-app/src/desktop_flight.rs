@@ -45,6 +45,8 @@ pub struct FlightSession {
     pub parking_brake: bool,
     /// Gust strength in metres per second; 0 disables gusts.
     pub gust_amplitude: f64,
+    /// Sink rate at the most recent touchdown, metres per second.
+    pub last_touchdown: Option<f64>,
     /// Selected flap detent; the surface follows at the authored extension rate.
     pub flap_handle: usize,
     /// Latest analog stick/pedal/lever positions; None keeps keyboard control.
@@ -91,6 +93,7 @@ impl FlightSession {
             crashed: false,
             parking_brake: ground.is_some(),
             gust_amplitude: 0.,
+            last_touchdown: None,
             flap_handle: 0,
             analog: None,
             keys: HashSet::new(),
@@ -103,12 +106,14 @@ impl FlightSession {
     }
     pub fn reset(&mut self) -> Result<(), String> {
         let elevation = self.simulation.field_elevation;
+        let gusts = self.gust_amplitude;
         *self = if self.initial_ground.is_none() && self.initial_heading != 0. {
             Self::airborne(self.initial.clone(), self.initial_heading)?
         } else {
             Self::with_start(self.initial.clone(), self.initial_ground)?
         };
         self.simulation.field_elevation = elevation;
+        self.gust_amplitude = gusts;
         Ok(())
     }
     pub fn set_field_elevation(&mut self, metres: f64) {
@@ -239,7 +244,9 @@ impl FlightSession {
         } else if self.paused {
             "PAUSED — P resume"
         } else if t.ground_contact {
-            if self.parking_brake {
+            if self.last_touchdown.is_some_and(|s| s > HARD_LANDING) && t.climb.abs() < 0.5 {
+                "HARD LANDING"
+            } else if self.parking_brake {
                 "GROUND — PARKING BRAKE"
             } else {
                 "GROUND"
@@ -249,7 +256,10 @@ impl FlightSession {
         } else {
             "AIRBORNE"
         };
-        Ok(format!("openFSX Flight | {:.1} kt | {:.0} ft | {:+.0} fpm | bank {:+.1}° | pitch {:+.1}° | throttle {:.0}% | flaps {:.0}° | {:.0} rpm | fuel {:.0} L | {status}",t.speed/KNOT,t.altitude/FOOT,t.climb/FOOT*60.,t.attitude[0].to_degrees(),t.attitude[1].to_degrees(),self.simulation.controls.throttle*100.,self.simulation.controls.flaps*self.simulation.parameters.flaps.max_deflection(),self.simulation.rpm,self.simulation.parameters.loading.fuel_mass/0.72))
+        let landing = self.last_touchdown.map_or(String::new(), |s| {
+            format!(" | touchdown {:.0} fpm", s / FOOT * 60.)
+        });
+        Ok(format!("openFSX Flight | {:.1} kt | {:.0} ft | {:+.0} fpm | bank {:+.1}° | pitch {:+.1}° | throttle {:.0}% | flaps {:.0}° | {:.0} rpm | fuel {:.0} L | {status}{landing}",t.speed/KNOT,t.altitude/FOOT,t.climb/FOOT*60.,t.attitude[0].to_degrees(),t.attitude[1].to_degrees(),self.simulation.controls.throttle*100.,self.simulation.controls.flaps*self.simulation.parameters.flaps.max_deflection(),self.simulation.rpm,self.simulation.parameters.loading.fuel_mass/0.72))
     }
 }
 #[cfg(test)]
@@ -450,3 +460,6 @@ fn gust_at(amplitude: f64, t: f64) -> [f64; 3] {
         amplitude * 0.5 * wave(1.3, 3.1, 0.4),
     ]
 }
+
+/// Touchdown sink rate above which the landing is reported as hard, m/s.
+const HARD_LANDING: f64 = 3.;
