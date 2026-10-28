@@ -1764,3 +1764,12 @@ owner +0x118/+0x120/+0x128/+0x130/+0x140/+0x148/+0x150/+0x170/+0x5F8 with the gl
 run time by code not yet located, so 0x20B4D8A0 / 0x20B4D7E0 cannot be ported or
 emulated bit-exactly until their initialiser is found (search writes to
 0x20B992B0..0x20B992C8).
+
+Globals 0x20B992B0/0x20B992C0/0x20B992C8 (REA): 9, 13 and 13 code references; the
+three sampled and the search for FSTP m64 stores (opcode DD 1D) found only reads and
+no stores inside sim1.dll, and the image bytes are zero. They are therefore filled
+from outside the DLL (the host, another module, or an exported setter) or by a store
+form not yet searched. Their physical meaning (they scale +0x140 and +0x148 in
+FUN_20B4D7E0, and 1 - [0x20B992B0] divides the pressure-ratio term) is not yet known,
+so the piston default-table builder stays unported. Next: check sim1's exports and
+the host (FSX/fsx.exe) for writers, or capture the values from a live FSX process.
