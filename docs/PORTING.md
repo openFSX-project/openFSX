@@ -1705,3 +1705,12 @@ function lives in an engine update and freezes at 492 R with a precipitation fla
 "pitot" attribution of the 0x20B458B0 heater (circuit 7) should be re-checked against
 FUN_20B457B0/FUN_20B456E0 before wiring the port into Simulation; do not claim it is
 the indicated-airspeed probe until those are decoded.
+
+REA decompilation of the two helpers (0x20B457B0, 0x20B456E0): both take an optional
+float pair (offset, scale) from the engine table, evaluate pow() and sqrt() of an
+engine ratio, and form sqrt(x) * ((scale*v - offset) * k(r-1)) / k(1-r) style
+expressions through FUN_20AF1710 (table DAT_20AD6FE0). This is a compressor/flow-map
+style engine computation, not an airspeed probe, so the 0x20B458B0 thermal/icing
+function belongs to the engine update. The pow/sqrt arguments are lost by the
+decompiler (_CIpow/_CIsqrt); decode them from the assembly before porting the caller.
+Not wired into Simulation.
