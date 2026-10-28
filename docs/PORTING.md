@@ -1813,3 +1813,34 @@ original runs (target/piston-curves-reference-01/report.json, example
 legacy-piston-curves-check) match within 1e-13 relative; arithmetic is f64 against the
 original's x87 extended precision, so again not bit-exact. Field meanings
 (+0x118..+0x180) remain unidentified, and the port is not yet wired into Simulation.
+
+## Piston engine object field map (REA, loader FUN_20B4E310 incl. 0x20B4ED60)
+
+Config key -> engine object offset (doubles unless noted; Ordinal_54 reads a double,
+Ordinal_50 an int, sentinel -DBL_MAX/-1 marks "missing" and sets a failure flag that
+triggers fallback FUN_20B4F1C0):
+- +0x160 cylinder_displacement * 0.0005787037037037037 (cubic inches -> cubic feet)
+- +0x168 compression_ratio; +0x170 number_of_cylinders (u32); +0x174 number_of_magnetos
+  (default 2); +0x178 max_rated_rpm; +0x180 max_rated_hp, later multiplied by power_scalar
+  (read at +0x11C0, default 1.0)
+- +0x188 fuel_metering_type; +0x18C cooling_type; +0x190 normalized_starter_torque;
+  +0x198 magneto_order_left_right_both (0/1); +0x19C two_stroke_cycle
+- +0x1A0 turbocharged; when set: +0x1A4 max_design_mp * 70.7286096 (inHg -> psf),
+  +0x1AC min_design_mp * 70.7286096 (clamped to max), +0x1BC critical_altitude,
+  +0x1C4 emergency_boost_type (int), +0x1C8 emergency_boost_mp_offset * 70.7286096,
+  +0x1D0 emergency_boost_gain_offset; when clear all of these are zero.
+  +0x1B4 = (1/p) * (max_mp / g0) * 1.0204081632653061 with p = pow(...) or 0.2234 when
+  critical_altitude >= 36089 (pow arguments not yet recovered).
+- +0x1D8 fuel_air_auto_mixture; +0x1E0 auto_ignition; +0x1DC BestPowerSpecificFuelConsumption
+  (float, default 0.49, floored at 0)
+- +0x1E8 supercharged; +0x1EC/+0x1F4/+0x1FC supercharger_boost_low_end (0..1000, default 1),
+  _high_end (0..1000, default 1), _power_cost (0..1, default 0)
+- +0x3C0 detonation_onset (float, default -FLT_MAX); per-engine anti-detonation (stride 6
+  floats at +0x3C4..) and nitrous (stride 3 floats at +0x424..) sub-sections.
+Then FUN_20B4EE40 and FUN_20B4E140 run (the latter loads the four efficiency/friction
+scalars and calls FUN_20B4DE30). The fields +0x118..+0x158 used by the curve builder
+and helper (+0x118/+0x120/+0x128/+0x130/+0x140/+0x148/+0x150/+0x158) are not set by the
+loader itself; FUN_20B4EE40 is the next function to decode. The rated hp and rpm
+(+0x180, +0x178) and the cylinder count (+0x170) are what the curve builder
+(f178, f180, f170) consumes. In the repository, Parameters already reads
+max_rated_hp/max_rated_rpm/power_scalar for the playable model.
