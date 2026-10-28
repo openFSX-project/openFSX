@@ -1874,3 +1874,36 @@ scripts/check-piston-init.py, target/piston-init-reference-01,
 examples/legacy-piston-init-check; constants and integer fields bit-exact, +0x160 within
 4e-16 (x87 extended intermediates). The `Ordinal_55` config lookups (overrides) and the
 tail (0x20B4E050, 0x20B4EF20) are not ported yet. Next: those two, then the per-frame update.
+
+Ported: the piston engine record loader sim1 0x20B4F1C0 (`__thiscall`, called from 0x20B4E310
+<- 0x20B4C620) and the chunk reader 0x20AF1FC0 as fsx_sim::legacy_piston_load.
+Chunk reader (`__fastcall`, ECX = file, EDX = id, stack dest/size, ret 8): scans
+`[id u32][len u32][data]` records; a match with len < size copies len bytes (caller
+pre-zeroed), otherwise the first size bytes; a miss skips len bytes. Read from the assembly
+only (file imports are not emulated). Loader: record 0x505 (0x74 bytes, current format) is
+copied into the object with the documented field map (see load_engine_20b4f1c0); the
+legacy record 0x500 (0x44 bytes: u16 at +0x0E/+0x14/+0x1E/+0x22/+0x2E/+0x38/+0x3C) fills
++0x10C/+0x10E/+0x110/+0x114/+0x116/+0x208/+0x20C(=u16(+0x22)/12) and then runs the
+0x20B4FF10 initializer. Manifold-pressure values are scaled by 70.7286096 on load.
+Verified with scripts/check-piston-load.py (original code, chunk reader replaced by a stub
+serving the records; stops at the first `Ordinal_55`): 200 runs, 1724 stores
+(target/piston-load-reference-01, examples/legacy-piston-load-check).
+
+Field names from the writer 0x20B4EF20 (it passes object values to api.dll ordinals 55 =
+double and 51 = u32 with section "piston_engine", i.e. it writes the engine back to a
+configuration; `Ordinal_55/51` at IAT 0x20B9A298 / 0x20B9A25C): +0x160*1728
+cylinder_displacement, +0x168 compression_ratio, +0x170 number_of_cylinders, +0x178
+max_rated_rpm, +0x180 max_rated_hp, +0x188 fuel_metering_type, +0x18C cooling_type, +0x190
+normalized_starter_torque, +0x1A0 turbocharged, +0x1A4*0.01413855 max_design_mp,
++0x1AC*0.01413855 min_design_mp, +0x1BC critical_altitude, +0x1C4 emergency_boost_type,
++0x1C8*0.01413855 emergency_boost_mp_offset, +0x1D0 emergency_boost_gain_offset, +0x1D8
+fuel_air_auto_mixture, +0x1E0 auto_ignition, +0x2D0 GeneralEngineData/fuel_flow_scalar;
+0x20B4FF10 additionally passes +0x2B0 max_rpm_mechanical_efficiency_scalar, +0x2B8
+idle_rpm_mechanical_efficiency_scalar, +0x2C0 max_rpm_friction_scalar, +0x2C8
+idle_rpm_friction_scalar. 0x20B4E050 reads/validates the curve chunks with the other
+reader FUN_20B676B0: 0x508 -> +0x5CC (0x54 bytes = the 5-point curve), 0x509 -> +0x620
+(0x44 = the 4-point curve), 0x540 -> +0x2E4 (0x18), 0x541 -> +0x32C (0x20), 0x543 -> +0x384
+(0x20), 0x544 -> +0x36C (0x18), 0x542 -> +0x34C (0x20), 0x545 -> +0x3A4 (0x18).
+Whether Ordinal_55/51 read or write (values pass by value) is still unresolved, so the
++0x2B0..+0x2C8 scalars and the INIT constants remain unexplained. Next: FUN_20B676B0
+and the 0x540..0x545 tables, then the per-frame update.

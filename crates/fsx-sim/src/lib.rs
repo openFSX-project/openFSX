@@ -12,6 +12,7 @@ pub mod ground;
 pub mod legacy_atmosphere;
 pub mod legacy_consumers;
 pub mod legacy_piston;
+pub mod legacy_piston_load;
 pub mod legacy_pitot;
 pub mod legacy_power;
 pub mod legacy_response;
