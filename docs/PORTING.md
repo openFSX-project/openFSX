@@ -1756,3 +1756,11 @@ FUN_20AF1710 against +0x178 and +0x180, derives a power/torque scale (floors 18.
 functions touching +0x2B0 in the piston area: 0x20B4DE30, 0x20B4E140, 0x20B4FF10.
 Still not located: the per-frame piston power/RPM update. Porting the table builder
 needs the literals (in the decompilation of 0x20B4D8A0) and FUN_20B4D7E0.
+
+FUN_20B4D7E0 (ECX = engine) is the helper of the default-table builder: it combines
+owner +0x118/+0x120/+0x128/+0x130/+0x140/+0x148/+0x150/+0x170/+0x5F8 with the globals
+0x20B992B0/0x20B992C0/0x20B992C8 and constants 0x20AE9198, 0x20AE9448, 0x20AE8DC0,
+0x20AE9628. The three .data globals read as zero in the file image: they are set at
+run time by code not yet located, so 0x20B4D8A0 / 0x20B4D7E0 cannot be ported or
+emulated bit-exactly until their initialiser is found (search writes to
+0x20B992B0..0x20B992C8).
