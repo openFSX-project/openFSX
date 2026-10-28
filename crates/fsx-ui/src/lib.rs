@@ -144,8 +144,8 @@ fn asset(
 enum Action {
     Preview(usize),
     PreviewVisible(bool),
-    /// Catalog index, optional ICAO start airport and optional HH:MM time.
-    Fly(usize, Option<String>, Option<String>),
+    /// Catalog index, optional ICAO start airport, HH:MM time and DEG/KT wind.
+    Fly(usize, Option<String>, Option<String>, Option<String>),
     Exit,
     Minimize,
     Drag,
@@ -230,7 +230,17 @@ impl ApplicationHandler<Action> for Shell {
                                 rest.split_once(':').map_or((rest, ""), |(a, t)| (a, t));
                             let icao = icao.trim().to_ascii_uppercase();
                             // HH:MM arrives as "HH:MM" after the airport field.
-                            let time = time.trim();
+                            let (time, wind) = time.trim().split_once(':').map_or(
+                                (time.trim(), ""),
+                                |(h, rest)| match rest.split_once(':') {
+                                    Some((m, w)) => (&time.trim()[..h.len() + 1 + m.len()], w),
+                                    None => (time.trim(), ""),
+                                },
+                            );
+                            let wind = wind.split_once('/').and_then(|(d, k)| {
+                                let (d, k): (u32, u32) = (d.parse().ok()?, k.parse().ok()?);
+                                (d <= 360 && k <= 100).then(|| format!("{d}/{k}"))
+                            });
                             let clock = (time.len() == 5
                                 && time.as_bytes()[2] == b':'
                                 && time
@@ -245,6 +255,7 @@ impl ApplicationHandler<Action> for Shell {
                                 index.parse().ok()?,
                                 valid.then_some(icao),
                                 clock,
+                                wind,
                             ))
                         }),
                     };
@@ -340,7 +351,7 @@ impl ApplicationHandler<Action> for Shell {
                     let _ = w.drag_window();
                 }
             }
-            Action::Fly(index, airport, clock) => {
+            Action::Fly(index, airport, clock, wind) => {
                 if self.child.is_some() {
                     return;
                 }
@@ -363,6 +374,7 @@ impl ApplicationHandler<Action> for Shell {
                         .args(native_gauge_arguments())
                         .args(airport.iter().flat_map(|icao| ["--airport", icao.as_str()]))
                         .args(clock.iter().flat_map(|t| ["--time", t.as_str()]))
+                        .args(wind.iter().flat_map(|w| ["--wind", w.as_str()]))
                         .stdout(Stdio::null())
                         .stderr(Stdio::piped())
                         .creation_flags(0x08000000)

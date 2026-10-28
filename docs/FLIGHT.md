@@ -212,7 +212,7 @@ from throttle and airspeed (idle 0.25, about 0.85 static full power). The stall
 horn sounds from 4 degrees below the AIR lift peak. Missing audio hardware or
 sound files only disable sound.
 
-**--wind DEGREES/KNOTS** sets a steady wind (meteorological direction it blows from, 0 to 100 kt, for example `--wind 270/15`). Aerodynamics, propeller thrust, RPM and the airspeed readout use air-relative velocity; ground contact and climb rate stay ground-referenced, so a headwind shortens the takeoff roll. No gusts, turbulence, shear or altitude variation.
+**--wind DEGREES/KNOTS** (also the Wind field of the menu time dialog) sets a steady wind (meteorological direction it blows from, 0 to 100 kt, for example `--wind 270/15`). Aerodynamics, propeller thrust, RPM and the airspeed readout use air-relative velocity; ground contact and climb rate stay ground-referenced, so a headwind shortens the takeoff roll. No gusts, turbulence, shear or altitude variation.
 
 The window title reports live flight state. Add **--debug-hud** for the optional original telemetry overlay; it is hidden by default.
 The camera follows the aircraft. The runway and grid are original test geometry,
