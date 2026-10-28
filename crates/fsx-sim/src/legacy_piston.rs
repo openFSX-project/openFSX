@@ -169,3 +169,36 @@ pub fn default_curves(i: &CurveInputs) -> Curves {
         ],
     }
 }
+
+/// Thermodynamic fields written by sim1 0x20B4EE40 at +0x118..+0x150 of the engine
+/// object (the remaining bytes of the zeroed 0x40-byte block stay zero).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Thermodynamics {
+    pub f118: f64,
+    pub f120: f64,
+    pub f128: f64,
+    pub f130: f64,
+    pub f138: f64,
+    pub f140: f64,
+    pub f148: f64,
+    pub f150: f64,
+}
+
+/// sim1 0x20B4EE40 from the displacement `volume` (+0x160, ft^3), compression ratio
+/// `ratio` (+0x168) and cylinder count `cylinders` (u32 at +0x170). The original calls
+/// its x87 pow (0x20B8BF10); this port uses f64 `powf`, so it is not bit-exact.
+pub fn thermodynamics_20b4ee40(volume: f64, ratio: f64, cylinders: u32) -> Thermodynamics {
+    let gamma = SPECIFIC_HEAT_RATIO;
+    let f118 = ratio / (ratio - 1.) * volume;
+    let f120 = f118 / ratio;
+    Thermodynamics {
+        f118,
+        f120,
+        f128: f120,
+        f130: f118,
+        f138: f64::from(cylinders) * volume,
+        f140: ratio.powf(gamma - 1.),
+        f148: ratio.powf(gamma),
+        f150: if ratio > 0. { (1. / ratio).powf(gamma) } else { 0. },
+    }
+}

@@ -1843,3 +1843,18 @@ loader itself; FUN_20B4EE40 is the next function to decode. The rated hp and rpm
 (+0x180, +0x178) and the cylinder count (+0x170) are what the curve builder
 (f178, f180, f170) consumes. In the repository, Parameters already reads
 max_rated_hp/max_rated_rpm/power_scalar for the playable model.
+
+Ported: sim1 0x20B4EE40 (piston thermodynamic fields) as
+fsx_sim::legacy_piston::thermodynamics_20b4ee40. __fastcall, ECX = engine; zeroes the
+0x40 bytes at +0x118 and then, from V = +0x160 (displacement, ft^3), r = +0x168
+(compression ratio), n = u32 +0x170 (cylinders) and gamma = heat ratio (0x20B992B0):
++0x118 = +0x130 = r/(r-1)*V; +0x120 = +0x128 = +0x118/r; +0x138 = n*V;
++0x140 = r^(gamma-1); +0x148 = r^gamma; +0x150 = (r > 0) ? (1/r)^gamma : 0.
+(Otto-cycle volumes and pressure ratios; this resolves the "+0x118..+0x150" unknowns of the
+helper 0x20B4D7E0.) 0x20B8BF10 is only a jump through the imported CRT pow (_CIpow, base ST1,
+exponent ST0); the emulation substitutes an x87 fyl2x/f2xm1/fscale routine, so it validates
+the wiring (200 seeded runs with r > 0, worst relative error 3.4e-16), not the CRT pow itself.
+The r <= 0 branch is read from the assembly only. scripts/check-piston-thermo.py,
+target/piston-thermo-reference-01, examples/legacy-piston-thermo-check. The zero-fill stub of
+check-piston-curves.py clobbers EDI (the real import preserves it); 0x20B4D8A0 does not
+use EDI afterwards, so its result is unaffected, but the new script preserves it.
