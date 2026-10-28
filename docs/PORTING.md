@@ -1784,3 +1784,17 @@ StandardSeaLevelPressure 2116.2 psf (0x20B992C0), GravitySeaLevel 32.174 ft/s^2
 carries the pinned defaults with a bit-pattern test. The source of configuration
 overrides (Ordinal_44 on DAT_20AE2464) is still open; with defaults, FUN_20B4D7E0 and
 FUN_20B4D8A0 are no longer blocked on these globals.
+
+Ported: sim1 0x20B4D7E0 as fsx_sim::legacy_piston::helper_20b4d7e0. With constants
+0x20AE9198 = 350.0, 0x20AE9448 = 8224.513023991623, 0x20AE8DC0 = 2*pi and the
+standard-atmosphere defaults: zero when the u32 at +0x170 is zero; otherwise
+A = f140 * P0, ratio = (8224.513 + A) / A for A > 0 (else 0), and the result is
+(ratio*f148*(f150*f130 - f128) - f118 + f148*f120) * 350 * 0.5 / 2pi / (1 - rho0) * f5f8.
+My hand trace of the x87 stack was wrong (it put the 350 factor only on one term);
+the formula was recovered by perturbing single fields in the emulation and then
+checked on 300 seeded runs (scripts/check-piston-helper.py,
+target/piston-helper-reference-01/report.json; examples/legacy-piston-helper-check).
+Accuracy: worst relative error 5.5e-16 against the original's x87 extended
+precision. NOT bit-exact: Rust has no 80-bit float, so this port does not meet
+the exact-parity bar used for the float32 pitot stages. What the fields mean
+(+0x118..+0x150, +0x5F8, +0x170) is still unknown.
