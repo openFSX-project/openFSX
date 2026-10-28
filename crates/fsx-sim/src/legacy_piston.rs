@@ -202,3 +202,69 @@ pub fn thermodynamics_20b4ee40(volume: f64, ratio: f64, cylinders: u32) -> Therm
         f150: if ratio > 0. { (1. / ratio).powf(gamma) } else { 0. },
     }
 }
+
+/// Scalars derived by the engine initializer sim1 0x20B4FF10 (`__thiscall`) before it
+/// calls 0x20B4EE40 and 0x20B4D8A0.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InitDerived {
+    pub f158: f64,
+    pub f160: f64,
+    pub f168: f64,
+    pub f170: u32,
+    pub f178: f64,
+    pub f180: f64,
+}
+
+/// From the u32 at +0x110 (`rated`; +0x180 as a double, 160000 in the samples), and the
+/// u16 pair at +0x10C / +0x10E (+0x178 = a * 0.25 + b).
+pub fn init_derived_20b4ff10(rated: u32, word_10c: u16, word_10e: u16) -> InitDerived {
+    let x = f64::from(rated);
+    InitDerived {
+        f158: if 300. <= x { f64::from_bits(0x3fe47ae147ae147b) } else { f64::from_bits(0x3fe199999999999a) },
+        f160: x * 0.045 * 0.0005787037037037037 + 0.046296296296296294,
+        f168: 8.,
+        // Truncating conversion (the emulated original gives 5 for 5.995); out-of-range
+        // values become the x87 integer indefinite 0x80000000.
+        f170: {
+            let q = (x / 200. + 5.).trunc();
+            if q.abs() < 2147483648. { q as i32 as u32 } else { 0x8000_0000 }
+        },
+        f178: f64::from(word_10c) * 0.25 + f64::from(word_10e),
+        f180: x,
+    }
+}
+
+/// Constant doubles the initializer stores (offset, IEEE-754 bits), in store order.
+pub const INIT_DOUBLES_20B4FF10: [(usize, u64); 27] = [
+    (0x190, 0x3fd3333333333333),
+    (0x1a4, 0),
+    (0x1ac, 0),
+    (0x1b4, 0),
+    (0x1bc, 0),
+    (0x1d0, 0),
+    (0x1c8, 0),
+    (0x374, 0x40c0e00000000000),
+    (0x37c, 0x3fe999999999999a),
+    (0x36c, 0x3ff0000000000000),
+    (0x38c, 0x3fcae147ae147ae1),
+    (0x394, 0x4085e00000000000),
+    (0x39c, 0x3f9eb851eb851eb8),
+    (0x384, 0x3ff0000000000000),
+    (0x354, 0x3f8eb851eb851eb8),
+    (0x364, 0x3f947ae147ae147b),
+    (0x34c, 0x3ff0000000000000),
+    (0x35c, 0x4084f00000000000),
+    (0x3ac, 0x40a2900000000000),
+    (0x3b4, 0x4000000000000000),
+    (0x3a4, 0x3ff0000000000000),
+    (0x2ec, 0x4099f00000000000),
+    (0x2f4, 0x4000000000000000),
+    (0x2e4, 0x3ff0000000000000),
+    (0x334, 0x3fe4cccccccccccd),
+    (0x33c, 0x408e000000000000),
+    (0x344, 0x3f8eb851eb851eb8),
+];
+/// ...plus 0x32C = 1.0; and the u32 stores (offset, value).
+pub const INIT_DOUBLE_32C: u64 = 0x3ff0000000000000;
+pub const INIT_WORDS_20B4FF10: [(usize, u32); 6] =
+    [(0x188, 1), (0x18c, 0), (0x1a0, 0), (0x1c4, 0), (0x1d8, 0), (0x1e0, 0)];

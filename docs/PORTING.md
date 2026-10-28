@@ -1858,3 +1858,19 @@ The r <= 0 branch is read from the assembly only. scripts/check-piston-thermo.py
 target/piston-thermo-reference-01, examples/legacy-piston-thermo-check. The zero-fill stub of
 check-piston-curves.py clobbers EDI (the real import preserves it); 0x20B4D8A0 does not
 use EDI afterwards, so its result is unaffected, but the new script preserves it.
+
+Ported: the piston engine initializer sim1 0x20B4FF10 (`__thiscall`, ECX = engine,
+called from 0x20B4F1C0; it also calls 0x20B4EE40, 0x20B4D8A0, 4x `Ordinal_55`
+("piston_engine" config scalars +0x2B0..+0x2C8), 0x20B4E050 and 0x20B4EF20). Derived from
+x = (u32)[+0x110] and the u16 pair [+0x10C], [+0x10E]: +0x180 = x; +0x178 = u16(+0x10C)*0.25
++ u16(+0x10E); +0x170 = trunc(x/200 + 5) (cylinder count; the decompiler's ROUND is wrong:
+199 gives 5); +0x158 = x >= 300 ? 0.64 : 0.55; +0x168 = 8.0 (compression ratio);
++0x160 = x*0.045*(1/1728) + 0.0462963 (ft^3). Then it runs the thermodynamics and curve
+builders and stores 27 constant doubles and 6 words (fsx_sim::legacy_piston::
+INIT_DOUBLES_20B4FF10 / INIT_WORDS_20B4FF10, mostly defaults of the +0x2E4..+0x3B4 and
++0x188..+0x1E0 regions; their meaning is unknown). Verified by emulating up to the first
+`Ordinal_55` call (unresolved import, faults at 0x80000000|ordinal): 200 runs,
+scripts/check-piston-init.py, target/piston-init-reference-01,
+examples/legacy-piston-init-check; constants and integer fields bit-exact, +0x160 within
+4e-16 (x87 extended intermediates). The `Ordinal_55` config lookups (overrides) and the
+tail (0x20B4E050, 0x20B4EF20) are not ported yet. Next: those two, then the per-frame update.
