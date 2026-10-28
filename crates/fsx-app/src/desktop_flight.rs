@@ -43,6 +43,8 @@ pub struct FlightSession {
     /// Terrain impact; the flight stays stopped until reset.
     pub crashed: bool,
     pub parking_brake: bool,
+    /// Gust strength in metres per second; 0 disables gusts.
+    pub gust_amplitude: f64,
     /// Selected flap detent; the surface follows at the authored extension rate.
     pub flap_handle: usize,
     /// Latest analog stick/pedal/lever positions; None keeps keyboard control.
@@ -88,6 +90,7 @@ impl FlightSession {
             paused: false,
             crashed: false,
             parking_brake: ground.is_some(),
+            gust_amplitude: 0.,
             flap_handle: 0,
             analog: None,
             keys: HashSet::new(),
@@ -197,6 +200,7 @@ impl FlightSession {
                 (c.flaps - travel).max(target)
             };
             c.trim = (c.trim + axis(KeyCode::Home, KeyCode::End) * STEP * 0.15).clamp(-1., 1.);
+            self.simulation.parameters.gust = gust_at(self.gust_amplitude, self.simulation.time);
             self.simulation.step(c, STEP)?;
             self.pending_presses.clear();
             self.accumulator = (self.accumulator - STEP).max(0.);
@@ -434,4 +438,15 @@ mod tests {
         assert!(!a.paused);
         assert_eq!(a.model_matrix()[13], 300.);
     }
+}
+
+/// Smooth deterministic gusts: incommensurate sines per axis, stronger
+/// horizontally than vertically. Zero amplitude gives still air.
+fn gust_at(amplitude: f64, t: f64) -> [f64; 3] {
+    let wave = |a: f64, b: f64, c: f64| (0.6 * (a * t).sin() + 0.4 * (b * t + c).sin());
+    [
+        amplitude * wave(0.9, 2.3, 1.0),
+        amplitude * wave(0.7, 1.9, 2.1),
+        amplitude * 0.5 * wave(1.3, 3.1, 0.4),
+    ]
 }

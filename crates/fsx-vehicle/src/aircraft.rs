@@ -31,6 +31,8 @@ pub struct Parameters {
     pub prop_area: f64,
     /// Steady wind in north/east/down axes, metres per second (direction the air moves toward).
     pub wind: [f64; 3],
+    /// Instantaneous gust added to the steady wind, metres per second.
+    pub gust: [f64; 3],
     pub tail_incidence: f64,
     pub controls: [f64; 4],
     pub elevator_up: f64,
@@ -265,6 +267,7 @@ impl Parameters {
             rated_rpm: c.optional_number("piston_engine", "max_rated_rpm", 2700.)?,
             prop_area: std::f64::consts::PI * diameter * diameter / 4.,
             wind: [0.; 3],
+            gust: [0.; 3],
             tail_incidence: c
                 .optional_number("airplane_geometry", "htail_incidence", 0.)?
                 .to_radians(),
@@ -335,6 +338,7 @@ pub fn own_parameters() -> Parameters {
         rated_rpm: 2700.,
         prop_area: 3.,
         wind: [0.; 3],
+        gust: [0.; 3],
         tail_incidence: 0.,
         controls: [1.; 4],
         elevator_up: 0.4,

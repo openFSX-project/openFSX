@@ -146,7 +146,7 @@ pub trait AircraftDynamics {
 }
 /// Ground-referenced velocity minus the steady wind.
 fn air_velocity(parameters: &Parameters, ground: Vec3) -> Vec3 {
-    std::array::from_fn(|i| ground[i] - parameters.wind[i])
+    std::array::from_fn(|i| ground[i] - parameters.wind[i] - parameters.gust[i])
 }
 impl AircraftDynamics for Parameters {
     fn predicted_stall(&self, altitude: f64) -> Result<f64> {

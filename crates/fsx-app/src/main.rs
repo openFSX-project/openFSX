@@ -1415,6 +1415,7 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
     let mut hours = 12.;
     let mut airborne = false;
     let mut wind = [0.0_f64; 3];
+    let mut gusts = 0.0_f64;
     let mut cockpit = false;
     let mut native_gauges_enabled = false;
     let mut gauge_host = None;
@@ -1571,6 +1572,16 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
             Some("--fly") => fly = true,
             Some("--ground") => ground = true,
             Some("--airborne") => airborne = true,
+            Some("--gusts") => {
+                let k: f64 = args
+                    .next()
+                    .and_then(|a| a.to_str().and_then(|s| s.parse().ok()))
+                    .ok_or("Expected --gusts KNOTS")?;
+                if !(0. ..=30.).contains(&k) {
+                    return Err("--gusts must be 0 to 30 knots".into());
+                }
+                gusts = k * 1852. / 3600.;
+            }
             Some("--wind") => {
                 let text = args
                     .next()
@@ -1993,6 +2004,7 @@ With no arguments, the menu opens for an FSX folder beside or above openfsx-view
         .transpose()?;
     let mut flight_pose = flight_pose::FlightPose::new(&model);
     if let Some(flight) = &mut flight {
+        flight.gust_amplitude = gusts;
         if ground {
             println!("Experimental runway start: fixed tricycle gear, parking brake on. B releases brake; F4 full power; F1 idle; Space wheel brakes.");
         } else {
