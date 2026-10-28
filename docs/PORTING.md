@@ -1714,3 +1714,20 @@ style engine computation, not an airspeed probe, so the 0x20B458B0 thermal/icing
 function belongs to the engine update. The pow/sqrt arguments are lost by the
 decompiler (_CIpow/_CIsqrt); decode them from the assembly before porting the caller.
 Not wired into Simulation.
+
+Assembly of the helpers (REA, sim1 0x20B456E0 / 0x20B457B0 / 0x20AF1710):
+- Mach = float32(owner+0x15C); g = float32(1 + 0.2*Mach) (0x20AE8618 = 0.2);
+  ratio r = float32(pow(g, 3.5)) (0x20AE8D18 = 3.5): the isentropic total/static
+  pressure ratio. owner+0x15C is therefore a Mach number.
+- 0x20AF1710 is a piecewise-linear table lookup, __thiscall with ECX = table
+  (count, then 16-byte x/y rows, clamped at both ends, binary search); the table
+  used here is DAT_20AD6FE0, queried at (1 - r) and (r - 1).
+- 0x20B457B0 returns max(0, (sqrt(owner+0x25C / owner+0x254) * max(v,0) * T(1-r)
+  / T(r-1) + offset) * scale); 0x20B456E0 is the unclamped inverse-direction form
+  with offset/scale from the optional float pair (EDX; default 0 and 1).
+So the 0x20B45450 loop is a turbine-style engine model (Mach-ratio correction with
+a temperature ratio), and the freezing/precipitation/heater function in it is an
+engine-inlet anti-ice state, not an airspeed probe. The existing "pitot" names in
+legacy_pitot/Core describe the electrical circuit that powers the heater (circuit 7)
+and should be renamed when the engine model is ported. Open: the table at
+0x20AD6FE0 and the owner fields +0x254/+0x25C/+0x104/+0x41*4 providers.
