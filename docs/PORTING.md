@@ -10,10 +10,20 @@ changes. Keep the full FSX 1:1 objective active until its original scope is met.
 
 ## Current stage — 26 October 2026
 
-Priority shift (user request): reach a playable state first. Bit-exact legacy
-ports pause after the pitot thermal stage; the decoded but unported icing tail is
-sim1 0x20B45A0A..0x20B45B3E (ice fraction at owner+0x4E8, filtered output at
-+0x16C). Playable stage 1 adds a no-argument menu start, menu launch into the
+Priority update (28 October 2026): the user asked to resume 1:1 porting with REA.
+The pitot icing/filter tail sim1 0x20B45A0A..0x20B45B3E is now ported
+(legacy_pitot::Core::advance_icing). Decoded from the original: with weather
++0x54 clear the filter equals its input; otherwise below 492 R (and owner+0x14C
+>= 20 with weather +0x50 set) ice grows by float32(dt*0.1f) up to 1.0, at or
+above 492 R it falls by float32(heater_rate*-0.1f*dt) down to 0; the filter
+(owner+0x16C, double) then moves halfway to its input (snapping down to it when
+above), or halves toward zero once ice >= 1.0. scripts/check-pitot-icing.py runs
+the pinned original function to its return (740 seeded and sequence runs, report
+in target/legacy-pitot-icing-reference-01/report.json); examples/legacy-pitot-icing-check
+matches every float32 temperature/ice and double filter bit-exactly. The
+providers for weather +0x50/+0x54, owner +0x14C and the filtered input, and the
+indicated-airspeed consumer of the filter, remain unmapped. Playable work paused
+the port earlier: Playable stage 1 adds a no-argument menu start, menu launch into the
 virtual cockpit with live native gauges when the helper exists, graceful
 exterior/static-panel fallback, CFG-driven flaps (F5–F8) and game-controller
 input. See FLIGHT.md for the flap approximation. Playable stage 2 adds

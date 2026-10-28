@@ -1,11 +1,27 @@
-//! Pinned original thermal prefix only; environment scalar and seed are explicit.
-//! Physical unit/provider mapping and icing/indicated-air effects remain open.
+//! Pinned original thermal prefix and icing/filter tail (sim1 0x20B458B0..0x20B45B3E);
+//! environment scalar, seed and weather flags are explicit. Physical unit/provider
+//! mapping of those inputs and the indicated-air consumer remain open.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Inputs {
     pub requested: Option<bool>,
     pub heater_rate: Option<f32>,
     pub power_available: Option<bool>,
     pub environment_scalar: Option<f64>,
+}
+/// Icing-tail inputs: weather +0x54 / +0x50 flags, owner +0x14C field and the
+/// filtered input value (first stack argument of the original function).
+#[derive(Debug, Clone, Copy)]
+pub struct IcingInputs {
+    pub weather_enabled: bool,
+    pub weather_precipitation: bool,
+    pub field_14c: f64,
+    pub input: f64,
+}
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IcingStep {
+    pub step: Step,
+    pub ice: f32,
+    pub filter: f64,
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Step {
@@ -15,10 +31,82 @@ pub struct Step {
 #[derive(Debug, Clone, Default)]
 pub struct Core {
     temperature: Option<f32>,
+    ice: f32,
+    filter: f64,
 }
 impl Core {
     pub fn temperature(&self) -> Option<f32> {
         self.temperature
+    }
+    pub fn ice(&self) -> f32 {
+        self.ice
+    }
+    pub fn filter(&self) -> f64 {
+        self.filter
+    }
+    pub fn seed_icing(&mut self, ice: f32, filter: f64) -> Result<(), String> {
+        if !ice.is_finite() || !filter.is_finite() {
+            return Err("Nonfinite pitot icing seed".into());
+        }
+        self.ice = ice;
+        self.filter = filter;
+        Ok(())
+    }
+    /// Thermal prefix followed by the original icing and filter tail. Returns the
+    /// filter value (the original's return and owner+0x16C). Unknown thermal
+    /// inputs leave the icing state untouched and return None.
+    pub fn advance_icing(
+        &mut self,
+        input: Inputs,
+        icing: IcingInputs,
+        dt: f64,
+    ) -> Result<Option<IcingStep>, String> {
+        if !icing.field_14c.is_finite() || !icing.input.is_finite() {
+            return Err("Nonfinite pitot icing input".into());
+        }
+        let step = self.advance(input, dt)?;
+        let Some(temperature) = step.temperature else {
+            return Ok(None);
+        };
+        let (mut ice, mut filter) = (self.ice, self.filter);
+        if !icing.weather_enabled {
+            filter = icing.input;
+        } else {
+            if 492. > f64::from(temperature) {
+                if icing.field_14c >= 20. && icing.weather_precipitation {
+                    ice = (dt * f64::from(0.1_f32)) as f32 + ice;
+                    if !(ice < 1.) {
+                        ice = 1.;
+                    }
+                }
+            } else {
+                let rate = input.heater_rate.ok_or("Missing pitot heater rate")?;
+                let delta = (f64::from(rate) * f64::from(-0.1_f32) * dt) as f32;
+                ice += delta;
+                if !(0. < ice) {
+                    ice = 0.;
+                }
+            }
+            let target = if ice >= 1. { 0. } else { icing.input };
+            let moved = filter + 0.5 * (target - filter);
+            filter = if ice >= 1. {
+                if moved > 0. {
+                    moved
+                } else {
+                    0.
+                }
+            } else if moved >= target {
+                target
+            } else {
+                moved
+            };
+        }
+        if !ice.is_finite() || !filter.is_finite() {
+            return Err("Pitot icing computation overflow".into());
+        }
+        self.ice = ice;
+        self.filter = filter;
+        Ok(Some(IcingStep { step, ice, filter }))
     }
     pub fn seed(&mut self, temperature: Option<f32>) -> Result<(), String> {
         if temperature.is_some_and(|v| !v.is_finite()) {
