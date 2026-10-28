@@ -13,7 +13,7 @@ FIELDS={'e118':0x118,'e120':0x120,'e128':0x128,'e130':0x130,'e140':0x140,'e148':
 def run(image,base,c):
     v=Uc(UC_ARCH_X86,UC_MODE_32);v.mem_map(base,(len(image)+4095)&~4095);v.mem_write(base,image)
     for a,s in [(OBJ,0x2000),(STACK,0x10000),(SENT,0x1000)]:v.mem_map(a,s)
-    v.mem_write(0x20B992B0,struct.pack('<d',0.0023769));v.mem_write(0x20B992C0,struct.pack('<d',2116.2))
+    v.mem_write(0x20B992B0,struct.pack('<d',1.4));v.mem_write(0x20B992C0,struct.pack('<d',518.69));v.mem_write(0x20B992C8,struct.pack('<d',2116.2))
     for k,o in FIELDS.items():v.mem_write(OBJ+o,struct.pack('<d',c[k]))
     v.mem_write(OBJ+0x170,struct.pack('<I',c['e170']))
     v.reg_write(UC_X86_REG_FPCW,0x37F)

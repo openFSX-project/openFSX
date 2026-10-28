@@ -15,7 +15,7 @@ FRAME_TOP=STACK+0xF000
 def run(image,base,c,tables=False):
     v=Uc(UC_ARCH_X86,UC_MODE_32);v.mem_map(base,(len(image)+4095)&~4095);v.mem_write(base,image)
     for a,s in [(OBJ,0x2000),(STACK,0x10000),(SENT,0x1000),(STUB,0x1000)]:v.mem_map(a,s)
-    for a,x in [(0x20B992B0,0.0023769),(0x20B992C0,2116.2),(0x20B992C8,32.174)]:v.mem_write(a,struct.pack('<d',x))
+    for a,x in [(0x20B992B0,1.4),(0x20B992C0,518.69),(0x20B992C8,2116.2)]:v.mem_write(a,struct.pack('<d',x))
     for k,o in D.items():v.mem_write(OBJ+o,struct.pack('<d',c[k]))
     v.mem_write(OBJ+0x170,struct.pack('<I',c['e170']))
     v.mem_write(0x20B9A1F0,struct.pack('<I',STUB))

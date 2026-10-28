@@ -1,7 +1,9 @@
 //! Piston engine helper sim1 0x20B4D7E0 (used by the default-curve builder 0x20B4D8A0).
 //! The original evaluates in x87 extended precision; this f64 port matches it to a
 //! relative error of about 5e-16 (see scripts/check-piston-helper.py), not bit-exactly.
-use crate::legacy_atmosphere::{STANDARD_SEA_LEVEL_DENSITY, STANDARD_SEA_LEVEL_PRESSURE};
+use crate::legacy_atmosphere::{
+    SPECIFIC_HEAT_RATIO, STANDARD_SEA_LEVEL_PRESSURE, STANDARD_SEA_LEVEL_TEMPERATURE,
+};
 /// Engine object fields read by the helper (byte offsets in the original object).
 #[derive(Debug, Clone, Copy)]
 pub struct Fields {
@@ -23,13 +25,13 @@ pub fn helper_20b4d7e0(f: &Fields) -> f64 {
     if f.f170 == 0 {
         return 0.;
     }
-    let a = f.f140 * STANDARD_SEA_LEVEL_PRESSURE;
+    let a = f.f140 * STANDARD_SEA_LEVEL_TEMPERATURE;
     let ratio = if a > 0. {
         (PRESSURE_OFFSET + a) / a
     } else {
         0.
     };
-    let divisor = 1. - STANDARD_SEA_LEVEL_DENSITY;
+    let divisor = 1. - SPECIFIC_HEAT_RATIO;
     let inner = ratio * f.f148 * (f.f150 * f.f130 - f.f128) - f.f118 + f.f148 * f.f120;
     inner * SCALE * 0.5 / TWO_PI / divisor * f.f5f8
 }
@@ -106,8 +108,8 @@ pub struct Curves {
 pub fn default_curves(i: &CurveInputs) -> Curves {
     let f = &i.helper;
     let (rpm, f158) = (i.f178, i.f158);
-    let pressure = f.f140 * STANDARD_SEA_LEVEL_PRESSURE;
-    let gravity_term = f.f148 * crate::legacy_atmosphere::GRAVITY_SEA_LEVEL;
+    let pressure = f.f140 * STANDARD_SEA_LEVEL_TEMPERATURE;
+    let gravity_term = f.f148 * STANDARD_SEA_LEVEL_PRESSURE;
     let ratio_term = if pressure > 0. {
         ((pressure + PRESSURE_OFFSET) / pressure) * gravity_term
     } else {
@@ -118,11 +120,11 @@ pub fn default_curves(i: &CurveInputs) -> Curves {
     } else {
         0.
     };
-    let divisor = 1. - STANDARD_SEA_LEVEL_DENSITY;
+    let divisor = 1. - SPECIFIC_HEAT_RATIO;
     let mut c = if f.f170 == 0 {
         0.
     } else {
-        let g = crate::legacy_atmosphere::GRAVITY_SEA_LEVEL;
+        let g = STANDARD_SEA_LEVEL_PRESSURE;
         ((((f.f150 * ratio_term * f.f130 - f.f128 * ratio_term) / divisor
             - (f.f118 * g - f.f120 * gravity_term) / divisor)
             * 0.5)

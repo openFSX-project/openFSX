@@ -3,17 +3,21 @@
 //! lookup (Ordinal_44 on DAT_20AE2464) and falls back to these defaults when the key
 //! is missing or not positive. US customary units. The configuration source of the
 //! overrides is not yet identified, so only the pinned defaults are provided.
+/// Each record is {name, default, destination}; the destination of record k is the
+/// double at 0x20B992A8 + 8 * k.
+/// (0x20B992A8)
 pub const SPECIFIC_GAS_CONSTANT: f64 = 1716.0;
+/// (0x20B992B0)
 pub const SPECIFIC_HEAT_RATIO: f64 = 1.4;
-/// Slugs per cubic foot (0x20B992B0).
+/// Slugs per cubic foot (0x20B992B8).
 pub const STANDARD_SEA_LEVEL_DENSITY: f64 = 0.0023769;
-/// Rankine (0x20B992B8).
+/// Rankine (0x20B992C0).
 pub const STANDARD_SEA_LEVEL_TEMPERATURE: f64 = 518.69;
-/// Pounds per square foot (0x20B992C0).
+/// Pounds per square foot (0x20B992C8).
 pub const STANDARD_SEA_LEVEL_PRESSURE: f64 = 2116.2;
-/// Feet per second squared (0x20B992C8).
+/// Feet per second squared (0x20B992D0).
 pub const GRAVITY_SEA_LEVEL: f64 = 32.174;
-/// Feet (0x20B992D0, 0x20B992D8).
+/// Feet (0x20B992D8, 0x20B992E0).
 pub const POLAR_RADIUS: f64 = 20_890_130.604_584_83;
 pub const EQUATORIAL_RADIUS: f64 = 20_925_637.612_886_17;
 #[cfg(test)]
